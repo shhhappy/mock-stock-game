@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>모의주식게임</title>
+  <link rel="stylesheet" href="/static/css/style.css?v=3">
+</head>
+<body>
+
+<!-- ═══════════════ AUTH ═══════════════ -->
+<div id="screen-auth" class="fullscreen center-v">
+  <div class="auth-card">
+    <div style="text-align:center;margin-bottom:32px">
+      <div style="font-size:56px">📈</div>
+      <h1 style="margin:10px 0 6px;font-size:26px;color:var(--up)">모의주식게임</h1>
+      <p class="muted" style="font-size:13px">가상 투자로 배우는 주식 시장</p>
+    </div>
+    <div class="form-group">
+      <label class="form-label">닉네임 (2~20자)</label>
+      <input id="enter-username" class="form-input" type="text" placeholder="사용할 닉네임을 입력하세요"
+             maxlength="20" style="font-size:16px;text-align:center">
+    </div>
+    <div class="error-msg" id="enter-err"></div>
+    <button class="btn btn-primary btn-full" onclick="doEnter()" style="margin-top:8px;font-size:16px">입장하기 →</button>
+  </div>
+</div>
+
+<!-- ═══════════════ HOME ═══════════════ -->
+<div id="screen-home" class="fullscreen center-v" hidden>
+  <div style="width:100%;max-width:420px;padding:24px 16px">
+    <div style="text-align:center;margin-bottom:28px">
+      <div style="font-size:36px">📈</div>
+      <div style="font-size:20px;font-weight:700;margin-top:8px" id="home-greeting">안녕하세요!</div>
+    </div>
+    <div class="role-card" onclick="showScreen('screen-host-create')">
+      <div style="font-size:32px">🎓</div>
+      <div>
+        <div style="font-weight:700;font-size:16px">수업 진행하기</div>
+        <div class="muted" style="font-size:12px;margin-top:2px">방을 만들고 학생들을 초대합니다</div>
+      </div>
+      <span style="color:var(--muted);font-size:20px;margin-left:auto">›</span>
+    </div>
+    <div class="role-card" onclick="showScreen('screen-join')" style="margin-top:10px">
+      <div style="font-size:32px">🙋</div>
+      <div>
+        <div style="font-weight:700;font-size:16px">수업 참가하기</div>
+        <div class="muted" style="font-size:12px;margin-top:2px">방 코드를 입력해 참가합니다</div>
+      </div>
+      <span style="color:var(--muted);font-size:20px;margin-left:auto">›</span>
+    </div>
+    <div style="text-align:center;margin-top:20px">
+      <button class="btn btn-secondary btn-sm" onclick="showEduStandalone()">📚 학습 콘텐츠</button>
+      <button class="btn btn-secondary btn-sm" style="margin-left:8px" onclick="doLogout()">로그아웃</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ HOST: CREATE ═══════════════ -->
+<div id="screen-host-create" class="fullscreen" hidden>
+  <div class="screen-header">
+    <button class="back-btn" onclick="showScreen('screen-home')">← 뒤로</button>
+    <span style="font-weight:700">방 만들기</span>
+    <span></span>
+  </div>
+  <div class="screen-body">
+    <div class="form-group"><label class="form-label">방 이름</label>
+      <input id="room-name" class="form-input" type="text" placeholder="예: 1학년 3반 주식게임"></div>
+    <div class="form-group"><label class="form-label">게임 시간 (분)</label>
+      <input id="room-duration" class="form-input" type="number" value="30" min="1" max="180"></div>
+    <div class="form-group"><label class="form-label">참여자 시작 자금 (원)</label>
+      <input id="room-cash" class="form-input" type="number" value="10000000" min="100000" step="1000000"></div>
+    <div class="form-group">
+      <label class="form-label">예금 금리 (%)</label>
+      <input id="room-rate" class="form-input" type="number" value="3" min="0" max="50" step="0.5">
+      <div class="muted" style="font-size:11px;margin-top:4px">게임 종료 시 예금 원금에 지급되는 보장 수익률입니다.</div>
+    </div>
+    <div class="error-msg" id="create-err"></div>
+    <button class="btn btn-primary btn-full" onclick="doCreateRoom()" style="margin-top:8px">방 만들기 →</button>
+  </div>
+</div>
+
+<!-- ═══════════════ HOST: LOBBY ═══════════════ -->
+<div id="screen-host-lobby" hidden>
+  <div class="screen-header">
+    <span></span>
+    <span style="font-weight:700" id="lobby-room-name">–</span>
+    <span></span>
+  </div>
+  <div class="screen-body">
+    <div class="code-display">
+      <div class="muted" style="font-size:12px;margin-bottom:6px">참여자에게 이 코드를 알려주세요</div>
+      <div class="room-code" id="lobby-code">–</div>
+      <button class="btn btn-secondary btn-sm" style="margin-top:8px" onclick="copyCode()">📋 코드 복사</button>
+    </div>
+
+    <div class="section-header" style="margin-top:20px">
+      <span class="section-title">참여자 <span id="lobby-count">0</span>명</span>
+      <button class="btn btn-secondary btn-sm" onclick="loadLobbyMembers()">↻</button>
+    </div>
+    <div id="lobby-members-list"></div>
+
+    <div style="margin-top:24px">
+      <button class="btn btn-success btn-full" id="start-btn" onclick="doStartGame()">
+        ▶ 게임 시작
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ HOST: GAME DASHBOARD ═══════════════ -->
+<div id="screen-host-game" hidden>
+  <div class="host-topbar">
+    <div>
+      <div style="font-size:12px;color:var(--muted)">진행자 대시보드</div>
+      <div style="font-weight:700" id="host-room-name">–</div>
+    </div>
+    <div style="text-align:center">
+      <div style="font-size:11px;color:var(--muted)">남은 시간</div>
+      <div class="timer-display" id="host-timer">--:--</div>
+    </div>
+    <div style="text-align:right">
+      <div style="font-size:11px;color:var(--muted)">방 코드</div>
+      <div style="font-weight:700;letter-spacing:2px;color:var(--accent)" id="host-code">–</div>
+    </div>
+  </div>
+
+  <div style="padding:16px">
+    <div class="section-header">
+      <span class="section-title">실시간 순위 👑</span>
+      <button class="btn btn-secondary btn-sm" onclick="loadHostMembers()">↻ 새로고침</button>
+    </div>
+    <div id="host-members-list"></div>
+
+    <canvas id="host-bar-chart" style="margin-top:16px;max-height:300px"></canvas>
+
+    <div style="margin-top:20px;display:flex;gap:10px">
+      <button class="btn btn-danger" onclick="doEndGame()" style="flex:1">⏹ 게임 종료</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ PARTICIPANT: JOIN ═══════════════ -->
+<div id="screen-join" class="fullscreen center-v" hidden>
+  <div style="width:100%;max-width:400px;padding:24px 16px">
+    <div style="text-align:center;margin-bottom:24px">
+      <div style="font-size:40px">🔑</div>
+      <div style="font-size:20px;font-weight:700;margin-top:8px">방 코드 입력</div>
+    </div>
+    <div class="form-group">
+      <input id="join-code" class="form-input" type="text" maxlength="6"
+        placeholder="ABC123" style="text-align:center;font-size:28px;font-weight:700;letter-spacing:6px;text-transform:uppercase">
+    </div>
+    <div class="error-msg" id="join-err"></div>
+    <button class="btn btn-success btn-full" onclick="doJoinRoom()">입장하기 →</button>
+    <button class="btn btn-secondary btn-full" onclick="showScreen('screen-home')" style="margin-top:8px">← 뒤로</button>
+  </div>
+</div>
+
+<!-- ═══════════════ PARTICIPANT: LOBBY ═══════════════ -->
+<div id="screen-p-lobby" class="fullscreen center-v" hidden>
+  <div style="width:100%;max-width:400px;padding:24px 16px;text-align:center">
+    <div style="font-size:48px;animation:pulse 2s infinite">⏳</div>
+    <div style="font-size:18px;font-weight:700;margin:12px 0 4px" id="plobby-room-name">–</div>
+    <div class="muted" style="font-size:13px">진행자: <span id="plobby-host-name">–</span></div>
+    <div class="muted" style="font-size:13px;margin-top:16px">진행자가 게임을 시작하면 자동으로 시작됩니다.</div>
+    <div style="margin-top:20px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px">
+      <div class="section-title" style="margin-bottom:10px">대기 중인 참여자 <span id="plobby-count">–</span>명</div>
+      <div id="plobby-members-list"></div>
+    </div>
+    <div style="margin-top:12px;font-size:12px;color:var(--muted)" id="plobby-settings"></div>
+  </div>
+</div>
+
+<!-- ═══════════════ PARTICIPANT: GAME ═══════════════ -->
+<div id="screen-p-game" hidden>
+  <!-- Top bar -->
+  <div class="p-topbar">
+    <div>
+      <div style="font-size:10px;color:var(--muted)" id="pg-room-name">–</div>
+      <div class="cash-display" id="pg-cash">–</div>
+    </div>
+    <div style="text-align:center">
+      <div class="timer-display" id="pg-timer">--:--</div>
+      <div style="font-size:9px;color:var(--muted)">남은 시간</div>
+    </div>
+    <div style="text-align:right">
+      <div style="font-size:10px;color:var(--muted)">내 순위</div>
+      <div style="font-weight:700;font-size:16px;color:var(--warn)" id="pg-rank">–</div>
+    </div>
+  </div>
+
+  <!-- Pages -->
+  <div class="pages-wrapper">
+  <div class="pages-scroll">
+  <div id="pg-market" class="page">
+    <div style="display:flex;gap:8px;margin-bottom:8px">
+      <input id="stock-search" class="form-input" type="search" placeholder="종목 검색…" oninput="filterStocks()" style="flex:1">
+      <button class="btn btn-secondary btn-sm" onclick="loadMarket()">↻</button>
+    </div>
+    <div id="sector-filters" class="sector-filters"></div>
+    <div id="stock-grid" class="stock-grid"></div>
+  </div>
+
+  <div id="pg-portfolio" class="page">
+    <div id="port-summary" class="summary-grid"></div>
+    <div style="position:relative;height:220px;margin:12px 0">
+      <canvas id="port-donut"></canvas>
+    </div>
+    <div class="section-title" style="margin-bottom:8px">보유 종목</div>
+    <div id="holdings-list"></div>
+    <div class="divider"></div>
+    <div class="section-title" style="margin-bottom:8px">거래 내역</div>
+    <div id="txn-list"></div>
+    <div style="text-align:center;margin-top:10px" id="txn-more-wrap" hidden>
+      <button class="btn btn-secondary btn-sm" onclick="loadMoreTxn()">더 보기</button>
+    </div>
+  </div>
+
+  <div id="pg-deposit" class="page">
+    <div class="card" style="margin-bottom:14px">
+      <div class="section-title" style="margin-bottom:12px">🏦 예금하기</div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+        <span class="muted">적용 금리</span>
+        <span style="font-weight:700;color:var(--warn)" id="dep-rate-display">–%</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:16px">
+        <span class="muted">보유 현금</span>
+        <span style="font-weight:700;color:var(--accent)" id="dep-cash-display">–</span>
+      </div>
+      <div class="form-group">
+        <label class="form-label">예금 금액 (원)</label>
+        <input id="dep-amount" class="form-input" type="number" placeholder="예: 1000000" oninput="updateDepPreview()">
+      </div>
+      <div id="dep-preview" style="background:var(--surface2);border-radius:8px;padding:12px;margin-bottom:12px;display:none">
+        <div style="display:flex;justify-content:space-between">
+          <span class="muted">예상 이자</span>
+          <span style="font-weight:700;color:var(--up)" id="dep-preview-interest">–</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-top:4px">
+          <span class="muted">게임 종료 시 수령</span>
+          <span style="font-weight:700" id="dep-preview-total">–</span>
+        </div>
+      </div>
+      <div class="error-msg" id="dep-err"></div>
+      <button class="btn btn-warning btn-full" onclick="doDeposit()">예금하기 💰</button>
+    </div>
+
+    <div class="section-title" style="margin-bottom:10px">활성 예금</div>
+    <div id="deposits-list"></div>
+  </div>
+
+  <div id="pg-rankings" class="page">
+    <div class="section-title" style="margin-bottom:12px">🏆 실시간 순위</div>
+    <div id="p-rankings-list"></div>
+  </div>
+
+  <div id="pg-education" class="page">
+    <div class="edu-tabs">
+      <button class="edu-tab active" onclick="switchEduTab('glossary')">용어사전</button>
+      <button class="edu-tab" onclick="switchEduTab('guides')">투자 가이드</button>
+      <button class="edu-tab" onclick="switchEduTab('tips')">시장 팁</button>
+    </div>
+    <div id="edu-glossary">
+      <input id="glossary-search" class="form-input" type="search" placeholder="용어 검색…"
+             oninput="searchGlossary()" style="margin-bottom:12px">
+      <div id="glossary-list"></div>
+    </div>
+    <div id="edu-guides" style="display:none"><div id="guides-list"></div></div>
+    <div id="edu-tips"   style="display:none"><div id="tips-list"></div></div>
+  </div>
+  </div><!-- /pages-scroll -->
+  </div><!-- /pages-wrapper -->
+
+  <!-- Bottom nav -->
+  <nav class="bottom-nav">
+    <button class="nav-item active" id="nav-market"    onclick="showPage('market')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>시장
+    </button>
+    <button class="nav-item" id="nav-portfolio" onclick="showPage('portfolio')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>포트폴리오
+    </button>
+    <button class="nav-item" id="nav-deposit" onclick="showPage('deposit')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>예금
+    </button>
+    <button class="nav-item" id="nav-rankings" onclick="showPage('rankings')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/></svg>순위
+    </button>
+    <button class="nav-item" id="nav-education" onclick="showPage('education')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>학습
+    </button>
+  </nav>
+</div>
+
+<!-- ═══════════════ RESULTS ═══════════════ -->
+<div id="screen-results" class="fullscreen" hidden>
+  <div style="padding:24px 16px">
+    <div style="text-align:center;margin-bottom:24px">
+      <div style="font-size:56px">🏆</div>
+      <div style="font-size:22px;font-weight:700;margin-top:8px">게임 종료!</div>
+      <div class="muted" id="results-room-name" style="font-size:14px;margin-top:4px">–</div>
+    </div>
+    <div class="section-title" style="margin-bottom:12px">최종 순위</div>
+    <div id="results-list"></div>
+    <div class="card" id="results-my-stats" style="margin-top:16px"></div>
+    <button class="btn btn-primary btn-full" onclick="goHome()" style="margin-top:20px">홈으로</button>
+  </div>
+</div>
+
+<!-- ═══════════════ MODALS ═══════════════ -->
+
+<!-- Stock detail + trade -->
+<div id="modal-stock" class="modal-overlay" onclick="closeModalOutside(event,'modal-stock')">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+      <div>
+        <div style="font-size:18px;font-weight:700" id="ms-name">–</div>
+        <span class="chip chip-blue" id="ms-sector">–</span>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:24px;font-weight:700" id="ms-price">–</div>
+        <div style="font-size:13px;font-weight:600" id="ms-change">–</div>
+      </div>
+    </div>
+    <div class="period-tabs">
+      <button class="period-tab" onclick="loadChart('1d')">1일</button>
+      <button class="period-tab" onclick="loadChart('1w')">1주</button>
+      <button class="period-tab active" onclick="loadChart('1mo')">1달</button>
+      <button class="period-tab" onclick="loadChart('3mo')">3달</button>
+      <button class="period-tab" onclick="loadChart('1y')">1년</button>
+    </div>
+    <div style="position:relative;height:200px;margin-bottom:16px">
+      <canvas id="stock-chart"></canvas>
+    </div>
+    <div class="divider"></div>
+    <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+      <span class="muted">보유 현금</span>
+      <span class="accent" id="ms-cash">–</span>
+    </div>
+    <div style="display:flex;justify-content:space-between;margin-bottom:12px">
+      <span class="muted">보유 수량</span>
+      <span id="ms-holding">0주</span>
+    </div>
+    <div class="qty-control">
+      <button class="qty-btn" onclick="adjQty(-10)">-10</button>
+      <button class="qty-btn" onclick="adjQty(-1)">-</button>
+      <input class="qty-input" id="trade-qty" type="number" value="1" min="1" oninput="updateTotal()">
+      <button class="qty-btn" onclick="adjQty(1)">+</button>
+      <button class="qty-btn" onclick="adjQty(10)">+10</button>
+    </div>
+    <div style="background:var(--surface2);border-radius:8px;padding:12px;margin-bottom:12px;display:flex;justify-content:space-between">
+      <span class="muted">예상 금액</span>
+      <span style="font-weight:700;color:var(--warn)" id="trade-total">–</span>
+    </div>
+    <div class="trade-btns">
+      <button class="btn btn-success" onclick="execTrade('BUY')">▲ 매수</button>
+      <button class="btn btn-danger"  onclick="execTrade('SELL')">▼ 매도</button>
+    </div>
+    <div id="trade-fb" style="min-height:20px;font-size:13px;text-align:center;margin-top:8px"></div>
+  </div>
+</div>
+
+<!-- Host: Adjust cash -->
+<div id="modal-adjust" class="modal-overlay" onclick="closeModalOutside(event,'modal-adjust')">
+  <div class="modal-sheet" style="max-height:55vh">
+    <div class="modal-handle"></div>
+    <div class="modal-title">자산 조정 — <span id="adj-username">–</span></div>
+    <div style="display:flex;justify-content:space-between;margin-bottom:12px">
+      <span class="muted">현재 현금</span>
+      <span class="accent" id="adj-current-cash">–</span>
+    </div>
+    <div class="form-group">
+      <label class="form-label">조정 금액 (+ 지급 / - 차감)</label>
+      <input id="adj-delta" class="form-input" type="number" placeholder="예: 500000 또는 -200000">
+    </div>
+    <div class="form-group">
+      <label class="form-label">사유 (선택)</label>
+      <input id="adj-note" class="form-input" type="text" placeholder="이벤트 보상, 세금 등">
+    </div>
+    <div class="error-msg" id="adj-err"></div>
+    <button class="btn btn-primary btn-full" onclick="doAdjust()" style="margin-top:8px">확인</button>
+  </div>
+</div>
+
+<!-- Guide detail -->
+<div id="modal-guide" class="modal-overlay" onclick="closeModalOutside(event,'modal-guide')">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <div style="font-size:32px;margin-bottom:8px" id="guide-emoji"></div>
+    <div class="modal-title" id="guide-title"></div>
+    <span class="chip chip-blue" id="guide-cat" style="margin-bottom:14px;display:inline-block"></span>
+    <div class="guide-content" id="guide-body"></div>
+  </div>
+</div>
+
+<div class="toast-container" id="toasts"></div>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="/static/js/app.js?v=3"></script>
+</body>
+</html>
