@@ -34,9 +34,29 @@ function toast(msg, type = 'info') {
 }
 
 // ── Screens & Modals ─────────────────────────────────────
-function showScreen(id) {
-  document.querySelectorAll('[id^="screen-"]').forEach(el => el.hidden = true);
-  document.getElementById(id).hidden = false;
+let _curScreen = 'screen-auth';
+
+function showScreen(id, back = false) {
+  if (_curScreen === id) return;
+  const next = document.getElementById(id);
+  const prev = document.getElementById(_curScreen);
+  const ease = 'transform 0.32s cubic-bezier(0.25,0.46,0.45,0.94)';
+
+  // Bring next into DOM (remove hidden), position it off-screen
+  next.removeAttribute('hidden');
+  next.style.cssText = `transition:none;transform:translateX(${back ? '-100%' : '100%'})`;
+  next.offsetWidth; // force reflow
+
+  // Slide next in, push prev aside
+  next.style.cssText = `transition:${ease};transform:translateX(0)`;
+  if (prev) prev.style.cssText = `transition:${ease};transform:translateX(${back ? '30%' : '-30%'})`;
+
+  _curScreen = id;
+
+  setTimeout(() => {
+    if (prev) { prev.setAttribute('hidden', ''); prev.style.cssText = ''; }
+    next.style.cssText = '';
+  }, 340);
 }
 function openModal(id)  { document.getElementById(id).classList.add('open'); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
@@ -63,11 +83,11 @@ function onLogin(data) {
   }
 }
 
-function showHome() {
+function showHome(back = false) {
   stopPolling();
   stopTimer();
   document.getElementById('home-greeting').textContent = `안녕하세요, ${S.user.username}님! 👋`;
-  showScreen('screen-home');
+  showScreen('screen-home', back);
 }
 
 async function doLogout() {
@@ -76,10 +96,10 @@ async function doLogout() {
   S.user = null; S.room = null;
   document.getElementById('enter-username').value = '';
   document.getElementById('enter-err').textContent = '';
-  showScreen('screen-auth');
+  showScreen('screen-auth', true); // 뒤로(왼쪽에서)
 }
 
-function goHome() { showHome(); }
+function goHome() { showHome(true); }
 
 // ── Room: Create ─────────────────────────────────────────
 async function doCreateRoom() {
@@ -346,6 +366,12 @@ async function refreshMyRank() {
   if (!port.error) {
     S.user._cash = port.cash;
     document.getElementById('pg-cash').textContent = krw(port.total_value);
+    const gp = document.getElementById('pg-gain-pct');
+    gp.textContent = pct(port.total_gain_pct);
+    gp.className = 'muted';
+    if (port.total_gain_pct > 0) gp.style.color = 'var(--up)';
+    else if (port.total_gain_pct < 0) gp.style.color = 'var(--down)';
+    else gp.style.color = 'var(--muted)';
     document.getElementById('dep-cash-display').textContent = krw(port.cash);
     S.depCash = port.cash;
   }
