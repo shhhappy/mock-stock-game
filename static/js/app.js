@@ -309,7 +309,6 @@ async function loadPLobbyMembers() {
 
 // ── Participant: Game ────────────────────────────────────
 function enterParticipantGame() {
-  document.getElementById('pg-room-name').textContent = S.room.name;
   S.depRate = S.room.deposit_rate;
   document.getElementById('dep-rate-display').textContent = S.room.deposit_rate + '%';
   showScreen('screen-p-game');
