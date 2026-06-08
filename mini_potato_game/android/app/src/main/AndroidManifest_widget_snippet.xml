@@ -1,0 +1,15 @@
+<!--
+  아래 내용을 AndroidManifest.xml 의 <application> 태그 안에 추가하세요.
+  Flutter 생성 시 기본 AndroidManifest.xml 에는 위젯 선언이 없습니다.
+-->
+
+<receiver
+    android:name=".PotatoWidget"
+    android:exported="true">
+    <intent-filter>
+        <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+    </intent-filter>
+    <meta-data
+        android:name="android.appwidget.provider"
+        android:resource="@xml/potato_widget_info" />
+</receiver>
