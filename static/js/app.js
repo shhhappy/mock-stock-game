@@ -52,8 +52,9 @@ async function doEnter() {
   const name = document.getElementById('enter-name').value.trim();
   const err  = document.getElementById('enter-err');
   err.textContent = '';
+  if (!sid)  { err.textContent = '학번을 입력하세요.'; return; }
   if (!name) { err.textContent = '이름을 입력하세요.'; return; }
-  const u = sid ? `${sid} ${name}` : name;
+  const u = `${sid} ${name}`;
   try {
     const data = await api.post('/api/auth/enter', {username: u});
     if (data.error) { err.textContent = data.error; return; }
