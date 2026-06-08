@@ -257,9 +257,15 @@ def host_news_interval(rid):
     user = cur_user()
     if room.host_id != user.id: return jsonify({'error': '권한 없음'}), 403
     if request.method == 'POST':
-        seconds = float((request.json or {}).get('seconds', 20))
-        stock_service.set_news_interval(seconds)
-    return jsonify({'seconds': stock_service.get_news_interval()})
+        d = request.json or {}
+        if 'news_seconds' in d:
+            stock_service.set_news_interval(float(d['news_seconds']))
+        if 'price_seconds' in d:
+            stock_service.set_price_interval(float(d['price_seconds']))
+    return jsonify({
+        'news_seconds': stock_service.get_news_interval(),
+        'price_seconds': stock_service.get_price_interval(),
+    })
 
 
 # ── Stocks ────────────────────────────────────────────────

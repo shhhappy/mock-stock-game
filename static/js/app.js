@@ -251,21 +251,25 @@ async function loadHostMarket() {
 
 async function loadNewsInterval() {
   const data = await api.get(`/api/rooms/${S.room.id}/host/news-interval`);
-  if (data.seconds) document.getElementById('news-interval-input').value = data.seconds;
+  if (data.news_seconds) document.getElementById('news-interval-input').value = data.news_seconds;
+  if (data.price_seconds) document.getElementById('price-interval-input').value = data.price_seconds;
 }
 
-async function doSetNewsInterval() {
-  const seconds = parseInt(document.getElementById('news-interval-input').value);
-  const msg = document.getElementById('news-interval-msg');
-  if (!seconds || seconds < 5 || seconds > 300) {
+async function doSetIntervals() {
+  const news  = parseInt(document.getElementById('news-interval-input').value);
+  const price = parseInt(document.getElementById('price-interval-input').value);
+  const msg   = document.getElementById('news-interval-msg');
+  if (!news || news < 5 || news > 300 || !price || price < 5 || price > 300) {
     msg.style.color = 'var(--down)';
-    msg.textContent = '5~300초 사이로 입력하세요.';
+    msg.textContent = '모든 값을 5~300초 사이로 입력하세요.';
     return;
   }
-  const data = await api.post(`/api/rooms/${S.room.id}/host/news-interval`, { seconds });
+  const data = await api.post(`/api/rooms/${S.room.id}/host/news-interval`, {
+    news_seconds: news, price_seconds: price,
+  });
   if (data.error) { msg.style.color = 'var(--down)'; msg.textContent = data.error; return; }
   msg.style.color = 'var(--up)';
-  msg.textContent = `적용됨: ${data.seconds}초마다 폭탄뉴스 발생`;
+  msg.textContent = `적용됨: 폭탄뉴스 ${data.news_seconds}초 · 주가변동 ${data.price_seconds}초`;
 }
 
 async function loadHostMembers() {

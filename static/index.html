@@ -141,13 +141,20 @@
     <canvas id="host-bar-chart" style="margin-top:16px;max-height:300px"></canvas>
 
     <div style="margin-top:20px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px">
-      <div class="section-title" style="margin-bottom:10px">💣 폭탄뉴스 주기</div>
-      <div style="display:flex;align-items:center;gap:8px">
+      <div class="section-title" style="margin-bottom:12px">⏱ 주기 설정</div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <span style="font-size:13px;min-width:72px">💣 폭탄뉴스</span>
         <input id="news-interval-input" class="form-input" type="number" min="5" max="300" value="20"
-          style="width:80px;text-align:center" placeholder="초">
-        <span style="font-size:13px;color:var(--muted)">초마다 발생</span>
-        <button class="btn btn-secondary btn-sm" onclick="doSetNewsInterval()">적용</button>
+          style="width:72px;text-align:center" placeholder="초">
+        <span style="font-size:13px;color:var(--muted)">초</span>
       </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+        <span style="font-size:13px;min-width:72px">📈 주가 변동</span>
+        <input id="price-interval-input" class="form-input" type="number" min="5" max="300" value="20"
+          style="width:72px;text-align:center" placeholder="초">
+        <span style="font-size:13px;color:var(--muted)">초</span>
+      </div>
+      <button class="btn btn-secondary btn-full btn-sm" onclick="doSetIntervals()">적용</button>
       <div id="news-interval-msg" style="font-size:12px;color:var(--muted);margin-top:6px"></div>
     </div>
 
@@ -461,6 +468,6 @@
 <div class="toast-container" id="toasts"></div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
-<script src="/static/js/app.js?v=7"></script>
+<script src="/static/js/app.js?v=8"></script>
 </body>
 </html>
