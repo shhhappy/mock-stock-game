@@ -39,6 +39,10 @@ button { cursor: pointer; }
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
+/* hidden 속성이 display:flex 등 author CSS에 의해 무시되는 것을 방지 */
+[id^="screen-"][hidden] {
+  display: none !important;
+}
 
 html, body {
   height: 100%;
