@@ -3,6 +3,28 @@ import random
 from threading import Lock
 from datetime import datetime
 
+NEWS_TEMPLATES_UP = [
+    "{sector} 섹터 외국인 순매수 급증 — 단기 강세 신호",
+    "{name} 깜짝 실적 예고… 목표주가 줄상향 예상",
+    "정부, {sector} 산업 대규모 지원책 발표 임박",
+    "{name} 역대급 수주 계약 체결 — 실적 급등 전망",
+    "{sector} 글로벌 수요 폭발… 수출 호황 지속",
+    "{name} 신제품 흥행 돌풍 — 기대 이상 판매 실적",
+    "{sector} 기관 순매수 전환 포착 — 강세 흐름",
+    "{name} 대규모 자사주 매입 발표 — 주주가치 제고",
+]
+
+NEWS_TEMPLATES_DOWN = [
+    "{sector} 섹터 기관 대규모 매도 포착 — 하락 경보",
+    "{name} 어닝 쇼크 우려… 목표주가 줄하향",
+    "{sector} 공급 과잉 심화 — 마진 압박 불가피",
+    "{name} 핵심 계약 파기 루머 확산 — 투자자 불안",
+    "{sector} 규제 강화 충격 — 투자심리 급랭",
+    "{name} 주요 고객사 이탈 소식 — 실적 악화 우려",
+    "{sector} 글로벌 수요 둔화 경고 — 조정 국면 진입",
+    "{name} 대주주 지분 대량 매도 — 오버행 리스크",
+]
+
 STOCKS = {
     # 반도체
     'SMSNG': {'name': '삼성전자',         'sector': '반도체', 'base': 72000,  'vol': 0.025},
@@ -48,7 +70,7 @@ STOCKS = {
 
 SECTORS = sorted({v['sector'] for v in STOCKS.values()})
 
-PRICE_TTL = 3  # 가격 업데이트 주기 (초)
+PRICE_TTL = 20  # 가격 업데이트 주기 (초)
 
 
 class StockService:
@@ -56,6 +78,10 @@ class StockService:
         self._lock = Lock()
         self._prices: dict = {}   # symbol → (timestamp, price)
         self._prev:   dict = {}   # symbol → 시작가 (수익률 기준)
+        self._news: dict = {'timestamp': 0.0, 'items': []}
+        self._current_biases: dict = {}  # 현재 사이클 적용 방향
+        self._next_biases: dict = {}     # 다음 사이클 예고 방향
+        self._last_news_ts: float = 0.0
         self._init_prices()
 
     def _init_prices(self):
@@ -65,12 +91,34 @@ class StockService:
             self._prices[sym] = (now - PRICE_TTL, start)
             self._prev[sym]   = start
 
-    def _next_price(self, sym: str, current: float) -> float:
+    def _next_price(self, sym: str, current: float, direction: str = None) -> float:
         vol = STOCKS[sym]['vol']
-        drift = random.gauss(0, vol * 0.4)
+        if direction == 'up':
+            drift = abs(random.gauss(0, vol * 0.5)) + vol * 0.08
+        elif direction == 'down':
+            drift = -(abs(random.gauss(0, vol * 0.5)) + vol * 0.08)
+        else:
+            drift = random.gauss(0, vol * 0.4)
         new_price = current * (1 + drift)
         base = STOCKS[sym]['base']
         return round(max(base * 0.6, min(base * 1.4, new_price)))
+
+    def _generate_news(self):
+        sectors = list(set(v['sector'] for v in STOCKS.values()))
+        chosen = random.sample(sectors, min(random.randint(1, 2), len(sectors)))
+        items = []
+        new_biases = {}
+        for sector in chosen:
+            direction = random.choice(['up', 'down'])
+            sector_stocks = [s for s, info in STOCKS.items() if info['sector'] == sector]
+            rep = random.choice(sector_stocks)
+            name = STOCKS[rep]['name']
+            tmpl = random.choice(NEWS_TEMPLATES_UP if direction == 'up' else NEWS_TEMPLATES_DOWN)
+            items.append({'headline': tmpl.format(sector=sector, name=name), 'direction': direction})
+            for sym in sector_stocks:
+                new_biases[sym] = direction
+        self._next_biases = new_biases
+        self._news = {'timestamp': time.time(), 'items': items}
 
     def get_price(self, symbol: str):
         if symbol not in STOCKS:
@@ -80,9 +128,19 @@ class StockService:
             ts, price = self._prices[symbol]
             if now - ts < PRICE_TTL:
                 return price
-            new_price = self._next_price(symbol, price)
+            # 새 사이클 시작: 예고 편향 적용 후 다음 뉴스 생성
+            if now - self._last_news_ts >= PRICE_TTL:
+                self._current_biases = self._next_biases.copy()
+                self._generate_news()
+                self._last_news_ts = now
+            direction = self._current_biases.get(symbol)
+            new_price = self._next_price(symbol, price, direction)
             self._prices[symbol] = (now, new_price)
             return new_price
+
+    def get_news(self) -> dict:
+        with self._lock:
+            return dict(self._news)
 
     def get_prev_close(self, symbol: str):
         return self._prev.get(symbol)

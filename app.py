@@ -273,6 +273,13 @@ def get_stocks(rid):
             })
     return jsonify({'stocks': result, 'sectors': SECTORS})
 
+@app.route('/api/rooms/<int:rid>/news')
+@login_required
+def get_room_news(rid):
+    Room.query.get_or_404(rid)
+    return jsonify(stock_service.get_news())
+
+
 @app.route('/api/rooms/<int:rid>/stocks/<symbol>/chart')
 @login_required
 def get_chart(rid, symbol):

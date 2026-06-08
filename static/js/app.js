@@ -5,12 +5,15 @@ const S = {
   currentPage: 'market',
   tradeSymbol: null, tradePrice: 0,
   stockChart: null, portChart: null, hostBarChart: null, resultsBarChart: null,
-  timerInterval: null, pollInterval: null,
+  timerInterval: null, pollInterval: null, newsInterval: null,
+  newsTs: 0,
   txnPage: 1, txnTotalPages: 1,
   adjustTargetUid: null,
   depRate: 3, depCash: 0,
   eduTab: 'glossary', glossaryData: [],
 };
+
+let _newsPopupTimer = null;
 
 // ── API ──────────────────────────────────────────────────
 const api = {
@@ -353,6 +356,7 @@ function enterParticipantGame() {
   startTimer('pg-timer');
   loadMarket();
   refreshMyRank();
+  startNewsPolling();
   S.pollInterval = setInterval(async () => {
     const r = await api.get(`/api/rooms/${S.room.id}`);
     if (r.status === 'ended') {
@@ -403,7 +407,58 @@ function startTimer(elId) {
 }
 
 function stopTimer()   { clearInterval(S.timerInterval); S.timerInterval = null; }
-function stopPolling() { clearInterval(S.pollInterval);  S.pollInterval = null; }
+function stopPolling() {
+  clearInterval(S.pollInterval);  S.pollInterval = null;
+  stopNewsPolling();
+}
+
+function startNewsPolling() {
+  S.newsTs = 0;
+  if (S.newsInterval) clearInterval(S.newsInterval);
+  S.newsInterval = setInterval(async () => {
+    if (!S.room) return;
+    const data = await api.get(`/api/rooms/${S.room.id}/news`).catch(() => null);
+    if (!data || !data.timestamp) return;
+    if (data.timestamp > S.newsTs) {
+      S.newsTs = data.timestamp;
+      if (data.items && data.items.length) showBombNews(data.items);
+    }
+  }, 3000);
+}
+
+function stopNewsPolling() {
+  if (S.newsInterval) { clearInterval(S.newsInterval); S.newsInterval = null; }
+  if (_newsPopupTimer) { clearTimeout(_newsPopupTimer); _newsPopupTimer = null; }
+  const popup = document.getElementById('bomb-news-popup');
+  if (popup) popup.style.display = 'none';
+}
+
+function showBombNews(items) {
+  const popup  = document.getElementById('bomb-news-popup');
+  const content = document.getElementById('bomb-news-content');
+  const bar    = document.getElementById('bomb-news-bar');
+  if (!popup || !content || !bar) return;
+
+  content.innerHTML = items.map(item => {
+    const arrow = item.direction === 'up' ? '▲' : '▼';
+    const cls   = item.direction === 'up' ? 'news-up' : 'news-down';
+    return `<div class="bomb-news-headline ${cls}">${arrow} ${item.headline}</div>`;
+  }).join('');
+
+  // 애니메이션 리셋
+  popup.style.display = 'flex';
+  const inner = popup.querySelector('.bomb-news-inner');
+  inner.style.animation = 'none';
+  bar.style.animation = 'none';
+  void inner.offsetWidth;
+  inner.style.animation = '';
+  bar.style.animation = 'bombProgress 3s linear forwards';
+
+  if (_newsPopupTimer) clearTimeout(_newsPopupTimer);
+  _newsPopupTimer = setTimeout(() => {
+    popup.style.display = 'none';
+  }, 3000);
+}
 
 async function refreshRoomStatus() {
   const r = await api.get(`/api/rooms/${S.room.id}`);
