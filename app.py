@@ -43,10 +43,15 @@ def member_total_value(rid, uid):
 
 def _end_room(room):
     room.status = 'ended'
+    now = datetime.utcnow()
+    total_seconds = room.duration_minutes * 60
+    game_end = min(now, room.end_time) if room.end_time else now
     for d in Deposit.query.filter_by(room_id=room.id, status='active').all():
         m = RoomMember.query.filter_by(room_id=room.id, user_id=d.user_id).first()
         if m:
-            interest = d.amount * d.rate / 100
+            held_seconds = max(0.0, (game_end - d.created_at).total_seconds())
+            ratio = min(1.0, held_seconds / total_seconds) if total_seconds > 0 else 1.0
+            interest = round(d.amount * d.rate / 100 * ratio, 0)
             d.interest_earned = interest
             d.status = 'matured'
             m.cash += d.amount + interest
@@ -412,15 +417,28 @@ def get_transactions(rid):
 @app.route('/api/rooms/<int:rid>/deposits', methods=['GET'])
 @login_required
 def get_deposits(rid):
-    Room.query.get_or_404(rid)
+    room = Room.query.get_or_404(rid)
     user = cur_user()
     deps = Deposit.query.filter_by(room_id=rid, user_id=user.id).order_by(Deposit.created_at.desc()).all()
-    return jsonify([{
-        'id': d.id, 'amount': d.amount, 'rate': d.rate, 'status': d.status,
-        'interest_earned': d.interest_earned,
-        'expected_interest': d.amount * d.rate / 100 if d.status == 'active' else d.interest_earned,
-        'created_at': d.created_at.strftime('%m-%d %H:%M'),
-    } for d in deps])
+    now = datetime.utcnow()
+    total_seconds = room.duration_minutes * 60
+    result = []
+    for d in deps:
+        max_interest = d.amount * d.rate / 100
+        if d.status == 'active' and total_seconds > 0:
+            held = max(0.0, (now - d.created_at).total_seconds())
+            ratio = min(1.0, held / total_seconds)
+            expected_interest = round(max_interest * ratio, 0)
+        else:
+            expected_interest = d.interest_earned or 0
+        result.append({
+            'id': d.id, 'amount': d.amount, 'rate': d.rate, 'status': d.status,
+            'interest_earned': d.interest_earned,
+            'expected_interest': expected_interest,
+            'max_interest': round(max_interest, 0),
+            'created_at': d.created_at.strftime('%m-%d %H:%M'),
+        })
+    return jsonify(result)
 
 @app.route('/api/rooms/<int:rid>/deposits', methods=['POST'])
 @login_required
@@ -439,10 +457,14 @@ def create_deposit(rid):
     dep = Deposit(room_id=rid, user_id=user.id, amount=amount, rate=room.deposit_rate)
     db.session.add(dep)
     db.session.commit()
-    interest = amount * room.deposit_rate / 100
-    return jsonify({'message': f'{amount:,.0f}원 예금! 게임 종료 시 이자 {interest:,.0f}원 지급.',
+    total_seconds = room.duration_minutes * 60
+    remaining = max(0.0, (room.end_time - datetime.utcnow()).total_seconds()) if room.end_time else total_seconds
+    ratio = min(1.0, remaining / total_seconds) if total_seconds > 0 else 1.0
+    expected_interest = round(amount * room.deposit_rate / 100 * ratio, 0)
+    max_interest = round(amount * room.deposit_rate / 100, 0)
+    return jsonify({'message': f'{amount:,.0f}원 예금! 예상 이자 {expected_interest:,.0f}원 (보유 시간 비례 지급).',
                     'cash': m.cash, 'deposit': {'id': dep.id, 'amount': dep.amount,
-                    'expected_interest': interest, 'rate': dep.rate}})
+                    'expected_interest': expected_interest, 'max_interest': max_interest, 'rate': dep.rate}})
 
 @app.route('/api/rooms/<int:rid>/deposits/<int:did>', methods=['DELETE'])
 @login_required

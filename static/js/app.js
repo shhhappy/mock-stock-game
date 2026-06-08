@@ -4,7 +4,7 @@ const S = {
   stocks: [], sectors: [], activeSector: '',
   currentPage: 'market',
   tradeSymbol: null, tradePrice: 0,
-  stockChart: null, portChart: null, hostBarChart: null,
+  stockChart: null, portChart: null, hostBarChart: null, resultsBarChart: null,
   timerInterval: null, pollInterval: null,
   txnPage: 1, txnTotalPages: 1,
   adjustTargetUid: null,
@@ -34,7 +34,7 @@ function toast(msg, type = 'info') {
 }
 
 // ── Screens & Modals ─────────────────────────────────────
-let _curScreen = 'screen-auth';
+let _curScreen = 'screen-landing';
 
 function showScreen(id) {
   if (_curScreen === id) return;
@@ -47,22 +47,13 @@ function closeModal(id) { document.getElementById(id).classList.remove('open'); 
 function closeModalOutside(e, id) { if (e.target.id === id) closeModal(id); }
 
 // ── Auth ─────────────────────────────────────────────────
-async function doEnter() {
-  const sid  = document.getElementById('enter-student-id').value.trim();
-  const name = document.getElementById('enter-name').value.trim();
-  const err  = document.getElementById('enter-err');
-  err.textContent = '';
-  if (!sid)  { err.textContent = '학번을 입력하세요.'; return; }
-  if (!name) { err.textContent = '이름을 입력하세요.'; return; }
+async function doAuth(sid, name) {
   const u = `${sid} ${name}`;
-  try {
-    const data = await api.post('/api/auth/enter', {username: u});
-    if (data.error) { err.textContent = data.error; return; }
-    if (!data.user) { err.textContent = '서버 오류가 발생했습니다.'; return; }
-    onLogin(data);
-  } catch(e) {
-    err.textContent = '서버에 연결할 수 없습니다.';
-  }
+  const data = await api.post('/api/auth/enter', {username: u});
+  if (data.error) throw new Error(data.error);
+  if (!data.user) throw new Error('서버 오류가 발생했습니다.');
+  S.user = data.user;
+  return data;
 }
 
 function onLogin(data) {
@@ -71,39 +62,47 @@ function onLogin(data) {
     S.room = data.active_room;
     resumeRoom();
   } else {
-    showHome();
+    showLanding();
   }
 }
 
-function showHome() {
-  stopPolling();
-  stopTimer();
-  document.getElementById('home-greeting').textContent = `안녕하세요, ${S.user.username}님! 👋`;
-  showScreen('screen-home');
+function showLanding() {
+  stopPolling(); stopTimer();
+  showScreen('screen-landing');
 }
+
+function showHome() { showLanding(); }
 
 async function doLogout() {
   stopPolling(); stopTimer();
   await api.post('/api/auth/logout', {});
   S.user = null; S.room = null;
-  document.getElementById('enter-student-id').value = '';
-  document.getElementById('enter-name').value = '';
-  document.getElementById('enter-err').textContent = '';
-  showScreen('screen-auth');
+  showLanding();
 }
 
-function goHome() { showHome(); }
+function goHome() {
+  api.post('/api/auth/logout', {}).catch(() => {});
+  S.user = null; S.room = null;
+  showLanding();
+}
 
 // ── Room: Create ─────────────────────────────────────────
 async function doCreateRoom() {
-  const name = document.getElementById('room-name').value.trim();
+  const sid      = document.getElementById('host-student-id').value.trim();
+  const hostName = document.getElementById('host-name').value.trim();
+  const roomName = document.getElementById('room-name').value.trim();
   const dur  = parseInt(document.getElementById('room-duration').value) || 30;
   const cash = parseFloat(document.getElementById('room-cash').value)   || 10_000_000;
   const rate = parseFloat(document.getElementById('room-rate').value)   || 3;
   const err  = document.getElementById('create-err');
   err.textContent = '';
-  if (!name) { err.textContent = '방 이름을 입력하세요.'; return; }
-  const data = await api.post('/api/rooms', {name, duration_minutes: dur, starting_cash: cash, deposit_rate: rate});
+  if (!sid)      { err.textContent = '학번을 입력하세요.'; return; }
+  if (!hostName) { err.textContent = '이름을 입력하세요.'; return; }
+  if (!roomName) { err.textContent = '방 이름을 입력하세요.'; return; }
+  try {
+    await doAuth(sid, hostName);
+  } catch(e) { err.textContent = e.message; return; }
+  const data = await api.post('/api/rooms', {name: roomName, duration_minutes: dur, starting_cash: cash, deposit_rate: rate});
   if (data.error) { err.textContent = data.error; return; }
   S.room = data.room;
   enterHostLobby();
@@ -112,9 +111,16 @@ async function doCreateRoom() {
 // ── Room: Join ───────────────────────────────────────────
 async function doJoinRoom() {
   const code = document.getElementById('join-code').value.trim().toUpperCase();
+  const sid  = document.getElementById('join-student-id').value.trim();
+  const name = document.getElementById('join-name').value.trim();
   const err  = document.getElementById('join-err');
   err.textContent = '';
   if (code.length !== 6) { err.textContent = '6자리 코드를 입력하세요.'; return; }
+  if (!sid)  { err.textContent = '학번을 입력하세요.'; return; }
+  if (!name) { err.textContent = '이름을 입력하세요.'; return; }
+  try {
+    await doAuth(sid, name);
+  } catch(e) { err.textContent = e.message; return; }
   const data = await api.post('/api/rooms/join', {code});
   if (data.error) { err.textContent = data.error; return; }
   S.room = data.room;
@@ -146,8 +152,23 @@ function enterHostLobby() {
   document.getElementById('lobby-room-name').textContent = S.room.name;
   document.getElementById('lobby-code').textContent      = S.room.code;
   showScreen('screen-host-lobby');
+  generateLobbyQR();
   loadLobbyMembers();
   S.pollInterval = setInterval(loadLobbyMembers, 5000);
+}
+
+function generateLobbyQR() {
+  const el = document.getElementById('lobby-qr');
+  el.innerHTML = '';
+  const joinUrl = `${location.origin}${location.pathname}?code=${S.room.code}`;
+  new QRCode(el, {
+    text: joinUrl,
+    width: 148,
+    height: 148,
+    colorDark: '#e6edf3',
+    colorLight: '#0d1117',
+    correctLevel: QRCode.CorrectLevel.M,
+  });
 }
 
 async function loadLobbyMembers() {
@@ -692,9 +713,14 @@ function updateDepPreview() {
   const amount = parseFloat(document.getElementById('dep-amount').value) || 0;
   const preview = document.getElementById('dep-preview');
   if (amount > 0) {
-    const interest = amount * S.depRate / 100;
+    const totalSec   = (S.room?.duration_minutes || 30) * 60;
+    const remaining  = S.room?.remaining_seconds ?? totalSec;
+    const ratio      = totalSec > 0 ? Math.min(1, remaining / totalSec) : 1;
+    const interest   = amount * S.depRate / 100 * ratio;
+    const maxInterest = amount * S.depRate / 100;
     document.getElementById('dep-preview-interest').textContent = '+' + krw(interest);
     document.getElementById('dep-preview-total').textContent    = krw(amount + interest);
+    document.getElementById('dep-preview-max').textContent      = krw(maxInterest);
     preview.style.display = '';
   } else {
     preview.style.display = 'none';
@@ -719,7 +745,8 @@ async function loadDepositsPage() {
       <div>
         <div style="font-weight:600">${krw(d.amount)}</div>
         <div class="muted" style="font-size:11px">${d.created_at} · 금리 ${d.rate}%</div>
-        <div style="color:var(--up);font-size:12px">예상 이자 +${krw(d.expected_interest)}</div>
+        <div style="color:var(--up);font-size:12px">현재 예상 이자 +${krw(d.expected_interest)}</div>
+        <div style="color:var(--muted);font-size:11px">최대 이자 +${krw(d.max_interest)}</div>
       </div>
       <button class="btn btn-secondary btn-sm" onclick="doWithdraw(${d.id})" style="color:var(--down)">해지</button>
     </div>`).join('');
@@ -772,22 +799,35 @@ async function loadParticipantRankings() {
 }
 
 // ── Results ──────────────────────────────────────────────
+function parseUsername(username) {
+  const parts = username.split(' ');
+  const sid  = parts[0];
+  const name = parts.slice(1).join(' ') || username;
+  return {sid, name};
+}
+
 async function loadResults() {
   document.getElementById('results-room-name').textContent = S.room?.name || '';
   const data = await api.get(`/api/rooms/${S.room.id}/rankings`);
   const list = document.getElementById('results-list');
   list.innerHTML = data.map(e => {
     const medal = e.rank===1?'🥇':e.rank===2?'🥈':e.rank===3?'🥉':e.rank+'위';
+    const {sid, name} = parseUsername(e.username);
     return `
       <div class="results-row${e.rank<=3?' rank-'+e.rank:''}">
         <div style="font-size:20px;width:36px;text-align:center">${medal}</div>
-        <div style="flex:1;font-weight:700">${e.username}${e.is_me?'<span class="chip chip-blue" style="font-size:10px;margin-left:4px">나</span>':''}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:700">${name}${e.is_me?'<span class="chip chip-blue" style="font-size:10px;margin-left:4px">나</span>':''}</div>
+          <div style="font-size:11px;color:var(--muted)">${sid}</div>
+        </div>
         <div style="text-align:right">
           <div style="font-weight:700">${krw(e.total_value)}</div>
           <div class="${updn(e.gain_pct)}" style="font-size:12px">${pct(e.gain_pct)}</div>
         </div>
       </div>`;
   }).join('');
+
+  renderResultsChart(data);
 
   const me = data.find(e => e.is_me);
   const myStats = document.getElementById('results-my-stats');
@@ -807,6 +847,52 @@ async function loadResults() {
   } else {
     myStats.innerHTML = '';
   }
+}
+
+function renderResultsChart(data) {
+  const sorted = [...data].sort((a, b) => b.total_value - a.total_value);
+  const labels = sorted.map(e => {
+    const {sid, name} = parseUsername(e.username);
+    return [name, sid];
+  });
+  const values = sorted.map(e => e.total_value);
+  const colors = sorted.map(e => e.gain_pct >= 0 ? 'rgba(63,185,80,.75)' : 'rgba(248,81,73,.75)');
+
+  const wrap = document.getElementById('results-chart-wrap');
+  wrap.style.height = Math.max(220, sorted.length * 52) + 'px';
+
+  if (S.resultsBarChart) S.resultsBarChart.destroy();
+  S.resultsBarChart = new Chart(
+    document.getElementById('results-bar-chart').getContext('2d'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        data: values,
+        backgroundColor: colors,
+        borderColor: colors.map(c => c.replace('.75)', '1)')),
+        borderWidth: 1,
+        borderRadius: 6,
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {display: false},
+        tooltip: {callbacks: {label: c => krw(c.parsed.x)}},
+      },
+      scales: {
+        x: {
+          ticks: {color: '#8b949e', callback: v => (v/1000000).toFixed(1) + 'M'},
+          grid: {color: '#21262d'},
+          min: S.room?.starting_cash ? S.room.starting_cash * 0.75 : 0,
+        },
+        y: {ticks: {color: '#e6edf3', font: {size: 12}}, grid: {display: false}},
+      }
+    }
+  });
 }
 
 // ── Education ────────────────────────────────────────────
@@ -1125,14 +1211,25 @@ function ptInitTicks() {
 
 // ── Init ─────────────────────────────────────────────────
 window.addEventListener('load', async () => {
-  document.getElementById('enter-name')?.addEventListener('keydown', e => {
-    if (e.key === 'Enter') doEnter();
-  });
   document.getElementById('trade-qty')?.addEventListener('input', updateTotal);
   document.getElementById('join-code')?.addEventListener('input', function() {
     this.value = this.value.toUpperCase();
   });
 
+  // Pre-fill join code from URL ?code=XXXXXX (QR scan)
+  const urlCode = new URLSearchParams(location.search).get('code');
+  if (urlCode) {
+    const joinCodeEl = document.getElementById('join-code');
+    if (joinCodeEl) joinCodeEl.value = urlCode.toUpperCase();
+    history.replaceState({}, '', location.pathname);
+    showScreen('screen-join');
+    return;
+  }
+
   const me = await api.get('/api/auth/me');
-  if (!me.error) { onLogin(me); }
+  if (!me.error) {
+    onLogin(me);
+  } else {
+    showLanding();
+  }
 });

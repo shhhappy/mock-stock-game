@@ -8,35 +8,13 @@
 </head>
 <body>
 
-<!-- ═══════════════ AUTH ═══════════════ -->
-<div id="screen-auth" class="fullscreen center-v">
-  <div class="auth-card">
+<!-- ═══════════════ LANDING ═══════════════ -->
+<div id="screen-landing" class="fullscreen center-v">
+  <div style="width:100%;max-width:420px;padding:24px 16px">
     <div style="text-align:center;margin-bottom:32px">
       <div style="font-size:56px">📈</div>
       <h1 style="margin:10px 0 6px;font-size:26px;color:var(--up)">모의주식게임</h1>
       <p class="muted" style="font-size:13px">가상 투자로 배우는 주식 시장</p>
-    </div>
-    <div class="form-group">
-      <label class="form-label">학번 (필수)</label>
-      <input id="enter-student-id" class="form-input" type="text" placeholder="예: 20715"
-             maxlength="15" style="font-size:16px;text-align:center" onkeydown="if(event.key==='Enter')document.getElementById('enter-name').focus()">
-    </div>
-    <div class="form-group">
-      <label class="form-label">이름 (필수)</label>
-      <input id="enter-name" class="form-input" type="text" placeholder="홍길동"
-             maxlength="20" style="font-size:16px;text-align:center" onkeydown="if(event.key==='Enter')doEnter()">
-    </div>
-    <div class="error-msg" id="enter-err"></div>
-    <button class="btn btn-primary btn-full" onclick="doEnter()" style="margin-top:8px;font-size:16px">입장하기 →</button>
-  </div>
-</div>
-
-<!-- ═══════════════ HOME ═══════════════ -->
-<div id="screen-home" class="fullscreen center-v" hidden>
-  <div style="width:100%;max-width:420px;padding:24px 16px">
-    <div style="text-align:center;margin-bottom:28px">
-      <div style="font-size:36px">📈</div>
-      <div style="font-size:20px;font-weight:700;margin-top:8px" id="home-greeting">안녕하세요!</div>
     </div>
     <div class="role-card" onclick="showScreen('screen-host-create')">
       <div style="font-size:32px">🎓</div>
@@ -55,9 +33,7 @@
       <span style="color:var(--muted);font-size:20px;margin-left:auto">›</span>
     </div>
     <div style="text-align:center;margin-top:20px">
-      <button class="btn btn-secondary btn-sm" onclick="showEduStandalone()">📚 학습 콘텐츠</button>
-      <a href="/pomodoro" class="btn btn-secondary btn-sm" style="margin-left:8px">🍅 집중 타이머</a>
-      <button class="btn btn-secondary btn-sm" style="margin-left:8px" onclick="doLogout()">로그아웃</button>
+      <a href="/pomodoro" class="btn btn-secondary btn-sm">🍅 집중 타이머</a>
     </div>
   </div>
 </div>
@@ -65,11 +41,24 @@
 <!-- ═══════════════ HOST: CREATE ═══════════════ -->
 <div id="screen-host-create" class="fullscreen" hidden>
   <div class="screen-header">
-    <button class="back-btn" onclick="showScreen('screen-home', true)">← 뒤로</button>
+    <button class="back-btn" onclick="showLanding()">← 뒤로</button>
     <span style="font-weight:700">방 만들기</span>
     <span></span>
   </div>
   <div class="screen-body">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:16px">
+      <div style="font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;margin-bottom:10px">진행자 정보</div>
+      <div class="form-group" style="margin-bottom:10px">
+        <label class="form-label">학번</label>
+        <input id="host-student-id" class="form-input" type="text" placeholder="예: 20715" maxlength="15"
+               onkeydown="if(event.key==='Enter')document.getElementById('host-name').focus()">
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label class="form-label">이름</label>
+        <input id="host-name" class="form-input" type="text" placeholder="홍길동" maxlength="20"
+               onkeydown="if(event.key==='Enter')document.getElementById('room-name').focus()">
+      </div>
+    </div>
     <div class="form-group"><label class="form-label">방 이름</label>
       <input id="room-name" class="form-input" type="text" placeholder="예: 1학년 3반 주식게임"></div>
     <div class="form-group"><label class="form-label">게임 시간 (분)</label>
@@ -79,7 +68,7 @@
     <div class="form-group">
       <label class="form-label">예금 금리 (%)</label>
       <input id="room-rate" class="form-input" type="number" value="3" min="0" max="50" step="0.5">
-      <div class="muted" style="font-size:11px;margin-top:4px">게임 종료 시 예금 원금에 지급되는 보장 수익률입니다.</div>
+      <div class="muted" style="font-size:11px;margin-top:4px">예금 보유 시간에 비례해 이자가 지급됩니다.</div>
     </div>
     <div class="error-msg" id="create-err"></div>
     <button class="btn btn-primary btn-full" onclick="doCreateRoom()" style="margin-top:8px">방 만들기 →</button>
@@ -95,9 +84,14 @@
   </div>
   <div class="screen-body">
     <div class="code-display">
-      <div class="muted" style="font-size:12px;margin-bottom:6px">참여자에게 이 코드를 알려주세요</div>
-      <div class="room-code" id="lobby-code">–</div>
-      <button class="btn btn-secondary btn-sm" style="margin-top:8px" onclick="copyCode()">📋 코드 복사</button>
+      <div class="muted" style="font-size:12px;margin-bottom:10px">참여자에게 이 코드를 알려주세요</div>
+      <div style="display:flex;gap:20px;align-items:center;justify-content:center;flex-wrap:wrap">
+        <div style="text-align:center">
+          <div class="room-code" id="lobby-code">–</div>
+          <button class="btn btn-secondary btn-sm" style="margin-top:8px" onclick="copyCode()">📋 코드 복사</button>
+        </div>
+        <div id="lobby-qr" style="line-height:0;border-radius:8px;overflow:hidden"></div>
+      </div>
     </div>
 
     <div class="section-header" style="margin-top:20px">
@@ -151,15 +145,27 @@
   <div style="width:100%;max-width:400px;padding:24px 16px">
     <div style="text-align:center;margin-bottom:24px">
       <div style="font-size:40px">🔑</div>
-      <div style="font-size:20px;font-weight:700;margin-top:8px">방 코드 입력</div>
+      <div style="font-size:20px;font-weight:700;margin-top:8px">수업 참가하기</div>
     </div>
     <div class="form-group">
+      <label class="form-label">방 코드</label>
       <input id="join-code" class="form-input" type="text" maxlength="6"
-        placeholder="ABC123" style="text-align:center;font-size:28px;font-weight:700;letter-spacing:6px;text-transform:uppercase">
+        placeholder="ABC123" style="text-align:center;font-size:28px;font-weight:700;letter-spacing:6px;text-transform:uppercase"
+        onkeydown="if(event.key==='Enter')document.getElementById('join-student-id').focus()">
+    </div>
+    <div class="form-group">
+      <label class="form-label">학번</label>
+      <input id="join-student-id" class="form-input" type="text" placeholder="예: 20715" maxlength="15"
+             onkeydown="if(event.key==='Enter')document.getElementById('join-name').focus()">
+    </div>
+    <div class="form-group">
+      <label class="form-label">이름</label>
+      <input id="join-name" class="form-input" type="text" placeholder="홍길동" maxlength="20"
+             onkeydown="if(event.key==='Enter')doJoinRoom()">
     </div>
     <div class="error-msg" id="join-err"></div>
     <button class="btn btn-success btn-full" onclick="doJoinRoom()">입장하기 →</button>
-    <button class="btn btn-secondary btn-full" onclick="showScreen('screen-home', true)" style="margin-top:8px">← 뒤로</button>
+    <button class="btn btn-secondary btn-full" onclick="showLanding()" style="margin-top:8px">← 뒤로</button>
   </div>
 </div>
 
@@ -240,12 +246,16 @@
       </div>
       <div id="dep-preview" style="background:var(--surface2);border-radius:8px;padding:12px;margin-bottom:12px;display:none">
         <div style="display:flex;justify-content:space-between">
-          <span class="muted">예상 이자</span>
+          <span class="muted">예상 이자 (현재 시점)</span>
           <span style="font-weight:700;color:var(--up)" id="dep-preview-interest">–</span>
         </div>
         <div style="display:flex;justify-content:space-between;margin-top:4px">
           <span class="muted">게임 종료 시 수령</span>
           <span style="font-weight:700" id="dep-preview-total">–</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-top:4px">
+          <span class="muted" style="font-size:11px">최대 이자 (처음부터 예금 시)</span>
+          <span style="font-size:11px;color:var(--muted)" id="dep-preview-max">–</span>
         </div>
       </div>
       <div class="error-msg" id="dep-err"></div>
@@ -308,6 +318,10 @@
     </div>
     <div class="section-title" style="margin-bottom:12px">최종 순위</div>
     <div id="results-list"></div>
+    <div class="section-title" style="margin:20px 0 10px">자산 현황 차트</div>
+    <div id="results-chart-wrap" style="position:relative;height:220px;margin-bottom:16px">
+      <canvas id="results-bar-chart"></canvas>
+    </div>
     <div class="card" id="results-my-stats" style="margin-top:16px"></div>
     <button class="btn btn-primary btn-full" onclick="goHome()" style="margin-top:20px">홈으로</button>
   </div>
@@ -402,6 +416,7 @@
 
 <div class="toast-container" id="toasts"></div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="/static/js/app.js?v=5"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+<script src="/static/js/app.js?v=6"></script>
 </body>
 </html>
