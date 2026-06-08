@@ -248,25 +248,20 @@ def host_adjust(rid):
 def get_stocks(rid):
     Room.query.get_or_404(rid)
     sf = request.args.get('sector','')
-    mf = request.args.get('market','')
     result = []
     for sym, info in STOCKS.items():
         if sf and info['sector'] != sf: continue
-        if mf and info['market'] != mf: continue
         price = stock_service.get_price(sym)
         prev  = stock_service.get_prev_close(sym)
         if price:
             ch = (price - prev) if prev else 0
             ch_pct = (ch / prev * 100) if prev else 0
-            entry = {
+            result.append({
                 'symbol': sym, 'name': info['name'],
-                'sector': info['sector'], 'market': info['market'],
+                'sector': info['sector'],
                 'price': round(price, 0), 'change': round(ch, 0),
                 'change_pct': round(ch_pct, 2),
-            }
-            usd = stock_service.get_price_usd(sym)
-            if usd: entry['price_usd'] = round(usd, 2)
-            result.append(entry)
+            })
     return jsonify({'stocks': result, 'sectors': SECTORS})
 
 @app.route('/api/rooms/<int:rid>/stocks/<symbol>/chart')

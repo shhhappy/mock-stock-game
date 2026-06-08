@@ -1,7 +1,7 @@
 // ── State ────────────────────────────────────────────────
 const S = {
   user: null, room: null,
-  stocks: [], sectors: [], activeSector: '', activeMarket: '',
+  stocks: [], sectors: [], activeSector: '',
   currentPage: 'market',
   tradeSymbol: null, tradePrice: 0,
   stockChart: null, portChart: null, hostBarChart: null,
@@ -52,9 +52,14 @@ async function doEnter() {
   const err = document.getElementById('enter-err');
   err.textContent = '';
   if (!u) { err.textContent = '닉네임을 입력하세요.'; return; }
-  const data = await api.post('/api/auth/enter', {username: u});
-  if (data.error) { err.textContent = data.error; return; }
-  onLogin(data);
+  try {
+    const data = await api.post('/api/auth/enter', {username: u});
+    if (data.error) { err.textContent = data.error; return; }
+    if (!data.user) { err.textContent = '서버 오류가 발생했습니다.'; return; }
+    onLogin(data);
+  } catch(e) {
+    err.textContent = '서버에 연결할 수 없습니다.';
+  }
 }
 
 function onLogin(data) {
@@ -423,33 +428,12 @@ async function loadMarket() {
   const prev = Object.fromEntries(S.stocks.map(s => [s.symbol, s.price]));
   S.stocks  = data.stocks;
   S.sectors = data.sectors;
-  renderMarketFilter();
   renderSectors();
   renderGrid(S.stocks, prev);
 }
 
-function renderMarketFilter() {
-  const wrap = document.getElementById('market-filter');
-  if (!wrap) return;
-  ['전체','KR','US'].forEach((m, i) => {
-    const label = m === '전체' ? '전체' : m === 'KR' ? '🇰🇷 국내' : '🇺🇸 해외';
-    const act   = (m === '전체' && !S.activeMarket) || m === S.activeMarket;
-    wrap.children[i].textContent = label;
-    wrap.children[i].className   = 'sector-btn' + (act ? ' active' : '');
-  });
-}
-
-function setMarket(m) {
-  S.activeMarket = m === '전체' ? '' : m;
-  S.activeSector = '';
-  renderMarketFilter();
-  renderSectors();
-  filterStocks();
-}
-
 function renderSectors() {
-  const inMarket = S.stocks.filter(st => !S.activeMarket || st.market === S.activeMarket);
-  const sectors  = [...new Set(inMarket.map(st => st.sector))].sort();
+  const sectors = [...new Set(S.stocks.map(st => st.sector))].sort();
   document.getElementById('sector-filters').innerHTML = ['전체', ...sectors].map(s => {
     const act = (s === '전체' && !S.activeSector) || s === S.activeSector;
     return `<button class="sector-btn${act?' active':''}" onclick="setSector('${s}')">${s}</button>`;
@@ -465,7 +449,6 @@ function setSector(s) {
 function filterStocks() {
   const q = (document.getElementById('stock-search').value || '').toLowerCase();
   const filtered = S.stocks.filter(st =>
-    (!S.activeMarket || st.market === S.activeMarket) &&
     (!S.activeSector || st.sector === S.activeSector) &&
     (!q || st.name.toLowerCase().includes(q) || st.symbol.toLowerCase().includes(q))
   );
@@ -482,14 +465,11 @@ function renderGrid(stocks, prevPrices) {
     const cls    = st.change_pct > 0 ? 'chip-up' : st.change_pct < 0 ? 'chip-down' : 'chip-flat';
     const arrow  = st.change_pct > 0 ? '▲' : st.change_pct < 0 ? '▼' : '─';
     const pColor = st.change_pct > 0 ? 'var(--up)' : st.change_pct < 0 ? 'var(--down)' : 'var(--text)';
-    const flag   = st.market === 'US' ? '🇺🇸 ' : '';
-    const usdLine = st.price_usd ? `<div style="font-size:10px;color:var(--muted);margin-top:1px">$${st.price_usd.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}</div>` : '';
     return `
       <div class="stock-card" id="sc-${st.symbol.replace('.','_')}" onclick="openStockModal('${st.symbol}')">
-        <div style="font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${flag}${st.name}</div>
+        <div style="font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${st.name}</div>
         <div style="color:var(--muted);font-size:11px;margin-top:1px">${st.symbol}</div>
         <div style="font-size:19px;font-weight:700;margin-top:8px;color:${pColor}">${krw(st.price)}</div>
-        ${usdLine}
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px">
           <span class="chip ${cls}" style="font-size:11px">${arrow} ${pct(st.change_pct)}</span>
           <span style="font-size:10px;color:var(--muted)">${st.sector}</span>
