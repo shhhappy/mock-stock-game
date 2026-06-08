@@ -48,10 +48,12 @@ function closeModalOutside(e, id) { if (e.target.id === id) closeModal(id); }
 
 // ── Auth ─────────────────────────────────────────────────
 async function doEnter() {
-  const u   = document.getElementById('enter-username').value.trim();
-  const err = document.getElementById('enter-err');
+  const sid  = document.getElementById('enter-student-id').value.trim();
+  const name = document.getElementById('enter-name').value.trim();
+  const err  = document.getElementById('enter-err');
   err.textContent = '';
-  if (!u) { err.textContent = '닉네임을 입력하세요.'; return; }
+  if (!name) { err.textContent = '이름을 입력하세요.'; return; }
+  const u = sid ? `${sid} ${name}` : name;
   try {
     const data = await api.post('/api/auth/enter', {username: u});
     if (data.error) { err.textContent = data.error; return; }
@@ -83,7 +85,8 @@ async function doLogout() {
   stopPolling(); stopTimer();
   await api.post('/api/auth/logout', {});
   S.user = null; S.room = null;
-  document.getElementById('enter-username').value = '';
+  document.getElementById('enter-student-id').value = '';
+  document.getElementById('enter-name').value = '';
   document.getElementById('enter-err').textContent = '';
   showScreen('screen-auth');
 }
@@ -891,8 +894,8 @@ function showEduStandalone() {
   toast('학습은 게임 중 [학습] 탭에서 볼 수 있습니다.', 'info');
 }
 
-// ── Pomodoro Timer ───────────────────────────────────────
-const PT = {
+// ── REMOVED: Pomodoro moved to /pomodoro (standalone app)
+const _PT_REMOVED = {
   MODES: {
     study: { label: '공부',     color: '#FF6B6B', glow: 'rgba(255,107,107,0.25)' },
     short: { label: '짧은 휴식', color: '#4ECDC4', glow: 'rgba(78,205,196,0.25)'  },
@@ -1121,16 +1124,13 @@ function ptInitTicks() {
 
 // ── Init ─────────────────────────────────────────────────
 window.addEventListener('load', async () => {
-  document.getElementById('enter-username')?.addEventListener('keydown', e => {
+  document.getElementById('enter-name')?.addEventListener('keydown', e => {
     if (e.key === 'Enter') doEnter();
   });
   document.getElementById('trade-qty')?.addEventListener('input', updateTotal);
   document.getElementById('join-code')?.addEventListener('input', function() {
     this.value = this.value.toUpperCase();
   });
-
-  ptInitTicks();
-  ptUpdateUI();
 
   const me = await api.get('/api/auth/me');
   if (!me.error) { onLogin(me); }

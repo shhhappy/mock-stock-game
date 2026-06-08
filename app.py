@@ -86,6 +86,10 @@ def find_active_room(uid):
 def index():
     return send_from_directory('static', 'index.html')
 
+@app.route('/pomodoro')
+def pomodoro():
+    return send_from_directory('static', 'pomodoro.html')
+
 
 # ── Auth ──────────────────────────────────────────────────
 
@@ -93,7 +97,7 @@ def index():
 def enter():
     d = request.json or {}
     u = d.get('username', '').strip()
-    if not u or len(u) < 2 or len(u) > 20:
+    if not u or len(u) < 2 or len(u) > 30:
         return jsonify({'error': '닉네임은 2~20자 사이여야 합니다.'}), 400
     user = User.query.filter_by(username=u).first()
     if not user:
