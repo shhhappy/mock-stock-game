@@ -46,18 +46,6 @@ html, body {
 }
 
 /* ── Layout helpers ─────────────────────────────────────── */
-/* All top-level screens fill the full viewport */
-#screen-auth, #screen-home, #screen-host-create, #screen-host-lobby,
-#screen-host-game, #screen-join, #screen-p-lobby, #screen-p-game,
-#screen-results, #screen-edu-standalone {
-  position: fixed; inset: 0; overflow-y: auto; background: var(--bg);
-}
-#screen-auth[hidden], #screen-home[hidden], #screen-host-create[hidden],
-#screen-host-lobby[hidden], #screen-host-game[hidden], #screen-join[hidden],
-#screen-p-lobby[hidden], #screen-p-game[hidden],
-#screen-results[hidden], #screen-edu-standalone[hidden] {
-  display: none;
-}
 .fullscreen { min-height: 100%; width: 100%; }
 .center-v   { display: flex; align-items: center; justify-content: center; padding: 24px 16px; min-height: 100%; }
 .divider    { height: 1px; background: var(--border); margin: 16px 0; }
