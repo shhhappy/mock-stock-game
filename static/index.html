@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>모의주식게임</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=5">
+  <link rel="stylesheet" href="/static/css/style.css?v=6">
 </head>
 <body>
 
@@ -193,7 +193,6 @@
 
   <!-- Pages -->
   <div class="pages-wrapper">
-  <div class="pages-scroll">
   <div id="pg-market" class="page">
     <div style="display:flex;gap:8px;margin-bottom:8px">
       <input id="stock-search" class="form-input" type="search" placeholder="종목 검색…" oninput="filterStocks()" style="flex:1">
@@ -203,7 +202,7 @@
     <div id="stock-grid" class="stock-grid"></div>
   </div>
 
-  <div id="pg-portfolio" class="page">
+  <div id="pg-portfolio" class="page" hidden>
     <div id="port-summary" class="summary-grid"></div>
     <div style="position:relative;height:220px;margin:12px 0">
       <canvas id="port-donut"></canvas>
@@ -218,7 +217,7 @@
     </div>
   </div>
 
-  <div id="pg-deposit" class="page">
+  <div id="pg-deposit" class="page" hidden>
     <div class="card" style="margin-bottom:14px">
       <div class="section-title" style="margin-bottom:12px">🏦 예금하기</div>
       <div style="display:flex;justify-content:space-between;margin-bottom:8px">
@@ -251,12 +250,12 @@
     <div id="deposits-list"></div>
   </div>
 
-  <div id="pg-rankings" class="page">
+  <div id="pg-rankings" class="page" hidden>
     <div class="section-title" style="margin-bottom:12px">🏆 실시간 순위</div>
     <div id="p-rankings-list"></div>
   </div>
 
-  <div id="pg-education" class="page">
+  <div id="pg-education" class="page" hidden>
     <div class="edu-tabs">
       <button class="edu-tab active" onclick="switchEduTab('glossary')">용어사전</button>
       <button class="edu-tab" onclick="switchEduTab('guides')">투자 가이드</button>
@@ -270,7 +269,6 @@
     <div id="edu-guides" style="display:none"><div id="guides-list"></div></div>
     <div id="edu-tips"   style="display:none"><div id="tips-list"></div></div>
   </div>
-  </div><!-- /pages-scroll -->
   </div><!-- /pages-wrapper -->
 
   <!-- Bottom nav -->

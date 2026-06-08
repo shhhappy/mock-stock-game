@@ -40,23 +40,10 @@ function showScreen(id, back = false) {
   if (_curScreen === id) return;
   const next = document.getElementById(id);
   const prev = document.getElementById(_curScreen);
-  const ease = 'transform 0.32s cubic-bezier(0.25,0.46,0.45,0.94)';
 
-  // Bring next into DOM (remove hidden), position it off-screen
+  if (prev) prev.setAttribute('hidden', '');
   next.removeAttribute('hidden');
-  next.style.cssText = `transition:none;transform:translateX(${back ? '-100%' : '100%'})`;
-  next.offsetWidth; // force reflow
-
-  // Slide next in, push prev aside
-  next.style.cssText = `transition:${ease};transform:translateX(0)`;
-  if (prev) prev.style.cssText = `transition:${ease};transform:translateX(${back ? '30%' : '-30%'})`;
-
   _curScreen = id;
-
-  setTimeout(() => {
-    if (prev) { prev.setAttribute('hidden', ''); prev.style.cssText = ''; }
-    next.style.cssText = '';
-  }, 340);
 }
 function openModal(id)  { document.getElementById(id).classList.add('open'); }
 function closeModal(id) { document.getElementById(id).classList.remove('open'); }
@@ -327,12 +314,12 @@ function enterParticipantGame() {
   document.getElementById('dep-rate-display').textContent = S.room.deposit_rate + '%';
   showScreen('screen-p-game');
 
-  // Reset rail to first page (market) without animation
-  const rail = document.querySelector('.pages-scroll');
-  rail.style.transition = 'none';
-  rail.style.transform  = 'translateX(0)';
-  rail.offsetWidth; // force reflow
-  rail.style.transition = '';
+  // Reset to market page
+  PAGE_ORDER.forEach(p => {
+    const el = document.getElementById(`pg-${p}`);
+    if (p === 'market') el.removeAttribute('hidden');
+    else el.setAttribute('hidden', '');
+  });
 
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   document.getElementById('nav-market').classList.add('active');
@@ -409,10 +396,10 @@ const PAGE_ORDER = ['market', 'portfolio', 'deposit', 'rankings', 'education'];
 
 function showPage(page) {
   if (S.currentPage === page) return;
-  const idx = PAGE_ORDER.indexOf(page);
 
-  // Slide the entire rail to show the target page
-  document.querySelector('.pages-scroll').style.transform = `translateX(-${idx * 100}%)`;
+  // Hide current, show next
+  document.getElementById(`pg-${S.currentPage}`).setAttribute('hidden', '');
+  document.getElementById(`pg-${page}`).removeAttribute('hidden');
 
   // Update nav highlight
   S.currentPage = page;
