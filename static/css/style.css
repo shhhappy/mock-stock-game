@@ -449,6 +449,93 @@ html, body {
 .results-row.rank-2 { border-color: #c0c0c0; }
 .results-row.rank-3 { border-color: #cd7f32; }
 
+/* ── Pomodoro Timer ─────────────────────────────────────── */
+.pt-body {
+  display: flex; flex-direction: column; align-items: center;
+  padding: 28px 16px 40px; max-width: 420px; margin: 0 auto;
+  position: relative;
+}
+
+.pt-glow {
+  position: fixed; top: 30%; left: 50%; transform: translateX(-50%);
+  width: 360px; height: 360px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(255,107,107,0.25) 0%, transparent 70%);
+  pointer-events: none; filter: blur(40px);
+  transition: background 0.8s ease; z-index: -1;
+}
+
+.pt-mode-btn {
+  padding: 7px 14px; border-radius: 4px; border: 1px solid #2A2A35;
+  background: transparent; color: var(--muted); font-size: 12px;
+  letter-spacing: 0.08em; cursor: pointer; transition: all 0.2s;
+  font-family: inherit;
+}
+.pt-mode-btn:hover { border-color: #444; }
+.pt-mode-btn.active { background: color-mix(in srgb, var(--pt-color) 10%, transparent); }
+
+.pt-time-display {
+  font-size: 62px; font-weight: 800; line-height: 1;
+  color: #F0F0F0; letter-spacing: 0.04em; font-family: monospace;
+  transition: color 0.4s;
+}
+.pt-time-display.pulse { animation: ptPulse 1s ease infinite; }
+@keyframes ptPulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+.pt-mode-label {
+  font-size: 11px; letter-spacing: 0.2em; margin-top: 6px;
+  transition: color 0.6s; color: #FF6B6B;
+}
+
+.pt-dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: #1E1E28; border: 1px solid #2A2A35;
+  transition: all 0.3s;
+}
+.pt-dot.filled {
+  background: var(--pt-color, #FF6B6B);
+  border-color: var(--pt-color, #FF6B6B);
+  box-shadow: 0 0 6px var(--pt-color, #FF6B6B);
+}
+
+.pt-start-btn {
+  padding: 13px 40px; font-size: 14px; letter-spacing: 0.12em;
+  background: #FF6B6B; color: #0A0A0F; font-weight: 600;
+  border: none; border-radius: 8px; cursor: pointer;
+  transition: all 0.15s; font-family: inherit;
+}
+.pt-start-btn:hover { opacity: 0.88; transform: scale(1.03); }
+.pt-start-btn:active { transform: scale(0.97); }
+
+.pt-stat-card {
+  text-align: center; padding: 12px 16px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; min-width: 84px;
+}
+.pt-stat-label { font-size: 10px; color: var(--muted); letter-spacing: 0.1em; margin-bottom: 4px; }
+.pt-stat-value { font-size: 14px; color: var(--text); font-weight: 600; }
+
+.pt-settings-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 16px 20px;
+  width: 100%; max-width: 320px;
+}
+
+.pt-time-input {
+  width: 100%; background: var(--s2); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text); font-size: 16px;
+  text-align: center; padding: 7px 4px; font-family: monospace;
+  outline: none; transition: border-color 0.2s;
+  -moz-appearance: textfield;
+}
+.pt-time-input::-webkit-inner-spin-button { -webkit-appearance: none; }
+.pt-time-input:focus { border-color: var(--accent); }
+.pt-time-input:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.pt-session-chip {
+  font-size: 11px; color: var(--muted); background: var(--surface);
+  border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px;
+}
+
 /* ── Responsive ─────────────────────────────────────────── */
 @media (min-width: 640px) {
   .stock-grid { grid-template-columns: repeat(auto-fill, minmax(175px,1fr)); }
