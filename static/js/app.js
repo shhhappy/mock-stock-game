@@ -1,7 +1,7 @@
 // ── State ────────────────────────────────────────────────
 const S = {
   user: null, room: null,
-  stocks: [], sectors: [], activeSector: '',
+  stocks: [], sectors: [], activeSector: '', activeMarket: '',
   currentPage: 'market',
   tradeSymbol: null, tradePrice: 0,
   stockChart: null, portChart: null, hostBarChart: null,
@@ -36,13 +36,10 @@ function toast(msg, type = 'info') {
 // ── Screens & Modals ─────────────────────────────────────
 let _curScreen = 'screen-auth';
 
-function showScreen(id, back = false) {
+function showScreen(id) {
   if (_curScreen === id) return;
-  const next = document.getElementById(id);
-  const prev = document.getElementById(_curScreen);
-
-  if (prev) prev.setAttribute('hidden', '');
-  next.removeAttribute('hidden');
+  document.getElementById(_curScreen)?.setAttribute('hidden', '');
+  document.getElementById(id).removeAttribute('hidden');
   _curScreen = id;
 }
 function openModal(id)  { document.getElementById(id).classList.add('open'); }
@@ -70,11 +67,11 @@ function onLogin(data) {
   }
 }
 
-function showHome(back = false) {
+function showHome() {
   stopPolling();
   stopTimer();
   document.getElementById('home-greeting').textContent = `안녕하세요, ${S.user.username}님! 👋`;
-  showScreen('screen-home', back);
+  showScreen('screen-home');
 }
 
 async function doLogout() {
@@ -83,10 +80,10 @@ async function doLogout() {
   S.user = null; S.room = null;
   document.getElementById('enter-username').value = '';
   document.getElementById('enter-err').textContent = '';
-  showScreen('screen-auth', true); // 뒤로(왼쪽에서)
+  showScreen('screen-auth');
 }
 
-function goHome() { showHome(true); }
+function goHome() { showHome(); }
 
 // ── Room: Create ─────────────────────────────────────────
 async function doCreateRoom() {
@@ -345,22 +342,18 @@ async function refreshMyRank() {
   const data = await api.get(`/api/rooms/${S.room.id}/rankings`);
   if (data.error) return;
   const me = data.find(e => e.is_me);
-  if (me) {
-    document.getElementById('pg-rank').textContent = me.rank + '위';
-  }
-  const port = await api.get(`/api/rooms/${S.room.id}/portfolio`);
-  if (!port.error) {
-    S.user._cash = port.cash;
-    document.getElementById('pg-cash').textContent = krw(port.total_value);
-    const gp = document.getElementById('pg-gain-pct');
-    gp.textContent = pct(port.total_gain_pct);
-    gp.className = 'muted';
-    if (port.total_gain_pct > 0) gp.style.color = 'var(--up)';
-    else if (port.total_gain_pct < 0) gp.style.color = 'var(--down)';
-    else gp.style.color = 'var(--muted)';
-    document.getElementById('dep-cash-display').textContent = krw(port.cash);
-    S.depCash = port.cash;
-  }
+  if (!me) return;
+
+  // 순위 업데이트
+  document.getElementById('pg-rank').textContent = me.rank + '위';
+
+  // 총 자산 & 수익률 업데이트 (rankings에 이미 최신 total_value 포함)
+  document.getElementById('pg-cash').textContent = krw(me.total_value);
+  const gp = document.getElementById('pg-gain-pct');
+  gp.textContent = pct(me.gain_pct);
+  if (me.gain_pct > 0) gp.style.color = 'var(--up)';
+  else if (me.gain_pct < 0) gp.style.color = 'var(--down)';
+  else gp.style.color = 'var(--muted)';
 }
 
 // ── Timer ─────────────────────────────────────────────────
@@ -395,17 +388,24 @@ const PAGE_ORDER = ['market', 'portfolio', 'deposit', 'rankings', 'education'];
 
 function showPage(page) {
   if (S.currentPage === page) return;
+<<<<<<< Updated upstream
 
   // Hide current, show next
   document.getElementById(`pg-${S.currentPage}`).setAttribute('hidden', '');
   document.getElementById(`pg-${page}`).removeAttribute('hidden');
 
   // Update nav highlight
+=======
+  const idx = PAGE_ORDER.indexOf(page);
+  const rail = document.querySelector('.pages-scroll');
+  rail.style.transition = 'none';
+  rail.style.transform  = `translateX(-${idx * 100}%)`;
+
+>>>>>>> Stashed changes
   S.currentPage = page;
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   document.getElementById(`nav-${page}`).classList.add('active');
 
-  // Load data for the page
   if (page === 'portfolio') loadPortfolio();
   if (page === 'deposit')   loadDepositsPage();
   if (page === 'rankings')  loadParticipantRankings();
@@ -423,12 +423,34 @@ async function loadMarket() {
   const prev = Object.fromEntries(S.stocks.map(s => [s.symbol, s.price]));
   S.stocks  = data.stocks;
   S.sectors = data.sectors;
+  renderMarketFilter();
   renderSectors();
   renderGrid(S.stocks, prev);
 }
 
+function renderMarketFilter() {
+  const wrap = document.getElementById('market-filter');
+  if (!wrap) return;
+  ['전체','KR','US'].forEach((m, i) => {
+    const label = m === '전체' ? '전체' : m === 'KR' ? '🇰🇷 국내' : '🇺🇸 해외';
+    const act   = (m === '전체' && !S.activeMarket) || m === S.activeMarket;
+    wrap.children[i].textContent = label;
+    wrap.children[i].className   = 'sector-btn' + (act ? ' active' : '');
+  });
+}
+
+function setMarket(m) {
+  S.activeMarket = m === '전체' ? '' : m;
+  S.activeSector = '';
+  renderMarketFilter();
+  renderSectors();
+  filterStocks();
+}
+
 function renderSectors() {
-  document.getElementById('sector-filters').innerHTML = ['전체', ...S.sectors].map(s => {
+  const inMarket = S.stocks.filter(st => !S.activeMarket || st.market === S.activeMarket);
+  const sectors  = [...new Set(inMarket.map(st => st.sector))].sort();
+  document.getElementById('sector-filters').innerHTML = ['전체', ...sectors].map(s => {
     const act = (s === '전체' && !S.activeSector) || s === S.activeSector;
     return `<button class="sector-btn${act?' active':''}" onclick="setSector('${s}')">${s}</button>`;
   }).join('');
@@ -443,8 +465,9 @@ function setSector(s) {
 function filterStocks() {
   const q = (document.getElementById('stock-search').value || '').toLowerCase();
   const filtered = S.stocks.filter(st =>
+    (!S.activeMarket || st.market === S.activeMarket) &&
     (!S.activeSector || st.sector === S.activeSector) &&
-    (!q || st.name.includes(q) || st.symbol.toLowerCase().includes(q))
+    (!q || st.name.toLowerCase().includes(q) || st.symbol.toLowerCase().includes(q))
   );
   renderGrid(filtered, {});
 }
@@ -456,14 +479,17 @@ function renderGrid(stocks, prevPrices) {
     return;
   }
   grid.innerHTML = stocks.map(st => {
-    const cls   = st.change_pct > 0 ? 'chip-up' : st.change_pct < 0 ? 'chip-down' : 'chip-flat';
-    const arrow = st.change_pct > 0 ? '▲' : st.change_pct < 0 ? '▼' : '─';
+    const cls    = st.change_pct > 0 ? 'chip-up' : st.change_pct < 0 ? 'chip-down' : 'chip-flat';
+    const arrow  = st.change_pct > 0 ? '▲' : st.change_pct < 0 ? '▼' : '─';
     const pColor = st.change_pct > 0 ? 'var(--up)' : st.change_pct < 0 ? 'var(--down)' : 'var(--text)';
+    const flag   = st.market === 'US' ? '🇺🇸 ' : '';
+    const usdLine = st.price_usd ? `<div style="font-size:10px;color:var(--muted);margin-top:1px">$${st.price_usd.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}</div>` : '';
     return `
       <div class="stock-card" id="sc-${st.symbol.replace('.','_')}" onclick="openStockModal('${st.symbol}')">
-        <div style="font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${st.name}</div>
+        <div style="font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${flag}${st.name}</div>
         <div style="color:var(--muted);font-size:11px;margin-top:1px">${st.symbol}</div>
         <div style="font-size:19px;font-weight:700;margin-top:8px;color:${pColor}">${krw(st.price)}</div>
+        ${usdLine}
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px">
           <span class="chip ${cls}" style="font-size:11px">${arrow} ${pct(st.change_pct)}</span>
           <span style="font-size:10px;color:var(--muted)">${st.sector}</span>
@@ -568,6 +594,11 @@ function updateTotal() {
   document.getElementById('trade-total').textContent = krw(n * S.tradePrice);
 }
 
+async function refreshTotalAsset() {
+  const port = await api.get(`/api/rooms/${S.room.id}/portfolio`);
+  if (!port.error) document.getElementById('pg-cash').textContent = krw(port.total_value);
+}
+
 async function execTrade(action) {
   const shares = parseInt(document.getElementById('trade-qty').value);
   if (!shares) return;
@@ -578,8 +609,8 @@ async function execTrade(action) {
   fb.style.color = 'var(--up)'; fb.textContent = data.message;
   toast(data.message, 'success');
   S.depCash = data.cash;
-  document.getElementById('pg-cash').textContent = krw(data.cash);
   document.getElementById('ms-cash').textContent = krw(data.cash);
+  refreshTotalAsset();
   refreshMyRank();
 }
 
@@ -730,9 +761,9 @@ async function doDeposit() {
   toast(data.message, 'success');
   document.getElementById('dep-amount').value = '';
   document.getElementById('dep-preview').style.display = 'none';
-  document.getElementById('pg-cash').textContent = krw(data.cash);
   S.depCash = data.cash;
   document.getElementById('dep-cash-display').textContent = krw(data.cash);
+  refreshTotalAsset();
   loadDepositsPage();
 }
 
@@ -741,8 +772,8 @@ async function doWithdraw(id) {
   const data = await api.del(`/api/rooms/${S.room.id}/deposits/${id}`);
   if (data.error) { toast(data.error, 'error'); return; }
   toast(data.message, 'info');
-  document.getElementById('pg-cash').textContent = krw(data.cash);
   S.depCash = data.cash;
+  refreshTotalAsset();
   loadDepositsPage();
 }
 

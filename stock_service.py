@@ -1,7 +1,7 @@
 import time
 import random
-import math
 from threading import Lock
+from datetime import datetime
 
 STOCKS = {
     # 반도체
@@ -48,39 +48,31 @@ STOCKS = {
 
 SECTORS = sorted({v['sector'] for v in STOCKS.values()})
 
-# 업데이트 주기 (초) — 이 값을 줄이면 가격이 더 빠르게 변함
-PRICE_TTL = 5
+PRICE_TTL = 3  # 가격 업데이트 주기 (초)
 
 
 class StockService:
     def __init__(self):
         self._lock = Lock()
-        # symbol → (timestamp, current_price)
-        self._prices: dict[str, tuple[float, float]] = {}
-        # symbol → open_price (게임 시작 기준 수익률 계산용)
-        self._prev: dict[str, float] = {}
+        self._prices: dict = {}   # symbol → (timestamp, price)
+        self._prev:   dict = {}   # symbol → 시작가 (수익률 기준)
         self._init_prices()
 
     def _init_prices(self):
         now = time.time()
         for sym, info in STOCKS.items():
-            base = info['base']
-            # 시작가에 ±3% 랜덤 오프셋
-            start = base * random.uniform(0.97, 1.03)
-            self._prices[sym] = (now - PRICE_TTL, round(start))
-            self._prev[sym] = round(start)
+            start = round(info['base'] * random.uniform(0.97, 1.03))
+            self._prices[sym] = (now - PRICE_TTL, start)
+            self._prev[sym]   = start
 
     def _next_price(self, sym: str, current: float) -> float:
         vol = STOCKS[sym]['vol']
-        # GBM(기하 브라운 운동) 방식: 짧은 틱마다 작은 변동
         drift = random.gauss(0, vol * 0.4)
         new_price = current * (1 + drift)
-        # 기준가 ±40% 범위로 제한
         base = STOCKS[sym]['base']
-        new_price = max(base * 0.6, min(base * 1.4, new_price))
-        return round(new_price)
+        return round(max(base * 0.6, min(base * 1.4, new_price)))
 
-    def get_price(self, symbol: str) -> float | None:
+    def get_price(self, symbol: str):
         if symbol not in STOCKS:
             return None
         now = time.time()
@@ -92,28 +84,23 @@ class StockService:
             self._prices[symbol] = (now, new_price)
             return new_price
 
-    def get_prev_close(self, symbol: str) -> float | None:
+    def get_prev_close(self, symbol: str):
         return self._prev.get(symbol)
 
     def get_history(self, symbol: str, period: str = '1mo', interval: str = '1d') -> list:
         if symbol not in STOCKS:
             return []
-        # 현재 가격 기준으로 과거 candle 데이터 생성
         with self._lock:
             _, current = self._prices[symbol]
         vol = STOCKS[symbol]['vol']
-
         n_bars = {'1d': 30, '5d': 5, '1mo': 30, '3mo': 90}.get(period, 30)
         bars = []
-        price = current
+        price = float(current)
         now = time.time()
         for i in range(n_bars, 0, -1):
-            t = now - i * 86400
-            from datetime import datetime
-            date_str = datetime.utcfromtimestamp(t).strftime('%Y-%m-%d')
+            date_str = datetime.utcfromtimestamp(now - i * 86400).strftime('%Y-%m-%d')
             o = price
-            drift = random.gauss(0, vol * 0.5)
-            c = max(1, o * (1 + drift))
+            c = max(1.0, o * (1 + random.gauss(0, vol * 0.5)))
             h = max(o, c) * random.uniform(1.0, 1.015)
             l = min(o, c) * random.uniform(0.985, 1.0)
             bars.append({'date': date_str,
