@@ -204,10 +204,30 @@ function enterHostGame() {
   showScreen('screen-host-game');
   startTimer('host-timer');
   loadHostMembers();
+  loadNewsInterval();
   S.pollInterval = setInterval(() => {
     loadHostMembers();
     refreshRoomStatus();
   }, 10000);
+}
+
+async function loadNewsInterval() {
+  const data = await api.get(`/api/rooms/${S.room.id}/host/news-interval`);
+  if (data.seconds) document.getElementById('news-interval-input').value = data.seconds;
+}
+
+async function doSetNewsInterval() {
+  const seconds = parseInt(document.getElementById('news-interval-input').value);
+  const msg = document.getElementById('news-interval-msg');
+  if (!seconds || seconds < 5 || seconds > 300) {
+    msg.style.color = 'var(--down)';
+    msg.textContent = '5~300초 사이로 입력하세요.';
+    return;
+  }
+  const data = await api.post(`/api/rooms/${S.room.id}/host/news-interval`, { seconds });
+  if (data.error) { msg.style.color = 'var(--down)'; msg.textContent = data.error; return; }
+  msg.style.color = 'var(--up)';
+  msg.textContent = `적용됨: ${data.seconds}초마다 폭탄뉴스 발생`;
 }
 
 async function loadHostMembers() {

@@ -82,6 +82,7 @@ class StockService:
         self._current_biases: dict = {}  # 현재 사이클 적용 방향
         self._next_biases: dict = {}     # 다음 사이클 예고 방향
         self._last_news_ts: float = 0.0
+        self._news_ttl: float = PRICE_TTL
         self._init_prices()
 
     def _init_prices(self):
@@ -120,6 +121,12 @@ class StockService:
         self._next_biases = new_biases
         self._news = {'timestamp': time.time(), 'items': items}
 
+    def _maybe_generate_news(self, now: float):
+        if now - self._last_news_ts >= self._news_ttl:
+            self._current_biases = self._next_biases.copy()
+            self._generate_news()
+            self._last_news_ts = now
+
     def get_price(self, symbol: str):
         if symbol not in STOCKS:
             return None
@@ -129,10 +136,7 @@ class StockService:
             if now - ts < PRICE_TTL:
                 return price
             # 새 사이클 시작: 예고 편향 적용 후 다음 뉴스 생성
-            if now - self._last_news_ts >= PRICE_TTL:
-                self._current_biases = self._next_biases.copy()
-                self._generate_news()
-                self._last_news_ts = now
+            self._maybe_generate_news(now)
             direction = self._current_biases.get(symbol)
             new_price = self._next_price(symbol, price, direction)
             self._prices[symbol] = (now, new_price)
@@ -140,7 +144,15 @@ class StockService:
 
     def get_news(self) -> dict:
         with self._lock:
+            self._maybe_generate_news(time.time())
             return dict(self._news)
+
+    def set_news_interval(self, seconds: float):
+        with self._lock:
+            self._news_ttl = max(5, min(300, float(seconds)))
+
+    def get_news_interval(self) -> float:
+        return self._news_ttl
 
     def get_prev_close(self, symbol: str):
         return self._prev.get(symbol)

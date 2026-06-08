@@ -250,6 +250,18 @@ def host_adjust(rid):
     return jsonify({'message': f'{target.username} 자산 {delta:+,.0f}원 조정', 'new_cash': m.cash})
 
 
+@app.route('/api/rooms/<int:rid>/host/news-interval', methods=['GET', 'POST'])
+@login_required
+def host_news_interval(rid):
+    room = Room.query.get_or_404(rid)
+    user = cur_user()
+    if room.host_id != user.id: return jsonify({'error': '권한 없음'}), 403
+    if request.method == 'POST':
+        seconds = float((request.json or {}).get('seconds', 20))
+        stock_service.set_news_interval(seconds)
+    return jsonify({'seconds': stock_service.get_news_interval()})
+
+
 # ── Stocks ────────────────────────────────────────────────
 
 @app.route('/api/rooms/<int:rid>/stocks')

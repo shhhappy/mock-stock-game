@@ -134,7 +134,18 @@
 
     <canvas id="host-bar-chart" style="margin-top:16px;max-height:300px"></canvas>
 
-    <div style="margin-top:20px;display:flex;gap:10px">
+    <div style="margin-top:20px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px">
+      <div class="section-title" style="margin-bottom:10px">💣 폭탄뉴스 주기</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <input id="news-interval-input" class="form-input" type="number" min="5" max="300" value="20"
+          style="width:80px;text-align:center" placeholder="초">
+        <span style="font-size:13px;color:var(--muted)">초마다 발생</span>
+        <button class="btn btn-secondary btn-sm" onclick="doSetNewsInterval()">적용</button>
+      </div>
+      <div id="news-interval-msg" style="font-size:12px;color:var(--muted);margin-top:6px"></div>
+    </div>
+
+    <div style="margin-top:12px;display:flex;gap:10px">
       <button class="btn btn-danger" onclick="doEndGame()" style="flex:1">⏹ 게임 종료</button>
     </div>
   </div>
