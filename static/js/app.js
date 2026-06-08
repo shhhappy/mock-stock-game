@@ -338,7 +338,7 @@ function enterParticipantGame() {
     }
     refreshMyRank();
     if (S.currentPage === 'market') loadMarket();
-  }, 8000);
+  }, 5000);
 }
 
 async function refreshMyRank() {
