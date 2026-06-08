@@ -393,20 +393,10 @@ const PAGE_ORDER = ['market', 'portfolio', 'deposit', 'rankings', 'education'];
 
 function showPage(page) {
   if (S.currentPage === page) return;
-<<<<<<< Updated upstream
 
-  // Hide current, show next
   document.getElementById(`pg-${S.currentPage}`).setAttribute('hidden', '');
   document.getElementById(`pg-${page}`).removeAttribute('hidden');
 
-  // Update nav highlight
-=======
-  const idx = PAGE_ORDER.indexOf(page);
-  const rail = document.querySelector('.pages-scroll');
-  rail.style.transition = 'none';
-  rail.style.transform  = `translateX(-${idx * 100}%)`;
-
->>>>>>> Stashed changes
   S.currentPage = page;
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   document.getElementById(`nav-${page}`).classList.add('active');

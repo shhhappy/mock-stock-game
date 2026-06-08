@@ -199,11 +199,6 @@
       <input id="stock-search" class="form-input" type="search" placeholder="종목 검색…" oninput="filterStocks()" style="flex:1">
       <button class="btn btn-secondary btn-sm" onclick="loadMarket()">↻</button>
     </div>
-    <div id="market-filter" class="sector-filters" style="margin-bottom:4px">
-      <button class="sector-btn active" onclick="setMarket('전체')">전체</button>
-      <button class="sector-btn" onclick="setMarket('KR')">🇰🇷 국내</button>
-      <button class="sector-btn" onclick="setMarket('US')">🇺🇸 해외</button>
-    </div>
     <div id="sector-filters" class="sector-filters"></div>
     <div id="stock-grid" class="stock-grid"></div>
   </div>
