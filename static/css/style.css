@@ -299,6 +299,18 @@ html, body {
 .rank-num  { font-size: 18px; width: 34px; text-align: center; flex-shrink: 0; }
 .rank-user { flex: 1; font-weight: 600; }
 
+/* ── Host tabs ──────────────────────────────────────────── */
+.host-tabs {
+  display: flex; border-bottom: 1px solid var(--border);
+  background: var(--surface); flex-shrink: 0;
+}
+.host-tab {
+  flex: 1; padding: 12px 8px; border: none; background: transparent;
+  color: var(--muted); font-size: 14px; font-weight: 600; cursor: pointer;
+  border-bottom: 2px solid transparent; transition: all 0.15s; margin-bottom: -1px;
+}
+.host-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
 /* ── Education ──────────────────────────────────────────── */
 .edu-tabs {
   display: flex; gap: 4px; background: var(--s2);

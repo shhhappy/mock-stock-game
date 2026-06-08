@@ -11,6 +11,7 @@ const S = {
   adjustTargetUid: null,
   depRate: 3, depCash: 0,
   eduTab: 'glossary', glossaryData: [],
+  hostTab: 'rank',
 };
 
 let _newsPopupTimer = null;
@@ -203,12 +204,49 @@ function enterHostGame() {
   document.getElementById('host-code').textContent      = S.room.code;
   showScreen('screen-host-game');
   startTimer('host-timer');
+  switchHostTab('rank');
   loadHostMembers();
   loadNewsInterval();
+  startNewsPolling();
   S.pollInterval = setInterval(() => {
-    loadHostMembers();
+    if (S.hostTab === 'rank') loadHostMembers();
+    else loadHostMarket();
     refreshRoomStatus();
   }, 10000);
+}
+
+function switchHostTab(tab) {
+  S.hostTab = tab;
+  document.getElementById('htab-rank').classList.toggle('active', tab === 'rank');
+  document.getElementById('htab-market').classList.toggle('active', tab === 'market');
+  document.getElementById('htab-rank-content').hidden = tab !== 'rank';
+  document.getElementById('htab-market-content').hidden = tab !== 'market';
+  if (tab === 'market') loadHostMarket();
+}
+
+async function loadHostMarket() {
+  const grid = document.getElementById('host-stock-grid');
+  if (!grid) return;
+  if (!grid.children.length) {
+    grid.innerHTML = '<div class="loading-center"><span class="spinner"></span> 시세 불러오는 중…</div>';
+  }
+  const data = await api.get(`/api/rooms/${S.room.id}/stocks`);
+  if (!data.stocks) return;
+  grid.innerHTML = data.stocks.map(st => {
+    const cls   = st.change_pct > 0 ? 'chip-up' : st.change_pct < 0 ? 'chip-down' : 'chip-flat';
+    const arrow = st.change_pct > 0 ? '▲' : st.change_pct < 0 ? '▼' : '─';
+    const pColor = st.change_pct > 0 ? 'var(--up)' : st.change_pct < 0 ? 'var(--down)' : 'var(--text)';
+    return `
+      <div class="stock-card">
+        <div style="font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${st.name}</div>
+        <div style="color:var(--muted);font-size:11px;margin-top:1px">${st.symbol}</div>
+        <div style="font-size:19px;font-weight:700;margin-top:8px;color:${pColor}">${krw(st.price)}</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px">
+          <span class="chip ${cls}" style="font-size:11px">${arrow} ${pct(st.change_pct)}</span>
+          <span style="font-size:10px;color:var(--muted)">${st.sector}</span>
+        </div>
+      </div>`;
+  }).join('');
 }
 
 async function loadNewsInterval() {
@@ -922,6 +960,13 @@ async function loadResults() {
   } else {
     myStats.innerHTML = '';
   }
+
+  const exportWrap = document.getElementById('results-export-wrap');
+  if (exportWrap) exportWrap.hidden = !S.room?.is_host;
+}
+
+function downloadExcel() {
+  window.location.href = `/api/rooms/${S.room.id}/export`;
 }
 
 function renderResultsChart(data) {

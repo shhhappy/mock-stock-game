@@ -125,7 +125,13 @@
     </div>
   </div>
 
-  <div style="padding:16px">
+  <div class="host-tabs">
+    <button class="host-tab active" id="htab-rank" onclick="switchHostTab('rank')">📊 순위</button>
+    <button class="host-tab" id="htab-market" onclick="switchHostTab('market')">📈 시장</button>
+  </div>
+
+  <!-- 순위 탭 -->
+  <div id="htab-rank-content" style="padding:16px">
     <div class="section-header">
       <span class="section-title">실시간 순위 👑</span>
       <button class="btn btn-secondary btn-sm" onclick="loadHostMembers()">↻ 새로고침</button>
@@ -148,6 +154,15 @@
     <div style="margin-top:12px;display:flex;gap:10px">
       <button class="btn btn-danger" onclick="doEndGame()" style="flex:1">⏹ 게임 종료</button>
     </div>
+  </div>
+
+  <!-- 시장 탭 -->
+  <div id="htab-market-content" style="padding:16px" hidden>
+    <div class="section-header" style="margin-bottom:12px">
+      <span class="section-title">실시간 시세 📈</span>
+      <button class="btn btn-secondary btn-sm" onclick="loadHostMarket()">↻ 새로고침</button>
+    </div>
+    <div id="host-stock-grid" class="stock-grid"></div>
   </div>
 </div>
 
@@ -334,7 +349,10 @@
       <canvas id="results-bar-chart"></canvas>
     </div>
     <div class="card" id="results-my-stats" style="margin-top:16px"></div>
-    <button class="btn btn-primary btn-full" onclick="goHome()" style="margin-top:20px">홈으로</button>
+    <div id="results-export-wrap" hidden style="margin-top:12px">
+      <button class="btn btn-secondary btn-full" onclick="downloadExcel()">📊 엑셀 순위표 다운로드</button>
+    </div>
+    <button class="btn btn-primary btn-full" onclick="goHome()" style="margin-top:10px">홈으로</button>
   </div>
 </div>
 
@@ -443,6 +461,6 @@
 <div class="toast-container" id="toasts"></div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
-<script src="/static/js/app.js?v=6"></script>
+<script src="/static/js/app.js?v=7"></script>
 </body>
 </html>

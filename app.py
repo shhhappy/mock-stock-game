@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request, send_from_directory, session
+from flask import Flask, jsonify, request, send_from_directory, session, send_file
 from functools import wraps
 from datetime import datetime, timedelta
 import os
@@ -518,6 +518,80 @@ def get_guide(gid):
 @app.route('/api/education/tips')
 def get_tips():
     return jsonify(TIPS)
+
+
+# ── Export ────────────────────────────────────────────────
+
+@app.route('/api/rooms/<int:rid>/export')
+@login_required
+def export_rankings(rid):
+    import openpyxl
+    from io import BytesIO
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    room = Room.query.get_or_404(rid)
+    user = cur_user()
+    if room.host_id != user.id:
+        return jsonify({'error': '진행자만 다운로드할 수 있습니다.'}), 403
+    start = room.starting_cash
+    board = []
+    for m in RoomMember.query.filter_by(room_id=rid).all():
+        u = User.query.get(m.user_id)
+        total = member_total_value(rid, m.user_id)
+        gain_pct = (total - start) / start * 100 if start else 0
+        parts = u.username.split(' ', 1)
+        sid  = parts[0] if len(parts) > 1 else ''
+        name = parts[1] if len(parts) > 1 else u.username
+        board.append({'name': name, 'sid': sid, 'total_value': round(total),
+                      'gain_pct': round(gain_pct, 2), 'gain_amount': round(total - start)})
+    board.sort(key=lambda x: x['total_value'], reverse=True)
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = '최종 순위'
+
+    thin = Side(style='thin', color='444444')
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    hdr_fill = PatternFill(start_color='1F3864', end_color='1F3864', fill_type='solid')
+    up_fill  = PatternFill(start_color='1A3A2A', end_color='1A3A2A', fill_type='solid')
+    dn_fill  = PatternFill(start_color='3A1A1A', end_color='3A1A1A', fill_type='solid')
+    medal_fills = {1: PatternFill(start_color='8B6914', end_color='8B6914', fill_type='solid'),
+                   2: PatternFill(start_color='6B6B6B', end_color='6B6B6B', fill_type='solid'),
+                   3: PatternFill(start_color='7B4B1A', end_color='7B4B1A', fill_type='solid')}
+
+    headers = ['순위', '이름', '학번', '최종 자산 (원)', '수익률 (%)', '수익금액 (원)']
+    ws.append(headers)
+    for i, cell in enumerate(ws[1], 1):
+        cell.font = Font(bold=True, color='FFFFFF', size=11)
+        cell.fill = hdr_fill
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+        cell.border = border
+
+    widths = [8, 12, 14, 18, 13, 18]
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+    ws.row_dimensions[1].height = 22
+
+    for rank, e in enumerate(board, 1):
+        row = [rank, e['name'], e['sid'], e['total_value'], e['gain_pct'], e['gain_amount']]
+        ws.append(row)
+        r = ws.max_row
+        fill = medal_fills.get(rank, up_fill if e['gain_pct'] >= 0 else dn_fill)
+        for col, cell in enumerate(ws[r], 1):
+            cell.fill = fill
+            cell.border = border
+            cell.font = Font(color='FFFFFF', bold=(rank <= 3))
+            cell.alignment = Alignment(horizontal='center' if col != 2 else 'left', vertical='center')
+        ws.cell(r, 4).number_format = '#,##0'
+        ws.cell(r, 5).number_format = '0.00'
+        ws.cell(r, 6).number_format = '#,##0'
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    filename = f"{room.name}_결과.xlsx"
+    return send_file(output,
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                     as_attachment=True, download_name=filename)
 
 
 if __name__ == '__main__':
