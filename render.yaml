@@ -4,8 +4,8 @@ services:
     env: python
     plan: free
     region: singapore
-    buildCommand: python3 -m pip install -r requirements.txt
-    startCommand: python3 -m gunicorn app:app --workers 1 --timeout 120 --bind 0.0.0.0:$PORT
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --workers 1 --timeout 120 --bind 0.0.0.0:$PORT
     envVars:
       - key: SECRET_KEY
         generateValue: true
