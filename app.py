@@ -3,7 +3,7 @@ from functools import wraps
 from datetime import datetime, timedelta
 import os
 
-from models import db, User, Room, RoomMember, RoomHolding, RoomTransaction, Deposit, ChatMessage
+from models import db, User, Room, RoomMember, RoomHolding, RoomTransaction, Deposit
 from stock_service import stock_service, STOCKS, SECTORS
 from education_data import GLOSSARY, GUIDES, TIPS, QUIZ_QUESTIONS
 import time, random as _random
@@ -557,7 +557,8 @@ def get_tips():
 
 # ── Quiz ──────────────────────────────────────────────────
 
-_quiz_state: dict = {}  # (room_id, user_id) -> {'qid': int, 'cooldown_until': float}
+_quiz_state: dict = {}     # (room_id, user_id) -> {'qid': int, 'cooldown_until': float}
+_quiz_settings: dict = {}  # room_id -> {'reward_pct': float, 'penalty_pct': float}
 
 @app.route('/api/rooms/<int:rid>/quiz', methods=['GET'])
 @login_required
@@ -590,48 +591,40 @@ def submit_quiz(rid):
     if not q:
         return jsonify({'error': '잘못된 요청'}), 400
     correct = user_answer == q['a']
+    settings = _quiz_settings.get(rid, {})
+    reward_pct = settings.get('reward_pct', 1.0)
+    penalty_pct = settings.get('penalty_pct', 0.5)
     reward = 0
-    if correct:
-        member = RoomMember.query.filter_by(room_id=rid, user_id=user.id).first()
-        if member:
-            reward = max(10000, int(room.starting_cash * 0.01))
+    penalty = 0
+    member = RoomMember.query.filter_by(room_id=rid, user_id=user.id).first()
+    if member:
+        if correct:
+            reward = max(10000, int(room.starting_cash * reward_pct / 100))
             member.cash += reward
-            db.session.commit()
+        else:
+            penalty = max(5000, int(room.starting_cash * penalty_pct / 100))
+            member.cash = max(0, member.cash - penalty)
+        db.session.commit()
     _quiz_state[key] = {'qid': None, 'cooldown_until': time.time() + 60}
-    return jsonify({'correct': correct, 'reward': reward, 'explanation': q['ex']})
+    return jsonify({'correct': correct, 'reward': reward, 'penalty': penalty, 'explanation': q['ex']})
 
 
-# ── Chat ───────────────────────────────────────────────────
-
-@app.route('/api/rooms/<int:rid>/chat', methods=['GET'])
+@app.route('/api/rooms/<int:rid>/host/quiz-settings', methods=['GET', 'POST'])
 @login_required
-def get_chat(rid):
-    Room.query.get_or_404(rid)
-    after_id = request.args.get('after', 0, type=int)
-    msgs = ChatMessage.query.filter(
-        ChatMessage.room_id == rid,
-        ChatMessage.id > after_id
-    ).order_by(ChatMessage.id).limit(50).all()
-    return jsonify([{
-        'id': m.id, 'user_id': m.user_id, 'username': m.username,
-        'message': m.message, 'time': m.created_at.strftime('%H:%M'),
-    } for m in msgs])
-
-@app.route('/api/rooms/<int:rid>/chat', methods=['POST'])
-@login_required
-def send_chat(rid):
-    Room.query.get_or_404(rid)
+def quiz_settings(rid):
+    room = Room.query.get_or_404(rid)
     user = cur_user()
-    if not RoomMember.query.filter_by(room_id=rid, user_id=user.id).first():
-        return jsonify({'error': '방 멤버가 아닙니다'}), 403
+    if room.host_id != user.id:
+        return jsonify({'error': '진행자만 변경할 수 있습니다'}), 403
+    if request.method == 'GET':
+        s = _quiz_settings.get(rid, {})
+        return jsonify({'reward_pct': s.get('reward_pct', 1.0), 'penalty_pct': s.get('penalty_pct', 0.5)})
     d = request.json or {}
-    msg = (d.get('message') or '').strip()[:200]
-    if not msg:
-        return jsonify({'error': '메시지를 입력하세요'}), 400
-    chat_msg = ChatMessage(room_id=rid, user_id=user.id, username=user.username, message=msg)
-    db.session.add(chat_msg)
-    db.session.commit()
-    return jsonify({'id': chat_msg.id, 'ok': True})
+    _quiz_settings[rid] = {
+        'reward_pct': max(0, min(10, float(d.get('reward_pct', 1.0)))),
+        'penalty_pct': max(0, min(10, float(d.get('penalty_pct', 0.5)))),
+    }
+    return jsonify({'ok': True})
 
 
 # ── Export ────────────────────────────────────────────────

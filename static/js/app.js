@@ -15,9 +15,6 @@ const S = {
   watchlist: new Set(JSON.parse(localStorage.getItem('watchlist') || '[]')),
   watchlistOnly: false,
   assetHistory: [],
-  chatLastId: 0,
-  chatUnread: 0,
-  chatInterval: null,
   quizTimerInterval: null,
 };
 
@@ -450,7 +447,6 @@ function enterParticipantGame() {
   loadMarket();
   refreshMyRank();
   startNewsPolling();
-  startChatPolling();
   S.pollInterval = setInterval(async () => {
     const r = await api.get(`/api/rooms/${S.room.id}`);
     if (r.status === 'ended') {
@@ -506,7 +502,6 @@ function stopTimer()   { clearInterval(S.timerInterval); S.timerInterval = null;
 function stopPolling() {
   clearInterval(S.pollInterval);  S.pollInterval = null;
   stopNewsPolling();
-  stopChatPolling();
 }
 
 function startNewsPolling() {
@@ -579,7 +574,8 @@ async function submitQuiz(answer) {
   result.style.display = '';
   if (answer === null) {
     result.innerHTML = `<div style="font-size:28px">⏰</div><div style="color:var(--muted);margin-top:8px">시간 초과!</div>`;
-    await api.post(`/api/rooms/${S.room.id}/quiz`, { answer: false });
+    const td = await api.post(`/api/rooms/${S.room.id}/quiz`, { answer: false });
+    if (td.penalty > 0) toast(`-${td.penalty.toLocaleString()}원 차감!`, 'error');
     return;
   }
   const data = await api.post(`/api/rooms/${S.room.id}/quiz`, { answer });
@@ -587,7 +583,9 @@ async function submitQuiz(answer) {
     result.innerHTML = `<div style="font-size:32px">⭕</div><div style="color:var(--up);font-weight:700;font-size:18px;margin-top:8px">정답! +${data.reward.toLocaleString()}원</div><div style="color:var(--muted);font-size:13px;margin-top:8px">${data.explanation}</div>`;
     toast(`+${data.reward.toLocaleString()}원 획득!`, 'success');
   } else {
-    result.innerHTML = `<div style="font-size:32px">❌</div><div style="color:var(--down);font-weight:700;font-size:18px;margin-top:8px">오답</div><div style="color:var(--muted);font-size:13px;margin-top:8px">${data.explanation}</div>`;
+    const penaltyText = data.penalty > 0 ? ` (-${data.penalty.toLocaleString()}원)` : '';
+    result.innerHTML = `<div style="font-size:32px">❌</div><div style="color:var(--down);font-weight:700;font-size:18px;margin-top:8px">오답${penaltyText}</div><div style="color:var(--muted);font-size:13px;margin-top:8px">${data.explanation}</div>`;
+    if (data.penalty > 0) toast(`-${data.penalty.toLocaleString()}원 차감!`, 'error');
   }
 }
 
@@ -596,91 +594,21 @@ function closeQuiz() {
   document.getElementById('quiz-overlay').style.display = 'none';
 }
 
-// ── Chat ─────────────────────────────────────────────────
-let _chatHistory = [];
-
-async function renderChatHistory() {
-  const list = document.getElementById('chat-messages');
-  if (!list) return;
-  list.innerHTML = '';
-  // 최근 50개 메시지를 서버에서 다시 가져와 렌더링
-  const data = await api.get(`/api/rooms/${S.room.id}/chat?after=0`).catch(() => []);
-  _chatHistory = data;
-  data.forEach(m => {
-    const mine = m.user_id === S.user?.id;
-    const row = document.createElement('div');
-    row.className = `chat-row ${mine ? 'mine' : 'other'}`;
-    row.innerHTML = `
-      <div class="chat-meta ${mine ? 'mine' : ''}">${m.username} · ${m.time}</div>
-      <div class="chat-bubble ${mine ? 'mine' : 'other'}">${escHtml(m.message)}</div>`;
-    list.appendChild(row);
-    S.chatLastId = Math.max(S.chatLastId, m.id || 0);
-  });
-  list.scrollTop = list.scrollHeight;
-}
-
-function startChatPolling() {
-  S.chatLastId = 0;
-  S.chatUnread = 0;
-  if (S.chatInterval) clearInterval(S.chatInterval);
-  S.chatInterval = setInterval(() => fetchChatBackground(), 3000);
-}
-
-function stopChatPolling() {
-  if (S.chatInterval) { clearInterval(S.chatInterval); S.chatInterval = null; }
-}
-
-function updateChatBadge() {
-  const badge = document.getElementById('chat-badge');
-  if (!badge) return;
-  if (S.chatUnread > 0) {
-    badge.style.display = '';
-    badge.textContent = S.chatUnread > 99 ? '99+' : S.chatUnread;
-  } else {
-    badge.style.display = 'none';
-  }
-}
-
-async function fetchChatBackground() {
-  if (!S.room) return;
-  const data = await api.get(`/api/rooms/${S.room.id}/chat?after=${S.chatLastId}`).catch(() => []);
-  if (!data.length) return;
-
-  const onChat = S.currentPage === 'chat';
-  const list = onChat ? document.getElementById('chat-messages') : null;
-  const atBottom = list ? list.scrollHeight - list.scrollTop <= list.clientHeight + 50 : false;
-
-  data.forEach(m => {
-    const mine = m.user_id === S.user?.id;
-    if (list) {
-      const row = document.createElement('div');
-      row.className = `chat-row ${mine ? 'mine' : 'other'}`;
-      row.innerHTML = `
-        <div class="chat-meta ${mine ? 'mine' : ''}">${m.username} · ${m.time}</div>
-        <div class="chat-bubble ${mine ? 'mine' : 'other'}">${escHtml(m.message)}</div>`;
-      list.appendChild(row);
-    }
-    if (!onChat && !mine) {
-      S.chatUnread++;
-    }
-    S.chatLastId = Math.max(S.chatLastId, m.id);
-  });
-
-  if (list && atBottom) list.scrollTop = list.scrollHeight;
-  updateChatBadge();
-}
-
-async function doSendChat() {
-  const input = document.getElementById('chat-input');
-  const msg = input.value.trim();
-  if (!msg) return;
-  input.value = '';
-  await api.post(`/api/rooms/${S.room.id}/chat`, { message: msg });
-  await fetchChatBackground();
-}
-
 function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+async function doSetQuizSettings() {
+  const reward = parseFloat(document.getElementById('quiz-reward-input').value) || 1.0;
+  const penalty = parseFloat(document.getElementById('quiz-penalty-input').value) || 0.5;
+  const data = await api.post(`/api/rooms/${S.room.id}/host/quiz-settings`, {reward_pct: reward, penalty_pct: penalty});
+  const msg = document.getElementById('quiz-settings-msg');
+  if (data.ok) {
+    msg.textContent = '✓ 저장됨';
+    setTimeout(() => msg.textContent = '', 2500);
+    const info = document.getElementById('quiz-reward-info');
+    if (info) info.textContent = `💰 정답 시 시작 자금의 ${reward}% 지급 / 오답 시 ${penalty}% 차감`;
+  }
 }
 
 async function doSendNews() {
@@ -727,7 +655,7 @@ async function refreshRoomStatus() {
 }
 
 // ── Navigation (participant game) ────────────────────────
-const PAGE_ORDER = ['market', 'portfolio', 'deposit', 'rankings', 'education', 'chat'];
+const PAGE_ORDER = ['market', 'portfolio', 'deposit', 'rankings', 'education'];
 
 function showPage(page) {
   if (S.currentPage === page) return;
@@ -743,14 +671,6 @@ function showPage(page) {
   if (page === 'deposit')   loadDepositsPage();
   if (page === 'rankings')  loadParticipantRankings();
   if (page === 'education') loadEducation();
-  if (page === 'chat') {
-    S.chatUnread = 0;
-    updateChatBadge();
-    renderChatHistory();
-  }
-
-  const fab = document.querySelector('.quiz-fab');
-  if (fab) fab.style.display = page === 'chat' ? 'none' : '';
 }
 
 // ── Market ───────────────────────────────────────────────

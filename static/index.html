@@ -170,6 +170,25 @@
     <div style="margin-top:12px;display:flex;gap:10px">
       <button class="btn btn-danger" onclick="doEndGame()" style="flex:1">⏹ 게임 종료</button>
     </div>
+
+    <div style="margin-top:12px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px">
+      <div class="section-title" style="margin-bottom:12px">🧠 퀴즈 설정</div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <span style="font-size:13px;min-width:80px">정답 보상</span>
+        <input id="quiz-reward-input" class="form-input" type="number" min="0" max="10" step="0.1" value="1.0"
+          style="width:72px;text-align:center">
+        <span style="font-size:13px;color:var(--muted)">% (초기자금 기준)</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+        <span style="font-size:13px;min-width:80px">오답 패널티</span>
+        <input id="quiz-penalty-input" class="form-input" type="number" min="0" max="10" step="0.1" value="0.5"
+          style="width:72px;text-align:center">
+        <span style="font-size:13px;color:var(--muted)">% (초기자금 기준)</span>
+      </div>
+      <button class="btn btn-secondary btn-full btn-sm" onclick="doSetQuizSettings()">적용</button>
+      <div id="quiz-settings-msg" style="font-size:12px;color:var(--muted);margin-top:6px"></div>
+    </div>
+
   </div>
 
   <!-- 시장 탭 -->
@@ -357,15 +376,6 @@
     <div id="edu-guides" style="display:none"><div id="guides-list"></div></div>
     <div id="edu-tips"   style="display:none"><div id="tips-list"></div></div>
   </div>
-  <!-- Chat page -->
-  <div id="pg-chat" class="page chat-page" hidden>
-    <div id="chat-messages" class="chat-messages"></div>
-    <div class="chat-input-wrap">
-      <input id="chat-input" class="form-input" type="text" placeholder="메시지 입력…" maxlength="200"
-             style="flex:1" onkeydown="if(event.key==='Enter')doSendChat()">
-      <button class="btn btn-primary btn-sm" onclick="doSendChat()">전송</button>
-    </div>
-  </div>
   </div><!-- /pages-wrapper -->
 
   <!-- Quiz FAB -->
@@ -374,7 +384,7 @@
   <!-- Quiz overlay -->
   <div id="quiz-overlay" class="quiz-overlay" style="display:none">
     <div class="quiz-box">
-      <div style="font-size:12px;color:var(--muted);margin-bottom:12px">💰 정답 시 시작 자금의 1% 지급</div>
+      <div id="quiz-reward-info" style="font-size:12px;color:var(--muted);margin-bottom:12px">💰 정답 시 시작 자금의 1% 지급 / 오답 시 0.5% 차감</div>
       <div id="quiz-question" style="font-size:17px;font-weight:600;line-height:1.5;margin-bottom:16px"></div>
       <div style="display:flex;align-items:center;gap:8px">
         <div class="quiz-timer-bar" style="flex:1"><div id="quiz-timer-fill" class="quiz-timer-fill" style="width:100%"></div></div>
@@ -406,10 +416,6 @@
     </button>
     <button class="nav-item" id="nav-education" onclick="showPage('education')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>학습
-    </button>
-    <button class="nav-item" id="nav-chat" onclick="showPage('chat')" style="position:relative">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>채팅
-      <span id="chat-badge" style="display:none;position:absolute;top:6px;right:10px;background:var(--down);color:#fff;font-size:10px;font-weight:700;border-radius:100px;padding:1px 5px;min-width:16px;text-align:center;line-height:14px"></span>
     </button>
   </nav>
 </div>
