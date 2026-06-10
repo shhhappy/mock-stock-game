@@ -483,7 +483,7 @@ function startNewsPolling() {
     if (!data || !data.timestamp) return;
     if (data.timestamp > S.newsTs) {
       S.newsTs = data.timestamp;
-      if (data.items && data.items.length) showBombNews(data.items);
+      if (data.items && data.items.length) showBombNews(data.items, data.show_hint !== false);
     }
   }, 3000);
 }
@@ -495,13 +495,21 @@ function stopNewsPolling() {
   if (popup) popup.style.display = 'none';
 }
 
-function showBombNews(items) {
+async function doSendNews() {
+  const showHint = document.getElementById('news-hint-checkbox').checked;
+  await api.post(`/api/rooms/${S.room.id}/host/send-news`, { show_hint: showHint });
+}
+
+function showBombNews(items, showHint = true) {
   const popup  = document.getElementById('bomb-news-popup');
   const content = document.getElementById('bomb-news-content');
   const bar    = document.getElementById('bomb-news-bar');
   if (!popup || !content || !bar) return;
 
   content.innerHTML = items.map(item => {
+    if (!showHint) {
+      return `<div class="bomb-news-headline">${item.headline}</div>`;
+    }
     const arrow = item.direction === 'up' ? '▲' : '▼';
     const cls   = item.direction === 'up' ? 'news-up' : 'news-down';
     return `<div class="bomb-news-headline ${cls}">${arrow} ${item.headline}</div>`;

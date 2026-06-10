@@ -105,7 +105,7 @@ class StockService:
         base = STOCKS[sym]['base']
         return round(max(base * 0.6, min(base * 1.4, new_price)))
 
-    def _generate_news(self):
+    def _generate_news(self, show_hint: bool = True):
         sectors = list(set(v['sector'] for v in STOCKS.values()))
         chosen = random.sample(sectors, min(random.randint(1, 2), len(sectors)))
         items = []
@@ -120,7 +120,7 @@ class StockService:
             for sym in sector_stocks:
                 new_biases[sym] = direction
         self._next_biases = new_biases
-        self._news = {'timestamp': time.time(), 'items': items}
+        self._news = {'timestamp': time.time(), 'items': items, 'show_hint': show_hint}
 
     def _maybe_generate_news(self, now: float):
         if now - self._last_news_ts >= self._news_ttl:
@@ -154,6 +154,12 @@ class StockService:
 
     def get_news_interval(self) -> float:
         return self._news_ttl
+
+    def trigger_news(self, show_hint: bool = True):
+        with self._lock:
+            self._current_biases = self._next_biases.copy()
+            self._generate_news(show_hint)
+            self._last_news_ts = time.time()
 
     def set_price_interval(self, seconds: float):
         with self._lock:

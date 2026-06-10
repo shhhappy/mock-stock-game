@@ -291,6 +291,17 @@ def get_stocks(rid):
             })
     return jsonify({'stocks': result, 'sectors': SECTORS})
 
+@app.route('/api/rooms/<int:rid>/host/send-news', methods=['POST'])
+@login_required
+def host_send_news(rid):
+    room = Room.query.get_or_404(rid)
+    user = cur_user()
+    if room.host_id != user.id: return jsonify({'error': '권한 없음'}), 403
+    d = request.json or {}
+    show_hint = bool(d.get('show_hint', True))
+    stock_service.trigger_news(show_hint)
+    return jsonify(stock_service.get_news())
+
 @app.route('/api/rooms/<int:rid>/news')
 @login_required
 def get_room_news(rid):
