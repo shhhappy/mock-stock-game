@@ -773,8 +773,8 @@ function renderGrid(stocks, prevPrices) {
 }
 
 // ── Stock Modal & Chart ──────────────────────────────────
-async function openStockModal(symbol) {
-  const st = S.stocks.find(s => s.symbol === symbol);
+async function openStockModal(symbol, fallback = null) {
+  const st = S.stocks.find(s => s.symbol === symbol) || fallback;
   if (!st) return;
   S.tradeSymbol = symbol;
   S.tradePrice  = st.price;
@@ -969,14 +969,20 @@ async function loadPortfolio() {
     hList.innerHTML = '<div class="empty-state"><div class="e-icon">📭</div>보유 종목 없음</div>';
   } else {
     hList.innerHTML = data.holdings.map(h => `
-      <div class="holding-item">
+      <div class="holding-item" style="flex-wrap:wrap">
         <div style="flex:1;min-width:0">
           <div style="font-weight:600">${h.name}</div>
-          <div class="muted" style="font-size:11px">${h.shares}주 · 평균 ${krw(h.avg_price)}</div>
+          <div class="muted" style="font-size:11px">${h.shares}주 · 평균 ${krw(h.avg_price)} · 현재 ${krw(h.current_price)}</div>
         </div>
-        <div style="text-align:right">
+        <div style="text-align:right;flex-shrink:0">
           <div style="font-weight:700">${krw(h.current_value)}</div>
           <div class="${updn(h.gain_pct)}" style="font-size:12px">${pct(h.gain_pct)}</div>
+        </div>
+        <div style="width:100%;display:flex;gap:8px;margin-top:8px">
+          <button class="btn btn-sm" style="flex:1;background:var(--up);color:#fff;border:none;font-weight:700"
+            onclick="openStockModal('${h.symbol}',{symbol:'${h.symbol}',name:'${h.name}',sector:'${h.sector}',price:${h.current_price},change_pct:${h.gain_pct}})">▲ 매수</button>
+          <button class="btn btn-sm" style="flex:1;background:var(--down);color:#fff;border:none;font-weight:700"
+            onclick="openStockModal('${h.symbol}',{symbol:'${h.symbol}',name:'${h.name}',sector:'${h.sector}',price:${h.current_price},change_pct:${h.gain_pct}})">▼ 매도</button>
         </div>
       </div>`).join('');
   }
