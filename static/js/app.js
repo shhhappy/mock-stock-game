@@ -16,6 +16,7 @@ const S = {
   watchlistOnly: false,
   assetHistory: [],
   chatLastId: 0,
+  chatUnread: 0,
   chatInterval: null,
   quizTimerInterval: null,
 };
@@ -449,6 +450,7 @@ function enterParticipantGame() {
   loadMarket();
   refreshMyRank();
   startNewsPolling();
+  startChatPolling();
   S.pollInterval = setInterval(async () => {
     const r = await api.get(`/api/rooms/${S.room.id}`);
     if (r.status === 'ended') {
@@ -595,22 +597,15 @@ function closeQuiz() {
 }
 
 // ── Chat ─────────────────────────────────────────────────
-function startChatPolling() {
-  loadChat(true);
-  if (S.chatInterval) clearInterval(S.chatInterval);
-  S.chatInterval = setInterval(() => loadChat(false), 3000);
-}
+let _chatHistory = [];
 
-function stopChatPolling() {
-  if (S.chatInterval) { clearInterval(S.chatInterval); S.chatInterval = null; }
-}
-
-async function loadChat(reset = false) {
-  if (reset) { S.chatLastId = 0; document.getElementById('chat-messages').innerHTML = ''; }
-  const data = await api.get(`/api/rooms/${S.room.id}/chat?after=${S.chatLastId}`).catch(() => []);
-  if (!data.length) return;
+async function renderChatHistory() {
   const list = document.getElementById('chat-messages');
-  const atBottom = list.scrollHeight - list.scrollTop <= list.clientHeight + 50;
+  if (!list) return;
+  list.innerHTML = '';
+  // 최근 50개 메시지를 서버에서 다시 가져와 렌더링
+  const data = await api.get(`/api/rooms/${S.room.id}/chat?after=0`).catch(() => []);
+  _chatHistory = data;
   data.forEach(m => {
     const mine = m.user_id === S.user?.id;
     const row = document.createElement('div');
@@ -619,9 +614,60 @@ async function loadChat(reset = false) {
       <div class="chat-meta ${mine ? 'mine' : ''}">${m.username} · ${m.time}</div>
       <div class="chat-bubble ${mine ? 'mine' : 'other'}">${escHtml(m.message)}</div>`;
     list.appendChild(row);
+    S.chatLastId = Math.max(S.chatLastId, m.id || 0);
+  });
+  list.scrollTop = list.scrollHeight;
+}
+
+function startChatPolling() {
+  S.chatLastId = 0;
+  S.chatUnread = 0;
+  if (S.chatInterval) clearInterval(S.chatInterval);
+  S.chatInterval = setInterval(() => fetchChatBackground(), 3000);
+}
+
+function stopChatPolling() {
+  if (S.chatInterval) { clearInterval(S.chatInterval); S.chatInterval = null; }
+}
+
+function updateChatBadge() {
+  const badge = document.getElementById('chat-badge');
+  if (!badge) return;
+  if (S.chatUnread > 0) {
+    badge.style.display = '';
+    badge.textContent = S.chatUnread > 99 ? '99+' : S.chatUnread;
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+async function fetchChatBackground() {
+  if (!S.room) return;
+  const data = await api.get(`/api/rooms/${S.room.id}/chat?after=${S.chatLastId}`).catch(() => []);
+  if (!data.length) return;
+
+  const onChat = S.currentPage === 'chat';
+  const list = onChat ? document.getElementById('chat-messages') : null;
+  const atBottom = list ? list.scrollHeight - list.scrollTop <= list.clientHeight + 50 : false;
+
+  data.forEach(m => {
+    const mine = m.user_id === S.user?.id;
+    if (list) {
+      const row = document.createElement('div');
+      row.className = `chat-row ${mine ? 'mine' : 'other'}`;
+      row.innerHTML = `
+        <div class="chat-meta ${mine ? 'mine' : ''}">${m.username} · ${m.time}</div>
+        <div class="chat-bubble ${mine ? 'mine' : 'other'}">${escHtml(m.message)}</div>`;
+      list.appendChild(row);
+    }
+    if (!onChat && !mine) {
+      S.chatUnread++;
+    }
     S.chatLastId = Math.max(S.chatLastId, m.id);
   });
-  if (atBottom) list.scrollTop = list.scrollHeight;
+
+  if (list && atBottom) list.scrollTop = list.scrollHeight;
+  updateChatBadge();
 }
 
 async function doSendChat() {
@@ -630,7 +676,7 @@ async function doSendChat() {
   if (!msg) return;
   input.value = '';
   await api.post(`/api/rooms/${S.room.id}/chat`, { message: msg });
-  await loadChat(false);
+  await fetchChatBackground();
 }
 
 function escHtml(s) {
@@ -697,8 +743,11 @@ function showPage(page) {
   if (page === 'deposit')   loadDepositsPage();
   if (page === 'rankings')  loadParticipantRankings();
   if (page === 'education') loadEducation();
-  if (page === 'chat')      startChatPolling();
-  else                      stopChatPolling();
+  if (page === 'chat') {
+    S.chatUnread = 0;
+    updateChatBadge();
+    renderChatHistory();
+  }
 
   const fab = document.querySelector('.quiz-fab');
   if (fab) fab.style.display = page === 'chat' ? 'none' : '';
@@ -1044,6 +1093,13 @@ async function loadTxn(reset = false) {
 async function loadMoreTxn() { S.txnPage++; await loadTxn(false); }
 
 // ── Deposits ─────────────────────────────────────────────
+function setDepPct(pct) {
+  const cash = S.depCash || 0;
+  const amount = Math.floor(cash * pct / 100 / 10000) * 10000;
+  document.getElementById('dep-amount').value = amount > 0 ? amount : '';
+  updateDepPreview();
+}
+
 function updateDepPreview() {
   const amount = parseFloat(document.getElementById('dep-amount').value) || 0;
   const preview = document.getElementById('dep-preview');
