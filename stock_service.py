@@ -177,6 +177,18 @@ class StockService:
             base = STOCKS[symbol]['base']
             new_price = max(base * 0.3, min(base * 3.0, new_price))
             self._prices[symbol] = (ts, new_price)
+
+            direction = 'up' if pct > 0 else 'down'
+            name = STOCKS[symbol]['name']
+            sector = STOCKS[symbol]['sector']
+            tmpl = random.choice(NEWS_TEMPLATES_UP if direction == 'up' else NEWS_TEMPLATES_DOWN)
+            self._news = {
+                'timestamp': time.time(),
+                'items': [{'headline': tmpl.format(sector=sector, name=name), 'direction': direction}],
+                'show_hint': True,
+            }
+            self._last_news_ts = time.time()
+
             return new_price
 
     def get_prev_close(self, symbol: str):
