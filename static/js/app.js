@@ -4,7 +4,7 @@ const S = {
   stocks: [], sectors: [], activeSector: '',
   currentPage: 'market',
   tradeSymbol: null, tradePrice: 0,
-  stockChart: null, portChart: null, hostBarChart: null, resultsBarChart: null,
+  stockChart: null, portChart: null, hostBarChart: null, resultsBarChart: null, assetLineChart: null,
   timerInterval: null, pollInterval: null, newsInterval: null,
   newsTs: 0,
   txnPage: 1, txnTotalPages: 1,
@@ -12,6 +12,9 @@ const S = {
   depRate: 3, depCash: 0,
   eduTab: 'glossary', glossaryData: [],
   hostTab: 'rank',
+  watchlist: new Set(JSON.parse(localStorage.getItem('watchlist') || '[]')),
+  watchlistOnly: false,
+  assetHistory: [],
 };
 
 let _newsPopupTimer = null;
@@ -464,16 +467,18 @@ async function refreshMyRank() {
   const me = data.find(e => e.is_me);
   if (!me) return;
 
-  // 순위 업데이트
   document.getElementById('pg-rank').textContent = me.rank + '위';
-
-  // 총 자산 & 수익률 업데이트 (rankings에 이미 최신 total_value 포함)
   document.getElementById('pg-cash').textContent = krw(me.total_value);
   const gp = document.getElementById('pg-gain-pct');
   gp.textContent = pct(me.gain_pct);
   if (me.gain_pct > 0) gp.style.color = 'var(--up)';
   else if (me.gain_pct < 0) gp.style.color = 'var(--down)';
   else gp.style.color = 'var(--muted)';
+
+  const now = new Date();
+  const label = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+  S.assetHistory.push({ label, value: me.total_value });
+  if (S.assetHistory.length > 120) S.assetHistory.shift();
 }
 
 // ── Timer ─────────────────────────────────────────────────
@@ -614,9 +619,30 @@ function filterStocks() {
   const q = (document.getElementById('stock-search').value || '').toLowerCase();
   const filtered = S.stocks.filter(st =>
     (!S.activeSector || st.sector === S.activeSector) &&
-    (!q || st.name.toLowerCase().includes(q) || st.symbol.toLowerCase().includes(q))
+    (!q || st.name.toLowerCase().includes(q) || st.symbol.toLowerCase().includes(q)) &&
+    (!S.watchlistOnly || S.watchlist.has(st.symbol))
   );
+  if (S.watchlistOnly && !filtered.length) {
+    document.getElementById('stock-grid').innerHTML =
+      '<div class="empty-state"><div class="e-icon">⭐</div>관심 종목을 추가해보세요</div>';
+    return;
+  }
   renderGrid(filtered, {});
+}
+
+function toggleWatchlistFilter() {
+  S.watchlistOnly = !S.watchlistOnly;
+  const btn = document.getElementById('watchlist-filter-btn');
+  if (btn) btn.style.background = S.watchlistOnly ? 'var(--warn)' : '';
+  filterStocks();
+}
+
+function toggleWatchlist(symbol, e) {
+  e.stopPropagation();
+  if (S.watchlist.has(symbol)) S.watchlist.delete(symbol);
+  else S.watchlist.add(symbol);
+  localStorage.setItem('watchlist', JSON.stringify([...S.watchlist]));
+  filterStocks();
 }
 
 function renderGrid(stocks, prevPrices) {
@@ -629,9 +655,13 @@ function renderGrid(stocks, prevPrices) {
     const cls    = st.change_pct > 0 ? 'chip-up' : st.change_pct < 0 ? 'chip-down' : 'chip-flat';
     const arrow  = st.change_pct > 0 ? '▲' : st.change_pct < 0 ? '▼' : '─';
     const pColor = st.change_pct > 0 ? 'var(--up)' : st.change_pct < 0 ? 'var(--down)' : 'var(--text)';
+    const starred = S.watchlist.has(st.symbol);
     return `
       <div class="stock-card" id="sc-${st.symbol.replace('.','_')}" onclick="openStockModal('${st.symbol}')">
-        <div style="font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${st.name}</div>
+        <div style="display:flex;justify-content:space-between;align-items:flex-start">
+          <div style="font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1">${st.name}</div>
+          <button onclick="toggleWatchlist('${st.symbol}',event)" style="background:none;border:none;cursor:pointer;font-size:14px;padding:0 0 0 4px;line-height:1;color:${starred?'var(--warn)':'var(--muted)'}">${starred?'★':'☆'}</button>
+        </div>
         <div style="color:var(--muted);font-size:11px;margin-top:1px">${st.symbol}</div>
         <div style="font-size:19px;font-weight:700;margin-top:8px;color:${pColor}">${krw(st.price)}</div>
         <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px">
@@ -806,6 +836,44 @@ async function loadPortfolio() {
     });
   } else {
     document.getElementById('port-donut').parentElement.style.display = 'none';
+  }
+
+  // Asset history line chart
+  const lineCtx = document.getElementById('asset-line-chart')?.getContext('2d');
+  if (lineCtx && S.assetHistory.length >= 2) {
+    const starting = S.room?.starting_cash || S.assetHistory[0]?.value || 1;
+    const lineColor = data.total_gain >= 0 ? '#3fb950' : '#f85149';
+    if (S.assetLineChart) S.assetLineChart.destroy();
+    S.assetLineChart = new Chart(lineCtx, {
+      type: 'line',
+      data: {
+        labels: S.assetHistory.map(p => p.label),
+        datasets: [{
+          data: S.assetHistory.map(p => p.value),
+          borderColor: lineColor,
+          backgroundColor: lineColor + '22',
+          borderWidth: 2,
+          pointRadius: 0,
+          fill: true,
+          tension: 0.3,
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: c => krw(c.parsed.y) } },
+        },
+        scales: {
+          x: { ticks: { color: '#8b949e', maxTicksLimit: 6, font: { size: 10 } }, grid: { display: false } },
+          y: {
+            ticks: { color: '#8b949e', font: { size: 10 }, callback: v => (v/10000).toFixed(0)+'만' },
+            grid: { color: '#21262d' },
+            suggestedMin: starting * 0.95,
+          }
+        }
+      }
+    });
   }
 
   // Holdings

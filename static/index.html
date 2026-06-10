@@ -269,6 +269,7 @@
   <div id="pg-market" class="page">
     <div style="display:flex;gap:8px;margin-bottom:8px">
       <input id="stock-search" class="form-input" type="search" placeholder="종목 검색…" oninput="filterStocks()" style="flex:1">
+      <button id="watchlist-filter-btn" class="btn btn-secondary btn-sm" onclick="toggleWatchlistFilter()" title="관심종목">⭐</button>
       <button class="btn btn-secondary btn-sm" onclick="loadMarket()">↻</button>
     </div>
     <div id="sector-filters" class="sector-filters"></div>
@@ -279,6 +280,10 @@
     <div id="port-summary" class="summary-grid"></div>
     <div style="position:relative;height:220px;margin:12px 0">
       <canvas id="port-donut"></canvas>
+    </div>
+    <div class="section-title" style="margin-bottom:8px">📈 자산 변화</div>
+    <div style="position:relative;height:160px;margin-bottom:16px">
+      <canvas id="asset-line-chart"></canvas>
     </div>
     <div class="section-title" style="margin-bottom:8px">보유 종목</div>
     <div id="holdings-list"></div>
