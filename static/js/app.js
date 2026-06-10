@@ -615,7 +615,7 @@ async function loadChat(reset = false) {
     const row = document.createElement('div');
     row.className = `chat-row ${mine ? 'mine' : 'other'}`;
     row.innerHTML = `
-      <div class="chat-meta ${mine ? 'mine' : ''}">${mine ? '' : m.username + ' · '}${m.time}</div>
+      <div class="chat-meta ${mine ? 'mine' : ''}">${m.username} · ${m.time}</div>
       <div class="chat-bubble ${mine ? 'mine' : 'other'}">${escHtml(m.message)}</div>`;
     list.appendChild(row);
     S.chatLastId = Math.max(S.chatLastId, m.id);
@@ -698,6 +698,9 @@ function showPage(page) {
   if (page === 'education') loadEducation();
   if (page === 'chat')      startChatPolling();
   else                      stopChatPolling();
+
+  const fab = document.querySelector('.quiz-fab');
+  if (fab) fab.style.display = page === 'chat' ? 'none' : '';
 }
 
 // ── Market ───────────────────────────────────────────────
