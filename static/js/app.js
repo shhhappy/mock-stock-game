@@ -562,6 +562,7 @@ async function openQuiz() {
   _quizTimerTick = setInterval(() => {
     _quizTimeSec--;
     document.getElementById('quiz-timer-fill').style.width = (_quizTimeSec / 30 * 100) + '%';
+    document.getElementById('quiz-timer-sec').textContent = _quizTimeSec;
     if (_quizTimeSec <= 0) {
       clearInterval(_quizTimerTick);
       submitQuiz(null);

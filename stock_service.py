@@ -84,6 +84,7 @@ class StockService:
         self._last_news_ts: float = 0.0
         self._news_ttl: float = PRICE_TTL
         self._price_ttl: float = PRICE_TTL
+        self._show_hint: bool = True  # 진행자가 설정한 힌트 표시 여부 (자동 뉴스에도 유지)
         self._init_prices()
 
     def _init_prices(self):
@@ -105,7 +106,7 @@ class StockService:
         base = STOCKS[sym]['base']
         return round(max(base * 0.6, min(base * 1.4, new_price)))
 
-    def _generate_news(self, show_hint: bool = True):
+    def _generate_news(self, show_hint: bool = None):
         sectors = list(set(v['sector'] for v in STOCKS.values()))
         chosen = random.sample(sectors, min(random.randint(1, 2), len(sectors)))
         items = []
@@ -119,6 +120,8 @@ class StockService:
             items.append({'headline': tmpl.format(sector=sector, name=name), 'direction': direction})
             for sym in sector_stocks:
                 new_biases[sym] = direction
+        if show_hint is None:
+            show_hint = self._show_hint
         self._next_biases = new_biases
         self._news = {'timestamp': time.time(), 'items': items, 'show_hint': show_hint}
 
@@ -157,6 +160,7 @@ class StockService:
 
     def trigger_news(self, show_hint: bool = True):
         with self._lock:
+            self._show_hint = show_hint  # 이후 자동 뉴스에도 동일 설정 유지
             self._current_biases = self._next_biases.copy()
             self._generate_news(show_hint)
             self._last_news_ts = time.time()
