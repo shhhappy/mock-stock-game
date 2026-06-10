@@ -3,9 +3,10 @@ from functools import wraps
 from datetime import datetime, timedelta
 import os
 
-from models import db, User, Room, RoomMember, RoomHolding, RoomTransaction, Deposit
+from models import db, User, Room, RoomMember, RoomHolding, RoomTransaction, Deposit, ChatMessage
 from stock_service import stock_service, STOCKS, SECTORS
-from education_data import GLOSSARY, GUIDES, TIPS
+from education_data import GLOSSARY, GUIDES, TIPS, QUIZ_QUESTIONS
+import time, random as _random
 
 app = Flask(__name__, static_folder='static')
 app.secret_key = os.environ.get('SECRET_KEY', 'mock-stock-game-secret-2024')
@@ -552,6 +553,85 @@ def get_guide(gid):
 @app.route('/api/education/tips')
 def get_tips():
     return jsonify(TIPS)
+
+
+# ── Quiz ──────────────────────────────────────────────────
+
+_quiz_state: dict = {}  # (room_id, user_id) -> {'qid': int, 'cooldown_until': float}
+
+@app.route('/api/rooms/<int:rid>/quiz', methods=['GET'])
+@login_required
+def get_quiz(rid):
+    room = Room.query.get_or_404(rid)
+    if room.status != 'active':
+        return jsonify({'error': '게임 중에만 사용 가능합니다'}), 400
+    user = cur_user()
+    key = (rid, user.id)
+    state = _quiz_state.get(key, {})
+    remaining = max(0, state.get('cooldown_until', 0) - time.time())
+    if remaining > 0:
+        return jsonify({'cooldown': int(remaining)})
+    q = _random.choice(QUIZ_QUESTIONS)
+    _quiz_state[key] = {'qid': q['id'], 'cooldown_until': 0}
+    return jsonify({'id': q['id'], 'question': q['q'], 'cooldown': 0})
+
+@app.route('/api/rooms/<int:rid>/quiz', methods=['POST'])
+@login_required
+def submit_quiz(rid):
+    room = Room.query.get_or_404(rid)
+    user = cur_user()
+    key = (rid, user.id)
+    state = _quiz_state.get(key)
+    if not state or state.get('cooldown_until', 0) > time.time():
+        return jsonify({'error': '퀴즈를 먼저 시작하세요'}), 400
+    d = request.json or {}
+    user_answer = bool(d.get('answer'))
+    q = next((x for x in QUIZ_QUESTIONS if x['id'] == state['qid']), None)
+    if not q:
+        return jsonify({'error': '잘못된 요청'}), 400
+    correct = user_answer == q['a']
+    reward = 0
+    if correct:
+        member = RoomMember.query.filter_by(room_id=rid, user_id=user.id).first()
+        if member:
+            reward = max(10000, int(room.starting_cash * 0.01))
+            member.cash += reward
+            db.session.commit()
+    _quiz_state[key] = {'qid': None, 'cooldown_until': time.time() + 60}
+    return jsonify({'correct': correct, 'reward': reward, 'explanation': q['ex']})
+
+
+# ── Chat ───────────────────────────────────────────────────
+
+@app.route('/api/rooms/<int:rid>/chat', methods=['GET'])
+@login_required
+def get_chat(rid):
+    Room.query.get_or_404(rid)
+    after_id = request.args.get('after', 0, type=int)
+    msgs = ChatMessage.query.filter(
+        ChatMessage.room_id == rid,
+        ChatMessage.id > after_id
+    ).order_by(ChatMessage.id).limit(50).all()
+    return jsonify([{
+        'id': m.id, 'user_id': m.user_id, 'username': m.username,
+        'message': m.message, 'time': m.created_at.strftime('%H:%M'),
+    } for m in msgs])
+
+@app.route('/api/rooms/<int:rid>/chat', methods=['POST'])
+@login_required
+def send_chat(rid):
+    Room.query.get_or_404(rid)
+    user = cur_user()
+    if not RoomMember.query.filter_by(room_id=rid, user_id=user.id).first():
+        return jsonify({'error': '방 멤버가 아닙니다'}), 403
+    d = request.json or {}
+    msg = (d.get('message') or '').strip()[:200]
+    if not msg:
+        return jsonify({'error': '메시지를 입력하세요'}), 400
+    chat_msg = ChatMessage(room_id=rid, user_id=user.id, username=user.username, message=msg)
+    db.session.add(chat_msg)
+    db.session.commit()
+    return jsonify({'id': chat_msg.id, 'ok': True})
 
 
 # ── Export ────────────────────────────────────────────────

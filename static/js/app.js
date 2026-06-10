@@ -15,6 +15,9 @@ const S = {
   watchlist: new Set(JSON.parse(localStorage.getItem('watchlist') || '[]')),
   watchlistOnly: false,
   assetHistory: [],
+  chatLastId: 0,
+  chatInterval: null,
+  quizTimerInterval: null,
 };
 
 let _newsPopupTimer = null;
@@ -501,6 +504,7 @@ function stopTimer()   { clearInterval(S.timerInterval); S.timerInterval = null;
 function stopPolling() {
   clearInterval(S.pollInterval);  S.pollInterval = null;
   stopNewsPolling();
+  stopChatPolling();
 }
 
 function startNewsPolling() {
@@ -522,6 +526,114 @@ function stopNewsPolling() {
   if (_newsPopupTimer) { clearTimeout(_newsPopupTimer); _newsPopupTimer = null; }
   const popup = document.getElementById('bomb-news-popup');
   if (popup) popup.style.display = 'none';
+}
+
+// ── Quiz ─────────────────────────────────────────────────
+let _quizTimeSec = 30;
+let _quizTimerTick = null;
+
+async function openQuiz() {
+  const overlay = document.getElementById('quiz-overlay');
+  overlay.style.display = 'flex';
+  document.getElementById('quiz-result').style.display = 'none';
+  document.getElementById('quiz-btns').style.display = 'flex';
+  document.getElementById('quiz-cooldown-msg').style.display = 'none';
+  document.getElementById('quiz-question').textContent = '불러오는 중…';
+
+  const data = await api.get(`/api/rooms/${S.room.id}/quiz`);
+  if (data.error) {
+    document.getElementById('quiz-question').textContent = data.error;
+    document.getElementById('quiz-btns').style.display = 'none';
+    return;
+  }
+  if (data.cooldown > 0) {
+    document.getElementById('quiz-question').style.display = 'none';
+    document.getElementById('quiz-btns').style.display = 'none';
+    const msg = document.getElementById('quiz-cooldown-msg');
+    msg.style.display = '';
+    msg.textContent = `⏳ ${data.cooldown}초 후에 다시 도전할 수 있습니다`;
+    return;
+  }
+  document.getElementById('quiz-question').style.display = '';
+  document.getElementById('quiz-question').textContent = data.question;
+  _quizTimeSec = 30;
+  document.getElementById('quiz-timer-fill').style.width = '100%';
+  if (_quizTimerTick) clearInterval(_quizTimerTick);
+  _quizTimerTick = setInterval(() => {
+    _quizTimeSec--;
+    document.getElementById('quiz-timer-fill').style.width = (_quizTimeSec / 30 * 100) + '%';
+    if (_quizTimeSec <= 0) {
+      clearInterval(_quizTimerTick);
+      submitQuiz(null);
+    }
+  }, 1000);
+}
+
+async function submitQuiz(answer) {
+  if (_quizTimerTick) { clearInterval(_quizTimerTick); _quizTimerTick = null; }
+  document.getElementById('quiz-btns').style.display = 'none';
+  const result = document.getElementById('quiz-result');
+  result.style.display = '';
+  if (answer === null) {
+    result.innerHTML = `<div style="font-size:28px">⏰</div><div style="color:var(--muted);margin-top:8px">시간 초과!</div>`;
+    await api.post(`/api/rooms/${S.room.id}/quiz`, { answer: false });
+    return;
+  }
+  const data = await api.post(`/api/rooms/${S.room.id}/quiz`, { answer });
+  if (data.correct) {
+    result.innerHTML = `<div style="font-size:32px">⭕</div><div style="color:var(--up);font-weight:700;font-size:18px;margin-top:8px">정답! +${data.reward.toLocaleString()}원</div><div style="color:var(--muted);font-size:13px;margin-top:8px">${data.explanation}</div>`;
+    toast(`+${data.reward.toLocaleString()}원 획득!`, 'success');
+  } else {
+    result.innerHTML = `<div style="font-size:32px">❌</div><div style="color:var(--down);font-weight:700;font-size:18px;margin-top:8px">오답</div><div style="color:var(--muted);font-size:13px;margin-top:8px">${data.explanation}</div>`;
+  }
+}
+
+function closeQuiz() {
+  if (_quizTimerTick) { clearInterval(_quizTimerTick); _quizTimerTick = null; }
+  document.getElementById('quiz-overlay').style.display = 'none';
+}
+
+// ── Chat ─────────────────────────────────────────────────
+function startChatPolling() {
+  loadChat(true);
+  if (S.chatInterval) clearInterval(S.chatInterval);
+  S.chatInterval = setInterval(() => loadChat(false), 3000);
+}
+
+function stopChatPolling() {
+  if (S.chatInterval) { clearInterval(S.chatInterval); S.chatInterval = null; }
+}
+
+async function loadChat(reset = false) {
+  if (reset) { S.chatLastId = 0; document.getElementById('chat-messages').innerHTML = ''; }
+  const data = await api.get(`/api/rooms/${S.room.id}/chat?after=${S.chatLastId}`).catch(() => []);
+  if (!data.length) return;
+  const list = document.getElementById('chat-messages');
+  const atBottom = list.scrollHeight - list.scrollTop <= list.clientHeight + 50;
+  data.forEach(m => {
+    const mine = m.user_id === S.user?.id;
+    const row = document.createElement('div');
+    row.className = `chat-row ${mine ? 'mine' : 'other'}`;
+    row.innerHTML = `
+      <div class="chat-meta ${mine ? 'mine' : ''}">${mine ? '' : m.username + ' · '}${m.time}</div>
+      <div class="chat-bubble ${mine ? 'mine' : 'other'}">${escHtml(m.message)}</div>`;
+    list.appendChild(row);
+    S.chatLastId = Math.max(S.chatLastId, m.id);
+  });
+  if (atBottom) list.scrollTop = list.scrollHeight;
+}
+
+async function doSendChat() {
+  const input = document.getElementById('chat-input');
+  const msg = input.value.trim();
+  if (!msg) return;
+  input.value = '';
+  await api.post(`/api/rooms/${S.room.id}/chat`, { message: msg });
+  await loadChat(false);
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
 async function doSendNews() {
@@ -568,7 +680,7 @@ async function refreshRoomStatus() {
 }
 
 // ── Navigation (participant game) ────────────────────────
-const PAGE_ORDER = ['market', 'portfolio', 'deposit', 'rankings', 'education'];
+const PAGE_ORDER = ['market', 'portfolio', 'deposit', 'rankings', 'education', 'chat'];
 
 function showPage(page) {
   if (S.currentPage === page) return;
@@ -584,6 +696,8 @@ function showPage(page) {
   if (page === 'deposit')   loadDepositsPage();
   if (page === 'rankings')  loadParticipantRankings();
   if (page === 'education') loadEducation();
+  if (page === 'chat')      startChatPolling();
+  else                      stopChatPolling();
 }
 
 // ── Market ───────────────────────────────────────────────

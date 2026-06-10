@@ -351,7 +351,35 @@
     <div id="edu-guides" style="display:none"><div id="guides-list"></div></div>
     <div id="edu-tips"   style="display:none"><div id="tips-list"></div></div>
   </div>
+  <!-- Chat page -->
+  <div id="pg-chat" class="page chat-page" hidden>
+    <div id="chat-messages" class="chat-messages"></div>
+    <div class="chat-input-wrap">
+      <input id="chat-input" class="form-input" type="text" placeholder="메시지 입력…" maxlength="200"
+             style="flex:1" onkeydown="if(event.key==='Enter')doSendChat()">
+      <button class="btn btn-primary btn-sm" onclick="doSendChat()">전송</button>
+    </div>
+  </div>
   </div><!-- /pages-wrapper -->
+
+  <!-- Quiz FAB -->
+  <button class="quiz-fab" onclick="openQuiz()">🧠 퀴즈</button>
+
+  <!-- Quiz overlay -->
+  <div id="quiz-overlay" class="quiz-overlay" style="display:none">
+    <div class="quiz-box">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:12px">💰 정답 시 시작 자금의 1% 지급</div>
+      <div id="quiz-question" style="font-size:17px;font-weight:600;line-height:1.5;margin-bottom:16px"></div>
+      <div class="quiz-timer-bar"><div id="quiz-timer-fill" class="quiz-timer-fill" style="width:100%"></div></div>
+      <div id="quiz-btns" style="display:flex;gap:12px;margin-top:4px">
+        <button class="quiz-btn-ox quiz-btn-o" onclick="submitQuiz(true)">O</button>
+        <button class="quiz-btn-ox quiz-btn-x" onclick="submitQuiz(false)">X</button>
+      </div>
+      <div id="quiz-result" style="display:none;margin-top:16px"></div>
+      <div id="quiz-cooldown-msg" style="display:none;font-size:15px;color:var(--muted);padding:20px 0"></div>
+      <button class="btn btn-secondary btn-sm" onclick="closeQuiz()" style="margin-top:16px;width:100%">닫기</button>
+    </div>
+  </div>
 
   <!-- Bottom nav -->
   <nav class="bottom-nav">
@@ -369,6 +397,9 @@
     </button>
     <button class="nav-item" id="nav-education" onclick="showPage('education')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>학습
+    </button>
+    <button class="nav-item" id="nav-chat" onclick="showPage('chat')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>채팅
     </button>
   </nav>
 </div>
