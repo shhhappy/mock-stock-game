@@ -232,6 +232,17 @@ async function loadHostMarket() {
   }
   const data = await api.get(`/api/rooms/${S.room.id}/stocks`);
   if (!data.stocks) return;
+
+  const sel = document.getElementById('force-price-symbol');
+  if (sel && !sel.options.length) {
+    data.stocks.forEach(st => {
+      const opt = document.createElement('option');
+      opt.value = st.symbol;
+      opt.textContent = `${st.name} (${st.symbol})`;
+      sel.appendChild(opt);
+    });
+  }
+
   grid.innerHTML = data.stocks.map(st => {
     const cls   = st.change_pct > 0 ? 'chip-up' : st.change_pct < 0 ? 'chip-down' : 'chip-flat';
     const arrow = st.change_pct > 0 ? '▲' : st.change_pct < 0 ? '▼' : '─';
@@ -247,6 +258,19 @@ async function loadHostMarket() {
         </div>
       </div>`;
   }).join('');
+}
+
+async function doForcePrice(quickPct) {
+  const symbol = document.getElementById('force-price-symbol').value;
+  const pct = quickPct !== undefined ? quickPct : parseFloat(document.getElementById('force-price-pct').value);
+  const msg = document.getElementById('force-price-msg');
+  if (!symbol) { msg.textContent = '종목을 선택하세요.'; return; }
+  if (isNaN(pct) || pct === 0) { msg.textContent = '변동률을 입력하세요.'; return; }
+  const data = await api.post(`/api/rooms/${S.room.id}/host/force-price`, { symbol, pct });
+  if (data.error) { msg.textContent = data.error; return; }
+  const sign = pct > 0 ? '+' : '';
+  msg.textContent = `적용됨: ${symbol} → ${data.price.toLocaleString()}원 (${sign}${pct}%)`;
+  loadHostMarket();
 }
 
 async function loadNewsInterval() {

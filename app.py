@@ -291,6 +291,23 @@ def get_stocks(rid):
             })
     return jsonify({'stocks': result, 'sectors': SECTORS})
 
+@app.route('/api/rooms/<int:rid>/host/force-price', methods=['POST'])
+@login_required
+def host_force_price(rid):
+    room = Room.query.get_or_404(rid)
+    user = cur_user()
+    if room.host_id != user.id: return jsonify({'error': '권한 없음'}), 403
+    d = request.json or {}
+    symbol = d.get('symbol', '')
+    pct = float(d.get('pct', 0))
+    if not symbol or abs(pct) > 50:
+        return jsonify({'error': '잘못된 요청'}), 400
+    new_price = stock_service.force_price(symbol, pct)
+    if new_price is None:
+        return jsonify({'error': '종목 없음'}), 404
+    return jsonify({'symbol': symbol, 'price': new_price})
+
+
 @app.route('/api/rooms/<int:rid>/host/send-news', methods=['POST'])
 @login_required
 def host_send_news(rid):

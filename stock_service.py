@@ -168,6 +168,17 @@ class StockService:
     def get_price_interval(self) -> float:
         return self._price_ttl
 
+    def force_price(self, symbol: str, pct: float):
+        if symbol not in STOCKS:
+            return None
+        with self._lock:
+            ts, price = self._prices[symbol]
+            new_price = round(price * (1 + pct / 100))
+            base = STOCKS[symbol]['base']
+            new_price = max(base * 0.3, min(base * 3.0, new_price))
+            self._prices[symbol] = (ts, new_price)
+            return new_price
+
     def get_prev_close(self, symbol: str):
         return self._prev.get(symbol)
 
