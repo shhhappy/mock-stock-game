@@ -75,3 +75,37 @@
 - **`force_price()` 후 `_current_biases` 미갱신** (`stock_service.py:175-196`): 진행자가 특정 종목을 강제로 올리거나 내린 직후 다음 주기에 `_current_biases`에 반영되지 않아 가격이 원래 방향으로 되돌아갈 수 있음. `force_price()` 내부에서 `self._current_biases[symbol] = direction`를 추가(`stock_service.py:193` 부근)하면 강제 조정의 모멘텀이 다음 사이클에도 유지됨.
 
 - **진행자 바차트 매 10초 전체 재생성** (`app.js:328-365`): `renderHostBarChart()`가 매번 기존 차트를 `destroy()`하고 새로 생성해 깜빡임 발생 (어제 분석과 연계). 추가로, `loadHostMembers()` 자체가 진행자 탭에 관계없이 10초마다 호출되므로 `htab-rank` 탭이 비활성 상태일 때는 DOM 조작 없이 데이터만 가져오도록 `if (S.hostTab !== 'rank') return;` 가드를 `renderHostBarChart` 시작부에 추가 권장 (`app.js:328`).
+
+---
+
+## 2026-06-12
+
+### 추가하면 좋을 기능
+
+- **참여자 로비 멤버 목록 실질적 버그 수정** (`app.py:223-233`, `app.js:420-428`): `GET /api/rooms/<rid>/host/lobby-members`는 `room.host_id != user.id` 조건으로 참여자에게 403을 반환함. 하지만 `loadPLobbyMembers()`(app.js:420)는 이 엔드포인트를 그대로 호출 — `if (!Array.isArray(data)) return` 가드가 에러 응답을 조용히 무시해 참여자 대기 화면의 "대기 중인 참여자" 목록이 항상 비어 있음. 호스트 체크 없이 멤버 목록만 반환하는 `GET /api/rooms/<rid>/members` 엔드포인트를 별도 추가하거나, `lobby_members`에서 호스트 전용 체크를 제거하는 것으로 수정 가능.
+
+- **게임 종료 후 개인 포트폴리오 상세 확인 불가** (`index.html:424-444`, `app.js:1126-1170`): 결과 화면(`screen-results`)은 최종 순위·총 자산·수익률만 표시하고 보유 종목별 손익이나 거래 내역은 볼 수 없음. 수업 후 토론을 위해 게임이 끝나도 `GET /api/rooms/<rid>/portfolio`와 `GET /api/rooms/<rid>/transactions` 응답을 결과 화면에 "내 거래 내역 펼치기" 섹션으로 추가하면 학습 효과 대폭 향상.
+
+- **매수/매도 버튼 중복 클릭 방지** (`app.js:863-876`): `execTrade()`가 API 호출 중 버튼을 비활성화하지 않아, 학생이 빠르게 두 번 클릭하면 동일 주문이 두 번 실행될 수 있음. 호출 시작 시 매수/매도 버튼을 `disabled = true`로 설정하고, 응답 수신 후 다시 `disabled = false`로 되돌리는 것만으로 충분.
+
+- **종료된 방 목록 조회 엔드포인트** (`app.py:80-86`): `find_active_room()`은 `waiting`·`active` 상태만 찾음. 게임이 끝난 후 홈으로 돌아가면 해당 방 결과를 다시 볼 방법이 없음. `GET /api/rooms/my-rooms` (또는 `?status=ended`) 엔드포인트를 추가하고 결과 화면에 "이전 게임 보기" 링크를 두면 교사가 수업 후 결과를 재확인할 수 있음.
+
+- **자산 변화 차트가 포트폴리오 탭 진입 시에만 그려짐** (`app.js:929-964`, `index.html:302-306`): `asset-line-chart`는 `loadPortfolio()` 내부에서만 렌더링됨. 학생이 포트폴리오 탭을 한 번도 열지 않으면 `S.assetHistory`에 데이터가 쌓여도 차트가 보이지 않음. `refreshMyRank()`에서 이미 `S.assetHistory`를 누적하므로(`app.js:480-482`), 포트폴리오 탭 진입 시 또는 일정 포인트 이상 쌓이면 자동으로 차트가 갱신되도록 하면 학생이 자신의 수익 추이를 놓치지 않음.
+
+- **진행자 전체 학생 일괄 현금 지급** (`app.py:235-251`, `index.html:500-520`): 현재 `host_adjust`는 단일 참여자에게만 조정 가능. 이벤트 보상·벌금을 전체 학생에게 동시에 적용하려면 매번 30명을 개별 조정해야 함. `user_id` 대신 `'all'` 값을 허용하거나 별도 `POST /api/rooms/<rid>/host/adjust-all` 엔드포인트를 추가하면 현장 편의성 대폭 향상.
+
+- **알 수 없는 사용자 공유 계정 위험** (`app.py:108-115`): `User.query.filter_by(username=u).first()`는 학번+이름 조합이 동일한 모든 입력을 같은 계정으로 처리함. 같은 반에 동명이인이 있거나 학번 없이 이름만 입력한 경우 두 학생이 동일 계정·동일 포트폴리오를 공유하게 됨. 단기 해결책으로 room-join 시 이미 해당 username이 다른 활성 세션에서 접속 중이면 경고 메시지를 표시하도록 처리 가능.
+
+---
+
+### 제거/단순화할 것들
+
+- **`/host/lobby-members` "host" 접두사 오해 유발** (`app.py:223`): URL 경로가 `/host/lobby-members`이지만 참여자 화면에서도 이 엔드포인트를 직접 호출함 (`app.js:421`). 위 버그 수정과 함께 `/api/rooms/<rid>/members`(or `lobby-members`)로 경로를 이동하고 `@login_required`만 유지하면 역할 구분이 명확해짐.
+
+- **`refreshMyRank()` 전체 순위 배열 → 개인 통계 전용 호출로 대체** (`app.js:465-483`): 참여자 게임 화면에서 5초마다 `GET /api/rooms/<rid>/rankings`를 호출해 전체 배열을 내려받은 뒤 `data.find(e => e.is_me)`로 자신의 항목 하나만 사용함. 참여자 30명이면 분당 360회의 전체 순위 직렬화 발생. `GET /api/rooms/<rid>/my-stats`처럼 현재 사용자의 `{rank, total_value, gain_pct}`만 반환하는 경량 엔드포인트로 교체하면 서버 부하와 응답 크기를 모두 줄일 수 있음.
+
+- **`stock_service.py:207` 기간 키 불일치** (`stock_service.py:207`, `app.py:335`): `get_history()` 내부 `n_bars` 딕셔너리는 `'5d': 5` 키를 사용하지만, `app.py:335`의 period 매핑은 UI 파라미터 `'1w'`를 yfinance `period='5d'`로 변환해 전달함. `n_bars`에서 `'5d'`가 매칭되어 5개 봉이 생성되는 건 우연히 맞아떨어지는 것이며, `'1d'` 키도 하루치 30봉을 의미하는지 30일치를 의미하는지 불명확. 키를 실제 UI 파라미터(`'1d'`, `'1w'`, `'1mo'`, `'3mo'`, `'1y'`)로 통일하고 `n_bars` 값을 명확히 재정의하면 혼란 방지.
+
+- **`enterParticipantGame()`의 PAGE_ORDER 초기화 루프** (`app.js:437-445`): 게임 진입 시 `PAGE_ORDER.forEach`로 모든 페이지를 순회하며 `hidden` 속성을 개별 토글함. `screen-p-game`이 처음 로드될 때는 `market` 외 모든 페이지가 이미 `hidden`이므로 이 루프는 실질적으로 시장 탭만 보이게 하는 작업. `document.querySelectorAll('#screen-p-game .page').forEach(el => el.setAttribute('hidden',''))` 후 `document.getElementById('pg-market').removeAttribute('hidden')` 두 줄로 단순화 가능.
+
+- **`get_room()` 자동 종료 체크가 일부 엔드포인트에서 누락** (`app.py:169-175`, `app.py:427-443`): `get_room()` 라우트는 `end_time` 초과 시 자동으로 `_end_room()`을 호출하지만, `get_rankings()`·`get_portfolio()` 등 다른 엔드포인트는 만료 체크 없이 `active` 상태를 반환함. 선생님이 탭을 닫아도 학생 폴링이 계속되면 종료 시각이 지난 뒤에도 `remaining_seconds`가 0으로 보이지 않아 타이머가 계속 카운트됨. 자동 종료 체크를 `before_request` 훅이나 공통 `get_active_room()` 헬퍼로 통합하면 일관성 보장.
