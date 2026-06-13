@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>모의주식게임</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=10">
+  <link rel="stylesheet" href="/static/css/style.css?v=11">
 </head>
 <body>
 
@@ -105,6 +105,9 @@
         ▶ 게임 시작
       </button>
     </div>
+    <div style="margin-top:8px;font-size:11px;color:var(--muted);text-align:center">
+      잘못 입장한 학생은 이름 옆 <strong>강퇴</strong> 버튼으로 제거할 수 있습니다
+    </div>
   </div>
 </div>
 
@@ -168,6 +171,7 @@
     </div>
 
     <div style="margin-top:12px;display:flex;gap:10px">
+      <button class="btn" id="pause-btn" onclick="doPauseGame()" style="flex:1;background:var(--warn);color:#000;font-weight:700">⏸ 일시정지</button>
       <button class="btn btn-danger" onclick="doEndGame()" style="flex:1">⏹ 게임 종료</button>
     </div>
 
@@ -212,6 +216,28 @@
       <button class="btn btn-primary btn-full btn-sm" style="margin-top:8px" onclick="doForcePrice()">직접 입력값 적용</button>
       <div id="force-price-msg" style="font-size:12px;color:var(--muted);margin-top:6px"></div>
     </div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:14px">
+      <div class="section-title" style="margin-bottom:12px">🌊 섹터 / 시장 이벤트</div>
+      <div style="margin-bottom:8px">
+        <select id="market-event-sector" class="form-input" style="width:100%;font-size:13px">
+          <option value="all">📊 전체 시장</option>
+        </select>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+        <input id="market-event-pct" class="form-input" type="number" min="-50" max="50" value="10"
+          style="width:80px;text-align:center" placeholder="%">
+        <span style="font-size:13px;color:var(--muted)">% 변동 (-50 ~ +50)</span>
+      </div>
+      <div style="display:flex;gap:6px;margin-bottom:8px">
+        <button class="btn btn-secondary btn-sm" style="flex:1" onclick="doMarketEvent(-15)">▼ -15%</button>
+        <button class="btn btn-secondary btn-sm" style="flex:1" onclick="doMarketEvent(-10)">▼ -10%</button>
+        <button class="btn btn-secondary btn-sm" style="flex:1" onclick="doMarketEvent(10)">▲ +10%</button>
+        <button class="btn btn-secondary btn-sm" style="flex:1" onclick="doMarketEvent(15)">▲ +15%</button>
+      </div>
+      <button class="btn btn-primary btn-full btn-sm" onclick="doMarketEvent()">직접 입력값 적용</button>
+      <div id="market-event-msg" style="font-size:12px;color:var(--muted);margin-top:6px"></div>
+    </div>
+
     <div class="section-header" style="margin-bottom:12px">
       <span class="section-title">실시간 시세 📈</span>
       <button class="btn btn-secondary btn-sm" onclick="loadHostMarket()">↻ 새로고침</button>
@@ -423,14 +449,32 @@
 
 <!-- ═══════════════ RESULTS ═══════════════ -->
 <div id="screen-results" class="fullscreen" hidden>
-  <div style="padding:24px 16px">
-    <div style="text-align:center;margin-bottom:24px">
-      <div style="font-size:56px">🏆</div>
-      <div style="font-size:22px;font-weight:700;margin-top:8px">게임 종료!</div>
-      <div class="muted" id="results-room-name" style="font-size:14px;margin-top:4px">–</div>
+  <canvas id="confetti-canvas" style="position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:9999"></canvas>
+  <div style="padding:16px 16px 80px">
+
+    <!-- 트로피 + 방 이름 -->
+    <div style="text-align:center;padding:24px 0 12px">
+      <div id="results-trophy" style="font-size:68px;display:inline-block">🏆</div>
+      <div style="font-size:22px;font-weight:800;margin-top:6px;letter-spacing:-0.3px">게임 종료!</div>
+      <div class="muted" id="results-room-name" style="font-size:13px;margin-top:4px">–</div>
     </div>
+
+    <!-- 우승자 카드 -->
+    <div id="results-winner-section" class="results-winner-section" style="display:none">
+      <div style="font-size:10px;color:#d4af37;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:8px">🥇 우승</div>
+      <div id="results-winner-name" style="font-size:26px;font-weight:800;color:#fff;line-height:1.2"></div>
+      <div style="margin-top:8px;display:flex;align-items:baseline;gap:10px;justify-content:center">
+        <span id="results-winner-value" style="font-weight:700;font-size:20px;color:var(--up)"></span>
+        <span id="results-winner-pct" style="font-size:13px;color:var(--muted)"></span>
+      </div>
+    </div>
+
+    <!-- 2위/3위 나란히 -->
+    <div id="results-runners-up" style="display:none;gap:8px;margin-bottom:16px"></div>
+
     <div class="section-title" style="margin-bottom:12px">최종 순위</div>
     <div id="results-list"></div>
+
     <div class="section-title" style="margin:20px 0 10px">자산 현황 차트</div>
     <div id="results-chart-wrap" style="position:relative;height:220px;margin-bottom:16px">
       <canvas id="results-bar-chart"></canvas>
@@ -477,6 +521,10 @@
     <div style="display:flex;justify-content:space-between;margin-bottom:12px">
       <span class="muted">보유 수량</span>
       <span id="ms-holding">0주</span>
+    </div>
+    <div style="display:flex;gap:6px;margin-bottom:8px">
+      <button class="btn btn-secondary btn-sm" style="flex:1;font-size:12px" onclick="setMaxBuy()">전량 매수</button>
+      <button class="btn btn-secondary btn-sm" style="flex:1;font-size:12px" onclick="setMaxSell()">전량 매도</button>
     </div>
     <div class="qty-control">
       <button class="qty-btn" onclick="adjQty(-10)">-10</button>
@@ -548,6 +596,6 @@
 <div class="toast-container" id="toasts"></div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
-<script src="/static/js/app.js?v=8"></script>
+<script src="/static/js/app.js?v=9"></script>
 </body>
 </html>

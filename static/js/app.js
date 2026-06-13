@@ -3,7 +3,7 @@ const S = {
   user: null, room: null,
   stocks: [], sectors: [], activeSector: '',
   currentPage: 'market',
-  tradeSymbol: null, tradePrice: 0,
+  tradeSymbol: null, tradePrice: 0, tradeCash: 0, tradeHolding: 0,
   stockChart: null, portChart: null, hostBarChart: null, resultsBarChart: null, assetLineChart: null,
   timerInterval: null, pollInterval: null, newsInterval: null,
   newsTs: 0,
@@ -132,7 +132,7 @@ async function doJoinRoom() {
   const data = await api.post('/api/rooms/join', {code});
   if (data.error) { err.textContent = data.error; return; }
   S.room = data.room;
-  if (S.room.status === 'active') {
+  if (S.room.status === 'active' || S.room.status === 'paused') {
     enterParticipantGame();
   } else if (S.room.status === 'ended') {
     await loadResults();
@@ -146,11 +146,11 @@ function resumeRoom() {
   if (!S.room) return;
   if (S.room.is_host) {
     if (S.room.status === 'waiting') enterHostLobby();
-    else if (S.room.status === 'active') enterHostGame();
+    else if (S.room.status === 'active' || S.room.status === 'paused') enterHostGame();
     else loadResults();
   } else {
     if (S.room.status === 'waiting') enterParticipantLobby();
-    else if (S.room.status === 'active') enterParticipantGame();
+    else if (S.room.status === 'active' || S.room.status === 'paused') enterParticipantGame();
     else loadResults().then(() => showScreen('screen-results'));
   }
 }
@@ -184,8 +184,22 @@ async function loadLobbyMembers() {
   if (data.error) return;
   document.getElementById('lobby-count').textContent = data.length;
   document.getElementById('lobby-members-list').innerHTML = data.length
-    ? data.map(m => `<div class="lobby-member"><div class="avatar-sm">${m.username[0].toUpperCase()}</div><span style="font-weight:600">${m.username}</span></div>`).join('')
+    ? data.map(m => `
+        <div class="lobby-member">
+          <div class="avatar-sm">${m.username[0].toUpperCase()}</div>
+          <span style="font-weight:600;flex:1">${m.username}</span>
+          <button class="btn btn-secondary btn-sm" style="padding:3px 8px;color:var(--down)"
+            onclick="doKickMember(${m.user_id},'${m.username.replace(/'/g,"\\'")}')">강퇴</button>
+        </div>`).join('')
     : '<div class="muted" style="font-size:13px;padding:10px 0">아직 참여자가 없습니다.</div>';
+}
+
+async function doKickMember(uid, username) {
+  if (!confirm(`"${username}"을(를) 강퇴하시겠습니까?`)) return;
+  const data = await api.del(`/api/rooms/${S.room.id}/host/members/${uid}`);
+  if (data.error) { toast(data.error, 'error'); return; }
+  toast(`${username} 강퇴 완료`, 'info');
+  loadLobbyMembers();
 }
 
 function copyCode() {
@@ -193,6 +207,7 @@ function copyCode() {
 }
 
 async function doStartGame() {
+  if (!confirm('게임을 시작하시겠습니까?')) return;
   const btn = document.getElementById('start-btn');
   btn.disabled = true;
   const data = await api.post(`/api/rooms/${S.room.id}/start`, {});
@@ -212,11 +227,39 @@ function enterHostGame() {
   loadHostMembers();
   loadNewsInterval();
   startNewsPolling();
+  updatePauseBtn();
   S.pollInterval = setInterval(() => {
     if (S.hostTab === 'rank') loadHostMembers();
     else loadHostMarket();
     refreshRoomStatus();
   }, 10000);
+}
+
+function updatePauseBtn() {
+  const btn = document.getElementById('pause-btn');
+  if (!btn) return;
+  if (S.room?.status === 'paused') {
+    btn.textContent = '▶ 재개';
+    btn.style.background = 'var(--up)';
+  } else {
+    btn.textContent = '⏸ 일시정지';
+    btn.style.background = 'var(--warn)';
+  }
+}
+
+async function doPauseGame() {
+  if (S.room?.status === 'paused') {
+    const data = await api.post(`/api/rooms/${S.room.id}/resume`, {});
+    if (data.error) { toast(data.error, 'error'); return; }
+    S.room = data.room;
+    toast('게임 재개', 'success');
+  } else {
+    const data = await api.post(`/api/rooms/${S.room.id}/pause`, {});
+    if (data.error) { toast(data.error, 'error'); return; }
+    S.room = data.room;
+    toast('게임 일시정지', 'info');
+  }
+  updatePauseBtn();
 }
 
 function switchHostTab(tab) {
@@ -247,6 +290,16 @@ async function loadHostMarket() {
     });
   }
 
+  const secSel = document.getElementById('market-event-sector');
+  if (secSel && secSel.options.length <= 1 && data.sectors) {
+    data.sectors.forEach(sector => {
+      const opt = document.createElement('option');
+      opt.value = sector;
+      opt.textContent = `📂 ${sector} 섹터`;
+      secSel.appendChild(opt);
+    });
+  }
+
   grid.innerHTML = data.stocks.map(st => {
     const cls   = st.change_pct > 0 ? 'chip-up' : st.change_pct < 0 ? 'chip-down' : 'chip-flat';
     const arrow = st.change_pct > 0 ? '▲' : st.change_pct < 0 ? '▼' : '─';
@@ -274,6 +327,18 @@ async function doForcePrice(quickPct) {
   if (data.error) { msg.textContent = data.error; return; }
   const sign = pct > 0 ? '+' : '';
   msg.textContent = `적용됨: ${symbol} → ${data.price.toLocaleString()}원 (${sign}${pct}%)`;
+  loadHostMarket();
+}
+
+async function doMarketEvent(quickPct) {
+  const sector = document.getElementById('market-event-sector').value;
+  const pct = quickPct !== undefined ? quickPct : parseFloat(document.getElementById('market-event-pct').value);
+  const msg = document.getElementById('market-event-msg');
+  if (isNaN(pct) || pct === 0) { msg.textContent = '변동률을 입력하세요.'; return; }
+  const data = await api.post(`/api/rooms/${S.room.id}/host/market-event`, { sector, pct });
+  if (data.error) { msg.style.color = 'var(--down)'; msg.textContent = data.error; return; }
+  msg.style.color = 'var(--up)';
+  msg.textContent = `✓ ${data.message}`;
   loadHostMarket();
 }
 
@@ -321,7 +386,6 @@ async function loadHostMembers() {
       </div>`;
   }).join('');
 
-  // Bar chart
   renderHostBarChart(data);
 }
 
@@ -332,7 +396,15 @@ function renderHostBarChart(members) {
   const colors = members.map(m => m.gain_pct >= 0 ? 'rgba(63,185,80,.7)' : 'rgba(248,81,73,.7)');
   const starting = S.room.starting_cash;
 
-  if (S.hostBarChart) S.hostBarChart.destroy();
+  if (S.hostBarChart) {
+    S.hostBarChart.data.labels = labels;
+    S.hostBarChart.data.datasets[0].data = values;
+    S.hostBarChart.data.datasets[0].backgroundColor = colors;
+    S.hostBarChart.data.datasets[0].borderColor = colors.map(c => c.replace('.7)', '1)'));
+    S.hostBarChart.update();
+    return;
+  }
+
   S.hostBarChart = new Chart(ctx, {
     type: 'bar',
     data: {
@@ -408,7 +480,7 @@ function enterParticipantLobby() {
   S.pollInterval = setInterval(async () => {
     loadPLobbyMembers();
     const r = await api.get(`/api/rooms/${S.room.id}`);
-    if (r.status === 'active') {
+    if (r.status === 'active' || r.status === 'paused') {
       S.room = r; stopPolling(); enterParticipantGame();
     } else if (r.status === 'ended') {
       S.room = r; stopPolling();
@@ -433,7 +505,6 @@ function enterParticipantGame() {
   document.getElementById('dep-rate-display').textContent = S.room.deposit_rate + '%';
   showScreen('screen-p-game');
 
-  // Reset to market page
   PAGE_ORDER.forEach(p => {
     const el = document.getElementById(`pg-${p}`);
     if (p === 'market') el.removeAttribute('hidden');
@@ -454,12 +525,33 @@ function enterParticipantGame() {
       toast('⏰ 게임이 종료되었습니다!', 'info');
       await loadResults();
       showScreen('screen-results');
-    } else if (r.remaining_seconds !== undefined) {
+    } else {
       S.room = r;
+      if (r.status === 'paused') {
+        showPausedBanner();
+      } else {
+        hidePausedBanner();
+      }
     }
     refreshMyRank();
     if (S.currentPage === 'market') loadMarket();
+    if (S.currentPage === 'rankings') loadParticipantRankings();
   }, 5000);
+}
+
+function showPausedBanner() {
+  let banner = document.getElementById('paused-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'paused-banner';
+    banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:var(--warn);color:#000;text-align:center;font-weight:700;font-size:13px;padding:6px;z-index:9000';
+    banner.textContent = '⏸ 게임이 일시정지되었습니다';
+    document.body.appendChild(banner);
+  }
+}
+
+function hidePausedBanner() {
+  document.getElementById('paused-banner')?.remove();
 }
 
 async function refreshMyRank() {
@@ -487,9 +579,16 @@ function startTimer(elId) {
   stopTimer();
   function tick() {
     if (!S.room?.end_time) return;
-    const rem = Math.max(0, Math.floor((new Date(S.room.end_time) - new Date()) / 1000));
-    const el  = document.getElementById(elId);
+    const el = document.getElementById(elId);
     if (!el) return;
+    let rem;
+    if (S.room.status === 'paused') {
+      rem = S.room.remaining_seconds || 0;
+      el.textContent = `⏸ ${String(Math.floor(rem/60)).padStart(2,'0')}:${String(rem%60).padStart(2,'0')}`;
+      el.className = 'timer-display warn';
+      return;
+    }
+    rem = Math.max(0, Math.floor((new Date(S.room.end_time) - new Date()) / 1000));
     el.textContent = `${String(Math.floor(rem/60)).padStart(2,'0')}:${String(rem%60).padStart(2,'0')}`;
     el.className   = 'timer-display' + (rem <= 60 ? ' danger' : rem <= 300 ? ' warn' : '');
     if (rem <= 0) stopTimer();
@@ -631,7 +730,6 @@ function showBombNews(items, showHint = true) {
     return `<div class="bomb-news-headline ${cls}">${arrow} ${item.headline}</div>`;
   }).join('');
 
-  // 애니메이션 리셋
   popup.style.display = 'flex';
   const inner = popup.querySelector('.bomb-news-inner');
   inner.style.animation = 'none';
@@ -651,6 +749,9 @@ async function refreshRoomStatus() {
   if (r.status === 'ended') {
     S.room = r; stopPolling(); stopTimer();
     await loadResults(); showScreen('screen-results');
+  } else {
+    S.room = r;
+    updatePauseBtn();
   }
 }
 
@@ -758,7 +859,6 @@ function renderGrid(stocks, prevPrices) {
       </div>`;
   }).join('');
 
-  // Flash animation on price change
   stocks.forEach(st => {
     const prev = prevPrices[st.symbol];
     if (prev && prev !== st.price) {
@@ -790,12 +890,13 @@ async function openStockModal(symbol, fallback = null) {
   document.getElementById('trade-fb').textContent = '';
   updateTotal();
 
-  // cash & holding
   const port = await api.get(`/api/rooms/${S.room.id}/portfolio`);
   if (!port.error) {
-    document.getElementById('ms-cash').textContent = krw(port.cash);
+    S.tradeCash = port.cash;
     const h = (port.holdings || []).find(x => x.symbol === symbol);
-    document.getElementById('ms-holding').textContent = h ? `${h.shares}주` : '0주';
+    S.tradeHolding = h ? h.shares : 0;
+    document.getElementById('ms-cash').textContent    = krw(port.cash);
+    document.getElementById('ms-holding').textContent = S.tradeHolding + '주';
   }
 
   document.querySelectorAll('.period-tab').forEach((b, i) => b.classList.toggle('active', i === 2));
@@ -855,9 +956,17 @@ function updateTotal() {
   document.getElementById('trade-total').textContent = krw(n * S.tradePrice);
 }
 
-async function refreshTotalAsset() {
-  const port = await api.get(`/api/rooms/${S.room.id}/portfolio`);
-  if (!port.error) document.getElementById('pg-cash').textContent = krw(port.total_value);
+function setMaxBuy() {
+  if (!S.tradePrice) return;
+  const maxShares = Math.floor(S.tradeCash / S.tradePrice);
+  document.getElementById('trade-qty').value = Math.max(1, maxShares);
+  updateTotal();
+}
+
+function setMaxSell() {
+  if (!S.tradeHolding) return;
+  document.getElementById('trade-qty').value = S.tradeHolding;
+  updateTotal();
 }
 
 async function execTrade(action) {
@@ -869,9 +978,18 @@ async function execTrade(action) {
   if (data.error) { fb.style.color = 'var(--down)'; fb.textContent = data.error; return; }
   fb.style.color = 'var(--up)'; fb.textContent = data.message;
   toast(data.message, 'success');
-  S.depCash = data.cash;
+
+  S.tradeCash = data.cash;
   document.getElementById('ms-cash').textContent = krw(data.cash);
-  refreshTotalAsset();
+
+  if (action === 'BUY') {
+    S.tradeHolding += shares;
+  } else {
+    S.tradeHolding = Math.max(0, S.tradeHolding - shares);
+  }
+  document.getElementById('ms-holding').textContent = S.tradeHolding + '주';
+
+  S.depCash = data.cash;
   refreshMyRank();
 }
 
@@ -899,7 +1017,6 @@ async function loadPortfolio() {
       <div class="summary-value" style="color:var(--warn)">${krw(data.deposits_locked)}</div>
     </div>`;
 
-  // Donut chart
   const labels = ['현금', ...data.holdings.map(h => h.name)];
   const values = [data.cash, ...data.holdings.map(h => h.current_value)];
   if (data.deposits_locked > 0) { labels.push('예금'); values.push(data.deposits_locked); }
@@ -925,7 +1042,6 @@ async function loadPortfolio() {
     document.getElementById('port-donut').parentElement.style.display = 'none';
   }
 
-  // Asset history line chart
   const lineCtx = document.getElementById('asset-line-chart')?.getContext('2d');
   if (lineCtx && S.assetHistory.length >= 2) {
     const starting = S.room?.starting_cash || S.assetHistory[0]?.value || 1;
@@ -963,7 +1079,6 @@ async function loadPortfolio() {
     });
   }
 
-  // Holdings
   const hList = document.getElementById('holdings-list');
   if (!data.holdings.length) {
     hList.innerHTML = '<div class="empty-state"><div class="e-icon">📭</div>보유 종목 없음</div>';
@@ -987,7 +1102,6 @@ async function loadPortfolio() {
       </div>`).join('');
   }
 
-  // Transactions
   S.txnPage = 1;
   await loadTxn(true);
 }
@@ -1081,7 +1195,7 @@ async function doDeposit() {
   document.getElementById('dep-preview').style.display = 'none';
   S.depCash = data.cash;
   document.getElementById('dep-cash-display').textContent = krw(data.cash);
-  refreshTotalAsset();
+  refreshMyRank();
   loadDepositsPage();
 }
 
@@ -1091,7 +1205,7 @@ async function doWithdraw(id) {
   if (data.error) { toast(data.error, 'error'); return; }
   toast(data.message, 'info');
   S.depCash = data.cash;
-  refreshTotalAsset();
+  refreshMyRank();
   loadDepositsPage();
 }
 
@@ -1126,12 +1240,47 @@ function parseUsername(username) {
 async function loadResults() {
   document.getElementById('results-room-name').textContent = S.room?.name || '';
   const data = await api.get(`/api/rooms/${S.room.id}/rankings`);
+
+  const trophyEl = document.getElementById('results-trophy');
+  if (trophyEl) {
+    trophyEl.classList.remove('results-trophy-anim');
+    void trophyEl.offsetWidth;
+    trophyEl.classList.add('results-trophy-anim');
+  }
+
+  const winnerSection = document.getElementById('results-winner-section');
+  if (data.length > 0 && winnerSection) {
+    const w = data[0];
+    const {name} = parseUsername(w.username);
+    document.getElementById('results-winner-name').textContent = name;
+    document.getElementById('results-winner-value').textContent = krw(w.total_value);
+    document.getElementById('results-winner-pct').textContent = pct(w.gain_pct);
+    winnerSection.style.display = '';
+  }
+
+  const runnersUp = document.getElementById('results-runners-up');
+  const top23 = data.filter(e => e.rank === 2 || e.rank === 3).sort((a,b) => a.rank - b.rank);
+  if (top23.length && runnersUp) {
+    runnersUp.style.display = 'flex';
+    runnersUp.innerHTML = top23.map((e, i) => {
+      const medal = e.rank === 2 ? '🥈' : '🥉';
+      const {name} = parseUsername(e.username);
+      return `
+        <div class="results-runner-card rank-${e.rank}" style="animation-delay:${0.55 + i * 0.1}s">
+          <div style="font-size:22px">${medal}</div>
+          <div style="font-weight:700;font-size:14px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${name}</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px">${e.rank}위</div>
+          <div class="${updn(e.gain_pct)}" style="font-size:12px;margin-top:4px;font-weight:600">${pct(e.gain_pct)}</div>
+        </div>`;
+    }).join('');
+  }
+
   const list = document.getElementById('results-list');
-  list.innerHTML = data.map(e => {
+  list.innerHTML = data.map((e, i) => {
     const medal = e.rank===1?'🥇':e.rank===2?'🥈':e.rank===3?'🥉':e.rank+'위';
     const {sid, name} = parseUsername(e.username);
     return `
-      <div class="results-row${e.rank<=3?' rank-'+e.rank:''}">
+      <div class="results-row${e.rank<=3?' rank-'+e.rank:''}" style="animation-delay:${i * 90}ms">
         <div style="font-size:20px;width:36px;text-align:center">${medal}</div>
         <div style="flex:1;min-width:0">
           <div style="font-weight:700">${name}${e.is_me?'<span class="chip chip-blue" style="font-size:10px;margin-left:4px">나</span>':''}</div>
@@ -1167,6 +1316,49 @@ async function loadResults() {
 
   const exportWrap = document.getElementById('results-export-wrap');
   if (exportWrap) exportWrap.hidden = !S.room?.is_host;
+
+  if (data.length > 0) setTimeout(startConfetti, 200);
+}
+
+function startConfetti() {
+  const canvas = document.getElementById('confetti-canvas');
+  if (!canvas) return;
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight;
+  const ctx = canvas.getContext('2d');
+  const COLORS = ['#d4af37','#3fb950','#58a6ff','#f85149','#e3b341','#8957e5','#c0c0c0','#ff6b6b','#4ecdc4'];
+  const pieces = Array.from({length: 110}, () => ({
+    x:   Math.random() * canvas.width,
+    y:   Math.random() * canvas.height * 0.5 - canvas.height * 0.5,
+    w:   Math.random() * 10 + 5,
+    h:   Math.random() * 5 + 3,
+    rot: Math.random() * Math.PI * 2,
+    color: COLORS[Math.floor(Math.random() * COLORS.length)],
+    vx:  (Math.random() - 0.5) * 3,
+    vy:  Math.random() * 3 + 2.5,
+    vrot: (Math.random() - 0.5) * 0.14,
+  }));
+  let frame = 0;
+  const FALL = 220, FADE = 50;
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const alpha = frame < FALL ? 1 : Math.max(0, 1 - (frame - FALL) / FADE);
+    pieces.forEach(p => {
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+      ctx.restore();
+      p.x += p.vx; p.y += p.vy; p.rot += p.vrot;
+      if (p.y > canvas.height + 20) { p.y = -20; p.x = Math.random() * canvas.width; }
+    });
+    frame++;
+    if (alpha > 0) requestAnimationFrame(draw);
+    else ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }
+  draw();
 }
 
 function downloadExcel() {
@@ -1300,237 +1492,7 @@ async function loadTips() {
 }
 
 function showEduStandalone() {
-  // Show education page from home — reuse the screen-p-game's education tab
-  // by showing just that tab without the full game UI
   toast('학습은 게임 중 [학습] 탭에서 볼 수 있습니다.', 'info');
-}
-
-// ── REMOVED: Pomodoro moved to /pomodoro (standalone app)
-const _PT_REMOVED = {
-  MODES: {
-    study: { label: '공부',     color: '#FF6B6B', glow: 'rgba(255,107,107,0.25)' },
-    short: { label: '짧은 휴식', color: '#4ECDC4', glow: 'rgba(78,205,196,0.25)'  },
-    long:  { label: '긴 휴식',  color: '#95E1A3', glow: 'rgba(149,225,163,0.25)' },
-  },
-  mode: 'study',
-  timeLeft: 25 * 60,
-  running: false,
-  cycle: 1,
-  completedPomodoros: 0,
-  totalStudySeconds: 0,
-  sessions: [],
-  customMinutes: { study: 25, short: 5, long: 15 },
-  interval: null,
-  audioCtx: null,
-};
-const PT_R = 110;
-const PT_C = 2 * Math.PI * PT_R; // ≈ 691.15
-
-function ptGetAudio() {
-  if (!PT.audioCtx) PT.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  return PT.audioCtx;
-}
-
-function ptBeep(freq, duration, delay) {
-  try {
-    const ctx = ptGetAudio();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain); gain.connect(ctx.destination);
-    osc.frequency.value = freq; osc.type = 'sine';
-    gain.gain.setValueAtTime(0, ctx.currentTime + delay);
-    gain.gain.linearRampToValueAtTime(0.3, ctx.currentTime + delay + 0.01);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + delay + duration);
-    osc.start(ctx.currentTime + delay);
-    osc.stop(ctx.currentTime + delay + duration + 0.05);
-  } catch {}
-}
-
-function ptPlayDone() {
-  ptBeep(660, 0.15, 0);
-  ptBeep(880, 0.15, 0.2);
-  ptBeep(1100, 0.3, 0.4);
-}
-
-function ptFormatTime(s) {
-  const m = Math.floor(s / 60).toString().padStart(2, '0');
-  const sec = (s % 60).toString().padStart(2, '0');
-  return `${m}:${sec}`;
-}
-
-function ptFormatTotal(s) {
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  return h > 0 ? `${h}시간 ${m}분` : `${m}분`;
-}
-
-function ptUpdateUI() {
-  const m = PT.MODES[PT.mode];
-  const totalDuration = PT.customMinutes[PT.mode] * 60;
-  const progress = PT.timeLeft / totalDuration;
-  const dashOffset = PT_C * (1 - progress);
-
-  // ring
-  const ring = document.getElementById('pt-progress-ring');
-  if (ring) {
-    ring.setAttribute('stroke', m.color);
-    ring.setAttribute('stroke-dashoffset', dashOffset.toFixed(2));
-    ring.style.filter = `drop-shadow(0 0 8px ${m.color})`;
-  }
-
-  // glow
-  const glow = document.getElementById('pt-glow');
-  if (glow) glow.style.background = `radial-gradient(circle, ${m.glow} 0%, transparent 70%)`;
-
-  // time & label
-  const disp = document.getElementById('pt-time-display');
-  if (disp) {
-    disp.textContent = ptFormatTime(PT.timeLeft);
-    disp.style.textShadow = `0 0 20px ${m.color}66`;
-    disp.classList.toggle('pulse', PT.running && PT.timeLeft <= 10);
-  }
-  const lbl = document.getElementById('pt-mode-label');
-  if (lbl) { lbl.textContent = m.label.toUpperCase(); lbl.style.color = m.color; }
-
-  // start button
-  const btn = document.getElementById('pt-start-btn');
-  if (btn) { btn.textContent = PT.running ? '⏸ 일시정지' : '▶ 시작'; btn.style.background = m.color; }
-
-  // mode tabs
-  ['study', 'short', 'long'].forEach(k => {
-    const tab = document.getElementById(`pt-tab-${k}`);
-    if (!tab) return;
-    const active = k === PT.mode;
-    tab.style.color = active ? m.color : '';
-    tab.style.borderColor = active ? m.color : '';
-    tab.style.background = active ? `${m.color}18` : '';
-  });
-
-  // dots
-  const filled = PT.completedPomodoros % 4;
-  for (let i = 0; i < 4; i++) {
-    const dot = document.getElementById(`pt-dot-${i}`);
-    if (!dot) continue;
-    dot.style.setProperty('--pt-color', m.color);
-    dot.classList.toggle('filled', i < filled);
-  }
-
-  // stats
-  const totalEl = document.getElementById('pt-total-study');
-  if (totalEl) totalEl.textContent = PT.totalStudySeconds > 0 ? ptFormatTotal(PT.totalStudySeconds) : '—';
-  const pomoEl = document.getElementById('pt-total-pomo');
-  if (pomoEl) pomoEl.textContent = `🍅 ×${PT.completedPomodoros}`;
-  const cycleEl = document.getElementById('pt-cycle-stat');
-  if (cycleEl) cycleEl.textContent = `#${PT.cycle}`;
-  const cycleHdr = document.getElementById('pt-cycle');
-  if (cycleHdr) cycleHdr.textContent = PT.cycle;
-  const pomoHdr = document.getElementById('pt-pomodoro-count');
-  if (pomoHdr) pomoHdr.textContent = PT.completedPomodoros;
-
-  // inputs disabled while running
-  ['study', 'short', 'long'].forEach(k => {
-    const inp = document.getElementById(`pt-custom-${k}`);
-    if (inp) inp.disabled = PT.running;
-  });
-
-  // session history
-  const wrap = document.getElementById('pt-sessions-wrap');
-  const list = document.getElementById('pt-sessions-list');
-  if (wrap && list) {
-    wrap.style.display = PT.sessions.length > 0 ? '' : 'none';
-    list.innerHTML = [...PT.sessions].reverse().map(s =>
-      `<div class="pt-session-chip">🍅 ${s.time} · ${s.minutes}분</div>`
-    ).join('');
-  }
-}
-
-function ptSwitchMode(newMode) {
-  if (PT.running) return;
-  PT.mode = newMode;
-  PT.timeLeft = PT.customMinutes[newMode] * 60;
-  ptUpdateUI();
-}
-
-function ptHandleComplete() {
-  PT.running = false;
-  clearInterval(PT.interval);
-  PT.interval = null;
-  ptPlayDone();
-
-  if (PT.mode === 'study') {
-    const elapsed = PT.customMinutes.study * 60;
-    PT.totalStudySeconds += elapsed;
-    PT.completedPomodoros += 1;
-    const now = new Date();
-    PT.sessions = [...PT.sessions.slice(-9), {
-      time: now.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }),
-      minutes: PT.customMinutes.study,
-    }];
-    const nextMode = PT.cycle % 4 === 0 ? 'long' : 'short';
-    PT.cycle += 1;
-    PT.mode = nextMode;
-    PT.timeLeft = PT.customMinutes[nextMode] * 60;
-  } else {
-    PT.mode = 'study';
-    PT.timeLeft = PT.customMinutes.study * 60;
-  }
-  ptUpdateUI();
-}
-
-function ptToggle() {
-  try { ptGetAudio().resume(); } catch {}
-  PT.running = !PT.running;
-  if (PT.running) {
-    PT.interval = setInterval(() => {
-      PT.timeLeft -= 1;
-      if (PT.timeLeft <= 0) {
-        PT.timeLeft = 0;
-        ptUpdateUI();
-        ptHandleComplete();
-      } else {
-        ptUpdateUI();
-      }
-    }, 1000);
-  } else {
-    clearInterval(PT.interval);
-    PT.interval = null;
-  }
-  ptUpdateUI();
-}
-
-function ptReset() {
-  PT.running = false;
-  clearInterval(PT.interval);
-  PT.interval = null;
-  PT.timeLeft = PT.customMinutes[PT.mode] * 60;
-  ptUpdateUI();
-}
-
-function ptCustomChange(key, val) {
-  const v = Math.max(1, Math.min(99, parseInt(val) || 1));
-  PT.customMinutes[key] = v;
-  if (key === PT.mode && !PT.running) {
-    PT.timeLeft = v * 60;
-    ptUpdateUI();
-  }
-}
-
-function ptInitTicks() {
-  const g = document.getElementById('pt-ticks');
-  if (!g) return;
-  let html = '';
-  for (let i = 0; i < 60; i++) {
-    const angle = (i / 60) * 2 * Math.PI;
-    const isMajor = i % 5 === 0;
-    const inner = isMajor ? PT_R - 14 : PT_R - 9;
-    const outer = PT_R - 2;
-    const x1 = (140 + inner * Math.cos(angle)).toFixed(2);
-    const y1 = (140 + inner * Math.sin(angle)).toFixed(2);
-    const x2 = (140 + outer * Math.cos(angle)).toFixed(2);
-    const y2 = (140 + outer * Math.sin(angle)).toFixed(2);
-    html += `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${isMajor ? '#2A2A35' : '#1C1C25'}" stroke-width="${isMajor ? 1.5 : 1}"/>`;
-  }
-  g.innerHTML = html;
 }
 
 // ── Init ─────────────────────────────────────────────────
@@ -1540,7 +1502,6 @@ window.addEventListener('load', async () => {
     this.value = this.value.toUpperCase();
   });
 
-  // Pre-fill join code from URL ?code=XXXXXX (QR scan)
   const urlCode = new URLSearchParams(location.search).get('code');
   if (urlCode) {
     const joinCodeEl = document.getElementById('join-code');

@@ -70,21 +70,23 @@ STOCKS = {
 
 SECTORS = sorted({v['sector'] for v in STOCKS.values()})
 
-PRICE_TTL = 20  # 가격 업데이트 주기 (초)
+PRICE_TTL = 20
+HISTORY_CACHE_TTL = 120  # 차트 데이터 캐시 유지 시간 (초)
 
 
 class StockService:
     def __init__(self):
         self._lock = Lock()
-        self._prices: dict = {}   # symbol → (timestamp, price)
-        self._prev:   dict = {}   # symbol → 시작가 (수익률 기준)
+        self._prices: dict = {}
+        self._prev:   dict = {}
         self._news: dict = {'timestamp': 0.0, 'items': []}
-        self._current_biases: dict = {}  # 현재 사이클 적용 방향
-        self._next_biases: dict = {}     # 다음 사이클 예고 방향
+        self._current_biases: dict = {}
+        self._next_biases: dict = {}
         self._last_news_ts: float = 0.0
         self._news_ttl: float = PRICE_TTL
         self._price_ttl: float = PRICE_TTL
-        self._show_hint: bool = True  # 진행자가 설정한 힌트 표시 여부 (자동 뉴스에도 유지)
+        self._show_hint: bool = True
+        self._history_cache: dict = {}  # (symbol, period) -> {'data': bars, 'ts': float}
         self._init_prices()
 
     def _init_prices(self):
@@ -139,11 +141,14 @@ class StockService:
             ts, price = self._prices[symbol]
             if now - ts < self._price_ttl:
                 return price
-            # 새 사이클 시작: 예고 편향 적용 후 다음 뉴스 생성
             self._maybe_generate_news(now)
             direction = self._current_biases.get(symbol)
             new_price = self._next_price(symbol, price, direction)
             self._prices[symbol] = (now, new_price)
+            # 가격 변경 시 해당 종목 차트 캐시 무효화
+            for key in list(self._history_cache.keys()):
+                if key[0] == symbol:
+                    del self._history_cache[key]
             return new_price
 
     def get_news(self) -> dict:
@@ -160,7 +165,7 @@ class StockService:
 
     def trigger_news(self, show_hint: bool = True):
         with self._lock:
-            self._show_hint = show_hint  # 이후 자동 뉴스에도 동일 설정 유지
+            self._show_hint = show_hint
             self._current_biases = self._next_biases.copy()
             self._generate_news(show_hint)
             self._last_news_ts = time.time()
@@ -181,6 +186,9 @@ class StockService:
             base = STOCKS[symbol]['base']
             new_price = max(base * 0.3, min(base * 3.0, new_price))
             self._prices[symbol] = (ts, new_price)
+            for key in list(self._history_cache.keys()):
+                if key[0] == symbol:
+                    del self._history_cache[key]
 
             direction = 'up' if pct > 0 else 'down'
             name = STOCKS[symbol]['name']
@@ -195,14 +203,53 @@ class StockService:
 
             return new_price
 
+    def force_sector_event(self, sector_or_all: str, pct: float):
+        with self._lock:
+            affected = []
+            for sym, info in STOCKS.items():
+                if sector_or_all != 'all' and info['sector'] != sector_or_all:
+                    continue
+                ts, price = self._prices[sym]
+                new_price = round(price * (1 + pct / 100))
+                base = info['base']
+                new_price = max(base * 0.3, min(base * 3.0, new_price))
+                self._prices[sym] = (ts, new_price)
+                affected.append(sym)
+            if affected:
+                for key in list(self._history_cache.keys()):
+                    if key[0] in affected:
+                        del self._history_cache[key]
+                direction = 'up' if pct > 0 else 'down'
+                sign = '+' if pct > 0 else ''
+                if sector_or_all == 'all':
+                    headline = f"시장 전체 {'급등' if pct > 0 else '급락'} — 전 종목 충격 ({sign}{pct:.0f}%)"
+                else:
+                    tmpl = random.choice(NEWS_TEMPLATES_UP if direction == 'up' else NEWS_TEMPLATES_DOWN)
+                    sector_syms = [s for s, i in STOCKS.items() if i['sector'] == sector_or_all]
+                    rep = random.choice(sector_syms) if sector_syms else affected[0]
+                    base_line = tmpl.format(sector=sector_or_all, name=STOCKS[rep]['name'])
+                    headline = f"[섹터 이벤트] {base_line} ({sign}{pct:.0f}%)"
+                self._news = {
+                    'timestamp': time.time(),
+                    'items': [{'headline': headline, 'direction': direction}],
+                    'show_hint': True,
+                }
+                self._last_news_ts = time.time()
+            return affected
+
     def get_prev_close(self, symbol: str):
         return self._prev.get(symbol)
 
     def get_history(self, symbol: str, period: str = '1mo', interval: str = '1d') -> list:
         if symbol not in STOCKS:
             return []
+        cache_key = (symbol, period)
         with self._lock:
+            cached = self._history_cache.get(cache_key)
+            if cached and time.time() - cached['ts'] < HISTORY_CACHE_TTL:
+                return cached['data']
             _, current = self._prices[symbol]
+
         vol = STOCKS[symbol]['vol']
         n_bars = {'1d': 30, '5d': 5, '1mo': 30, '3mo': 90}.get(period, 30)
         bars = []
@@ -219,7 +266,24 @@ class StockService:
                          'low': round(l),  'close': round(c),
                          'volume': random.randint(100000, 5000000)})
             price = c
+
+        with self._lock:
+            self._history_cache[cache_key] = {'data': bars, 'ts': time.time()}
         return bars
 
 
-stock_service = StockService()
+# 방별 독립 StockService 인스턴스
+_room_services: dict = {}
+_room_services_lock = Lock()
+
+
+def get_room_service(room_id: int) -> StockService:
+    with _room_services_lock:
+        if room_id not in _room_services:
+            _room_services[room_id] = StockService()
+        return _room_services[room_id]
+
+
+def cleanup_room_service(room_id: int):
+    with _room_services_lock:
+        _room_services.pop(room_id, None)

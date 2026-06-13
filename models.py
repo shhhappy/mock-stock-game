@@ -6,6 +6,10 @@ db = SQLAlchemy()
 
 
 def gen_code(k=6):
+    for _ in range(10):
+        code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=k))
+        if not Room.query.filter_by(code=code).first():
+            return code
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=k))
 
 
@@ -24,12 +28,13 @@ class Room(db.Model):
     name = db.Column(db.String(100), nullable=False)
     code = db.Column(db.String(6), unique=True, default=gen_code)
     host_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    status = db.Column(db.String(20), default='waiting')  # waiting / active / ended
+    status = db.Column(db.String(20), default='waiting')  # waiting / active / paused / ended
     duration_minutes = db.Column(db.Integer, default=30)
     starting_cash = db.Column(db.Float, default=10_000_000)
-    deposit_rate = db.Column(db.Float, default=3.0)  # % guaranteed at game end
+    deposit_rate = db.Column(db.Float, default=3.0)
     start_time = db.Column(db.DateTime, nullable=True)
     end_time = db.Column(db.DateTime, nullable=True)
+    paused_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     members = db.relationship('RoomMember', backref='room', lazy=True, cascade='all, delete-orphan')

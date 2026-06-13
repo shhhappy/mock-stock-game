@@ -1,10 +1,10 @@
 from flask import Flask, jsonify, request, send_from_directory, session, send_file
 from functools import wraps
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 
 from models import db, User, Room, RoomMember, RoomHolding, RoomTransaction, Deposit
-from stock_service import stock_service, STOCKS, SECTORS
+from stock_service import get_room_service, cleanup_room_service, STOCKS, SECTORS
 from education_data import GLOSSARY, GUIDES, TIPS, QUIZ_QUESTIONS
 import time, random as _random
 
@@ -17,6 +17,8 @@ db.init_app(app)
 with app.app_context():
     db.create_all()
 
+KST = timezone(timedelta(hours=9))
+
 # ── Helpers ───────────────────────────────────────────────
 
 def login_required(f):
@@ -28,15 +30,16 @@ def login_required(f):
     return deco
 
 def cur_user():
-    return User.query.get(session['user_id'])
+    return db.session.get(User, session['user_id'])
 
 def member_total_value(rid, uid):
     member = RoomMember.query.filter_by(room_id=rid, user_id=uid).first()
     if not member: return 0
+    svc = get_room_service(rid)
     total = member.cash
     for h in RoomHolding.query.filter_by(room_id=rid, user_id=uid).all():
         if h.shares > 0:
-            p = stock_service.get_price(h.symbol)
+            p = svc.get_price(h.symbol)
             if p: total += p * h.shares
     for d in Deposit.query.filter_by(room_id=rid, user_id=uid, status='active').all():
         total += d.amount
@@ -46,7 +49,12 @@ def _end_room(room):
     room.status = 'ended'
     now = datetime.utcnow()
     total_seconds = room.duration_minutes * 60
-    game_end = min(now, room.end_time) if room.end_time else now
+    if room.paused_at:
+        game_end = room.paused_at
+    elif room.end_time:
+        game_end = min(now, room.end_time)
+    else:
+        game_end = now
     for d in Deposit.query.filter_by(room_id=room.id, status='active').all():
         m = RoomMember.query.filter_by(room_id=room.id, user_id=d.user_id).first()
         if m:
@@ -57,13 +65,17 @@ def _end_room(room):
             d.status = 'matured'
             m.cash += d.amount + interest
     db.session.commit()
+    cleanup_room_service(room.id)
 
 def room_dict(room, uid=None):
     now = datetime.utcnow()
     remaining = 0
-    if room.status == 'active' and room.end_time:
-        remaining = max(0, int((room.end_time - now).total_seconds()))
-    host = User.query.get(room.host_id)
+    if room.status in ('active', 'paused') and room.end_time:
+        if room.status == 'paused' and room.paused_at:
+            remaining = max(0, int((room.end_time - room.paused_at).total_seconds()))
+        else:
+            remaining = max(0, int((room.end_time - now).total_seconds()))
+    host = db.session.get(User, room.host_id)
     return {
         'id': room.id, 'name': room.name, 'code': room.code,
         'host_id': room.host_id, 'host_name': host.username if host else '',
@@ -78,12 +90,12 @@ def room_dict(room, uid=None):
     }
 
 def find_active_room(uid):
-    r = Room.query.filter(Room.host_id == uid, Room.status.in_(['waiting','active'])).first()
+    r = Room.query.filter(Room.host_id == uid, Room.status.in_(['waiting','active','paused'])).first()
     if r: return r
     m = RoomMember.query.join(Room).filter(
-        RoomMember.user_id == uid, Room.status.in_(['waiting','active'])
+        RoomMember.user_id == uid, Room.status.in_(['waiting','active','paused'])
     ).first()
-    return Room.query.get(m.room_id) if m else None
+    return db.session.get(Room, m.room_id) if m else None
 
 
 # ── Static ────────────────────────────────────────────────
@@ -123,7 +135,7 @@ def logout():
 def get_me():
     if 'user_id' not in session:
         return jsonify({'error': 'unauth'}), 401
-    user = User.query.get(session['user_id'])
+    user = db.session.get(User, session['user_id'])
     if not user:
         session.pop('user_id', None)
         return jsonify({'error': 'unauth'}), 401
@@ -141,7 +153,7 @@ def create_room():
     if not name or len(name) < 2:
         return jsonify({'error': '방 이름은 2자 이상이어야 합니다.'}), 400
     user = cur_user()
-    if Room.query.filter(Room.host_id == user.id, Room.status.in_(['waiting','active'])).first():
+    if Room.query.filter(Room.host_id == user.id, Room.status.in_(['waiting','active','paused'])).first():
         return jsonify({'error': '이미 진행 중인 방이 있습니다.'}), 400
     room = Room(
         name=name, host_id=user.id,
@@ -188,6 +200,33 @@ def start_room(rid):
     db.session.commit()
     return jsonify({'room': room_dict(room, user.id)})
 
+@app.route('/api/rooms/<int:rid>/pause', methods=['POST'])
+@login_required
+def pause_room(rid):
+    room = Room.query.get_or_404(rid)
+    user = cur_user()
+    if room.host_id != user.id: return jsonify({'error': '진행자만 일시정지할 수 있습니다.'}), 403
+    if room.status != 'active': return jsonify({'error': '진행 중인 게임만 일시정지할 수 있습니다.'}), 400
+    room.status = 'paused'
+    room.paused_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify({'room': room_dict(room, user.id)})
+
+@app.route('/api/rooms/<int:rid>/resume', methods=['POST'])
+@login_required
+def resume_room(rid):
+    room = Room.query.get_or_404(rid)
+    user = cur_user()
+    if room.host_id != user.id: return jsonify({'error': '진행자만 재개할 수 있습니다.'}), 403
+    if room.status != 'paused': return jsonify({'error': '일시정지된 게임만 재개할 수 있습니다.'}), 400
+    now = datetime.utcnow()
+    paused_duration = now - room.paused_at
+    room.end_time += paused_duration
+    room.status = 'active'
+    room.paused_at = None
+    db.session.commit()
+    return jsonify({'room': room_dict(room, user.id)})
+
 @app.route('/api/rooms/<int:rid>/end', methods=['POST'])
 @login_required
 def end_room(rid):
@@ -209,7 +248,7 @@ def host_members(rid):
     if room.host_id != user.id: return jsonify({'error': '권한 없음'}), 403
     result = []
     for m in RoomMember.query.filter_by(room_id=rid).all():
-        u = User.query.get(m.user_id)
+        u = db.session.get(User, m.user_id)
         total = member_total_value(rid, m.user_id)
         gain_pct = (total - room.starting_cash) / room.starting_cash * 100 if room.starting_cash else 0
         result.append({
@@ -220,6 +259,19 @@ def host_members(rid):
     for i, r in enumerate(result): r['rank'] = i + 1
     return jsonify(result)
 
+@app.route('/api/rooms/<int:rid>/host/members/<int:uid>', methods=['DELETE'])
+@login_required
+def kick_member(rid, uid):
+    room = Room.query.get_or_404(rid)
+    user = cur_user()
+    if room.host_id != user.id: return jsonify({'error': '권한 없음'}), 403
+    if room.status != 'waiting': return jsonify({'error': '대기 중인 방에서만 강퇴할 수 있습니다.'}), 400
+    m = RoomMember.query.filter_by(room_id=rid, user_id=uid).first()
+    if not m: return jsonify({'error': '참여자를 찾을 수 없습니다.'}), 404
+    db.session.delete(m)
+    db.session.commit()
+    return jsonify({'ok': True})
+
 @app.route('/api/rooms/<int:rid>/host/lobby-members')
 @login_required
 def lobby_members(rid):
@@ -228,7 +280,7 @@ def lobby_members(rid):
     if room.host_id != user.id: return jsonify({'error': '권한 없음'}), 403
     result = []
     for m in RoomMember.query.filter_by(room_id=rid).all():
-        u = User.query.get(m.user_id)
+        u = db.session.get(User, m.user_id)
         result.append({'user_id': m.user_id, 'username': u.username})
     return jsonify(result)
 
@@ -247,7 +299,7 @@ def host_adjust(rid):
     m.cash = max(0, m.cash + delta)
     db.session.add(RoomTransaction(room_id=rid, user_id=target_uid, symbol='ADJ', action='ADJ', amount=delta, note=note))
     db.session.commit()
-    target = User.query.get(target_uid)
+    target = db.session.get(User, target_uid)
     return jsonify({'message': f'{target.username} 자산 {delta:+,.0f}원 조정', 'new_cash': m.cash})
 
 
@@ -257,15 +309,16 @@ def host_news_interval(rid):
     room = Room.query.get_or_404(rid)
     user = cur_user()
     if room.host_id != user.id: return jsonify({'error': '권한 없음'}), 403
+    svc = get_room_service(rid)
     if request.method == 'POST':
         d = request.json or {}
         if 'news_seconds' in d:
-            stock_service.set_news_interval(float(d['news_seconds']))
+            svc.set_news_interval(float(d['news_seconds']))
         if 'price_seconds' in d:
-            stock_service.set_price_interval(float(d['price_seconds']))
+            svc.set_price_interval(float(d['price_seconds']))
     return jsonify({
-        'news_seconds': stock_service.get_news_interval(),
-        'price_seconds': stock_service.get_price_interval(),
+        'news_seconds': svc.get_news_interval(),
+        'price_seconds': svc.get_price_interval(),
     })
 
 
@@ -275,12 +328,13 @@ def host_news_interval(rid):
 @login_required
 def get_stocks(rid):
     Room.query.get_or_404(rid)
+    svc = get_room_service(rid)
     sf = request.args.get('sector','')
     result = []
     for sym, info in STOCKS.items():
         if sf and info['sector'] != sf: continue
-        price = stock_service.get_price(sym)
-        prev  = stock_service.get_prev_close(sym)
+        price = svc.get_price(sym)
+        prev  = svc.get_prev_close(sym)
         if price:
             ch = (price - prev) if prev else 0
             ch_pct = (ch / prev * 100) if prev else 0
@@ -303,7 +357,7 @@ def host_force_price(rid):
     pct = float(d.get('pct', 0))
     if not symbol or abs(pct) > 50:
         return jsonify({'error': '잘못된 요청'}), 400
-    new_price = stock_service.force_price(symbol, pct)
+    new_price = get_room_service(rid).force_price(symbol, pct)
     if new_price is None:
         return jsonify({'error': '종목 없음'}), 404
     return jsonify({'symbol': symbol, 'price': new_price})
@@ -317,14 +371,15 @@ def host_send_news(rid):
     if room.host_id != user.id: return jsonify({'error': '권한 없음'}), 403
     d = request.json or {}
     show_hint = bool(d.get('show_hint', True))
-    stock_service.trigger_news(show_hint)
-    return jsonify(stock_service.get_news())
+    svc = get_room_service(rid)
+    svc.trigger_news(show_hint)
+    return jsonify(svc.get_news())
 
 @app.route('/api/rooms/<int:rid>/news')
 @login_required
 def get_room_news(rid):
     Room.query.get_or_404(rid)
-    return jsonify(stock_service.get_news())
+    return jsonify(get_room_service(rid).get_news())
 
 
 @app.route('/api/rooms/<int:rid>/stocks/<symbol>/chart')
@@ -335,7 +390,7 @@ def get_chart(rid, symbol):
     pm = {'1d':('1d','5m'),'1w':('5d','30m'),'1mo':('1mo','1d'),'3mo':('3mo','1d'),'1y':('1y','1wk')}
     period = request.args.get('period','1mo')
     yp, yi = pm.get(period, ('1mo','1d'))
-    hist = stock_service.get_history(symbol, period=yp, interval=yi)
+    hist = get_room_service(rid).get_history(symbol, period=yp, interval=yi)
     return jsonify({'symbol': symbol, 'name': STOCKS[symbol]['name'], 'history': hist})
 
 
@@ -360,7 +415,7 @@ def trade(rid):
     if symbol not in STOCKS: return jsonify({'error': '유효하지 않은 종목'}), 400
     if action not in ('BUY','SELL'): return jsonify({'error': '유효하지 않은 거래'}), 400
     if shares <= 0: return jsonify({'error': '수량은 1 이상'}), 400
-    price = stock_service.get_price(symbol)
+    price = get_room_service(rid).get_price(symbol)
     if not price: return jsonify({'error': '주가를 불러올 수 없습니다.'}), 500
     holding = RoomHolding.query.filter_by(room_id=rid, user_id=user.id, symbol=symbol).first()
     amount = price * shares
@@ -396,10 +451,11 @@ def get_portfolio(rid):
     user = cur_user()
     m = RoomMember.query.filter_by(room_id=rid, user_id=user.id).first()
     if not m: return jsonify({'error': '참여자가 아닙니다.'}), 403
+    svc = get_room_service(rid)
     holdings_data, sv = [], 0.0
     for h in RoomHolding.query.filter_by(room_id=rid, user_id=user.id).all():
         if h.shares <= 0: continue
-        price = stock_service.get_price(h.symbol)
+        price = svc.get_price(h.symbol)
         if not price: continue
         cv = price * h.shares
         gain = cv - h.avg_price * h.shares
@@ -432,7 +488,7 @@ def get_rankings(rid):
     start = room.starting_cash
     board = []
     for m in RoomMember.query.filter_by(room_id=rid).all():
-        u = User.query.get(m.user_id)
+        u = db.session.get(User, m.user_id)
         total = member_total_value(rid, m.user_id)
         board.append({'user_id': m.user_id, 'username': u.username,
                       'total_value': round(total,0),
@@ -460,7 +516,7 @@ def get_transactions(rid):
             'name': STOCKS.get(t.symbol,{}).get('name', '자산조정') if t.action != 'ADJ' else '자산조정',
             'action': t.action, 'shares': t.shares, 'price': t.price,
             'amount': t.amount, 'note': t.note,
-            'timestamp': t.timestamp.strftime('%m-%d %H:%M'),
+            'timestamp': t.timestamp.replace(tzinfo=timezone.utc).astimezone(KST).strftime('%m-%d %H:%M'),
         } for t in pg.items],
         'total': pg.total, 'pages': pg.pages, 'current_page': page,
     })
@@ -490,7 +546,7 @@ def get_deposits(rid):
             'interest_earned': d.interest_earned,
             'expected_interest': expected_interest,
             'max_interest': round(max_interest, 0),
-            'created_at': d.created_at.strftime('%m-%d %H:%M'),
+            'created_at': d.created_at.replace(tzinfo=timezone.utc).astimezone(KST).strftime('%m-%d %H:%M'),
         })
     return jsonify(result)
 
@@ -523,7 +579,8 @@ def create_deposit(rid):
 @app.route('/api/rooms/<int:rid>/deposits/<int:did>', methods=['DELETE'])
 @login_required
 def withdraw_deposit(rid, did):
-    dep = Deposit.query.get_or_404(did)
+    dep = db.session.get(Deposit, did)
+    if not dep: return jsonify({'error': '예금을 찾을 수 없습니다.'}), 404
     user = cur_user()
     if dep.room_id != rid or dep.user_id != user.id: return jsonify({'error': '권한 없음'}), 403
     if dep.status != 'active': return jsonify({'error': '이미 처리된 예금'}), 400
@@ -557,8 +614,8 @@ def get_tips():
 
 # ── Quiz ──────────────────────────────────────────────────
 
-_quiz_state: dict = {}     # (room_id, user_id) -> {'qid': int, 'cooldown_until': float}
-_quiz_settings: dict = {}  # room_id -> {'reward_pct': float, 'penalty_pct': float}
+_quiz_state: dict = {}
+_quiz_settings: dict = {}
 
 @app.route('/api/rooms/<int:rid>/quiz', methods=['GET'])
 @login_required
@@ -609,6 +666,24 @@ def submit_quiz(rid):
     return jsonify({'correct': correct, 'reward': reward, 'penalty': penalty, 'explanation': q['ex']})
 
 
+@app.route('/api/rooms/<int:rid>/host/market-event', methods=['POST'])
+@login_required
+def host_market_event(rid):
+    room = Room.query.get_or_404(rid)
+    user = cur_user()
+    if room.host_id != user.id: return jsonify({'error': '권한 없음'}), 403
+    d = request.json or {}
+    sector = d.get('sector', 'all')
+    try: pct = float(d.get('pct', 0))
+    except: return jsonify({'error': '잘못된 변동률'}), 400
+    if pct == 0 or abs(pct) > 50:
+        return jsonify({'error': '변동률은 ±1 ~ ±50% 사이'}), 400
+    affected = get_room_service(rid).force_sector_event(sector, pct)
+    label = '전체 시장' if sector == 'all' else f'{sector} 섹터'
+    sign = '+' if pct > 0 else ''
+    return jsonify({'message': f'{label} {sign}{pct:.0f}% 적용 ({len(affected)}개 종목)', 'count': len(affected)})
+
+
 @app.route('/api/rooms/<int:rid>/host/quiz-settings', methods=['GET', 'POST'])
 @login_required
 def quiz_settings(rid):
@@ -642,7 +717,7 @@ def export_rankings(rid):
     start = room.starting_cash
     board = []
     for m in RoomMember.query.filter_by(room_id=rid).all():
-        u = User.query.get(m.user_id)
+        u = db.session.get(User, m.user_id)
         total = member_total_value(rid, m.user_id)
         gain_pct = (total - start) / start * 100 if start else 0
         parts = u.username.split(' ', 1)
@@ -704,4 +779,7 @@ def export_rankings(rid):
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(
+        debug=os.environ.get('FLASK_DEBUG', 'false').lower() == 'true',
+        host='0.0.0.0', port=5000,
+    )
