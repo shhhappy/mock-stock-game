@@ -109,3 +109,35 @@
 - **`enterParticipantGame()`의 PAGE_ORDER 초기화 루프** (`app.js:437-445`): 게임 진입 시 `PAGE_ORDER.forEach`로 모든 페이지를 순회하며 `hidden` 속성을 개별 토글함. `screen-p-game`이 처음 로드될 때는 `market` 외 모든 페이지가 이미 `hidden`이므로 이 루프는 실질적으로 시장 탭만 보이게 하는 작업. `document.querySelectorAll('#screen-p-game .page').forEach(el => el.setAttribute('hidden',''))` 후 `document.getElementById('pg-market').removeAttribute('hidden')` 두 줄로 단순화 가능.
 
 - **`get_room()` 자동 종료 체크가 일부 엔드포인트에서 누락** (`app.py:169-175`, `app.py:427-443`): `get_room()` 라우트는 `end_time` 초과 시 자동으로 `_end_room()`을 호출하지만, `get_rankings()`·`get_portfolio()` 등 다른 엔드포인트는 만료 체크 없이 `active` 상태를 반환함. 선생님이 탭을 닫아도 학생 폴링이 계속되면 종료 시각이 지난 뒤에도 `remaining_seconds`가 0으로 보이지 않아 타이머가 계속 카운트됨. 자동 종료 체크를 `before_request` 훅이나 공통 `get_active_room()` 헬퍼로 통합하면 일관성 보장.
+
+---
+
+## 2026-06-13
+
+### 추가하면 좋을 기능
+
+- **진행자 전체화면 순위판(프로젝터 모드)** (`app.py:427-443`, `index.html:128-131`): 교실에서 교사가 빔 프로젝터로 화면을 띄울 때 진행자 대시보드는 모바일 레이아웃이라 읽기 어려움. `/api/rooms/<rid>/rankings`를 주기적으로 폴링해 순위·수익률·타이머를 큰 글씨로 표시하는 `/projector?room=<rid>` 전용 페이지를 추가하면 수업 몰입도 향상. 별도 인증 없이 방 코드 URL만으로 접근 가능하게 하고 자동 새로고침(5초)만 구현해도 즉시 활용 가능.
+
+- **`host_adjust` delta 입력값 범위 검증 없음** (`app.py:243-244`): `delta = float(d.get('delta', 0))`에 최소/최대 검증이 전혀 없음. 교사가 `500000000`(5억)을 `5000000`(500만) 대신 실수로 입력하면 학생의 자산이 비정상적으로 커짐. `if abs(delta) > room.starting_cash * 10: return jsonify({'error': ...}), 400` 정도의 상한선을 추가하거나, 프론트엔드 `adj-delta` 입력에 `max`/`min` 속성을 `room.starting_cash` 기준으로 설정하면 실수 방지 가능 (`index.html:511`, `app.js:382`).
+
+- **폭탄뉴스 팝업 수동 닫기 불가** (`app.js:619-647`): 팝업이 3초 후 자동으로 사라지고(`app.js:644`) 학생이 직접 닫을 수 없음. 읽는 속도가 느린 학생은 내용을 놓침. 팝업 우상단에 `×` 버튼을 추가해 `_newsPopupTimer`를 클리어하고 팝업을 즉시 숨길 수 있게 하거나, 클릭 시 팝업이 닫히도록 `onclick` 핸들러를 `.bomb-news-inner`에 추가하는 것이 가장 간단한 해법 (`index.html:533-546`).
+
+- **`get_history()` 1년 차트 봉 수 부족** (`stock_service.py:207`, `app.py:335`): `n_bars` 딕셔너리에 `'1y'` 키가 없어 기본값 30이 적용됨. UI에서 "1년" 탭을 누르면 30개 봉이 표시되지만 1년치 주간 데이터라면 최소 52개 봉이 필요. `stock_service.py:207` 딕셔너리에 `'1y': 52`를 추가하면 해결. 함께 `'1d': 78`(5분봉 기준 6.5시간)처럼 기간별 봉 수를 의미 있게 재정의하면 더 완성도 있는 차트 제공 가능.
+
+- **진행자가 개별 참여자 포트폴리오 확인 불가** (`app.py:204-221`, `index.html:134-140`): 진행자 순위 화면에서 학생 이름을 눌러도 해당 학생의 보유 종목 내역이 보이지 않음. 수업 중 교사가 특정 학생의 투자 전략을 확인하거나 설명할 때 유용함. `GET /api/rooms/<rid>/host/member-portfolio?uid=<uid>` 엔드포인트를 추가하고 `host-member-row` 클릭 시 모달로 보유 종목 목록을 표시하면 교육적 활용도가 높아짐.
+
+- **엑셀 내보내기가 게임 진행 중에도 호출 가능** (`app.py:632-701`): `export_rankings()`는 `room.host_id == user.id` 체크만 하고 `room.status`를 확인하지 않음. 게임 중간에 다운로드하면 부분적인 최종 자산이 "결과"로 저장될 수 있음. `if room.status != 'ended'` 조건을 추가하거나 경고 헤더(`X-Game-Status: active`)를 응답에 포함해 교사에게 알리는 방안 권장.
+
+---
+
+### 제거/단순화할 것들
+
+- **`force_price()` 구(舊) 타임스탬프 보존으로 강제 가격이 즉시 덮여쓰임** (`stock_service.py:179`): `self._prices[symbol] = (ts, new_price)`에서 기존 `ts`를 재사용하므로, 가격 TTL이 이미 만료된 종목이라면 다음 `get_price()` 호출 시 즉시 새 가격으로 덮어씌어져 교사의 강제 조정이 사라짐. `(ts, new_price)` 대신 `(time.time(), new_price)`로 교체하면 강제 조정 후 최소 `_price_ttl`(기본 20초)이 유지됨.
+
+- **`setDepPct()` 함수가 스테일 `S.depCash` 캐시를 사용** (`app.js:1022-1027`): "10%/25%/50%/전액" 버튼이 `S.depCash`를 기준으로 금액을 계산하는데, `S.depCash`는 거래 완료 또는 예금 페이지 재진입 시에만 갱신됨. 학생이 시장 탭에서 주식을 매도해 현금이 늘어난 뒤 예금 탭으로 오면 이전 현금 기준으로 계산된 금액이 입력되어 혼란을 줌. `loadDepositsPage()` 내에서 `S.depCash = port.cash`를 이미 수행하므로(`app.js:1050`) 버튼은 `S.depCash`가 아닌 해당 함수 완료 후 표시된 값을 참조하도록 초기화 순서를 보장하거나, 매번 `setDepPct()` 호출 시 `dep-cash-display` DOM에서 최신값을 파싱하는 방식으로 단순화 가능.
+
+- **`doAuth()` 이미 세션이 있는 경우에도 매번 API 호출** (`app.js:58-65`, `app.js:110`, `app.js:130`): `doCreateRoom()`과 `doJoinRoom()` 모두 `doAuth(sid, name)`를 항상 호출함. 이미 `S.user`가 설정되어 있고 사용자명이 동일한 경우에도 `POST /api/auth/enter`가 실행됨. 한 학생이 같은 이름으로 두 번 입장하면 문제없지만, 만약 앞서 방에 참여했다가 새로 입력하는 경우 의도치 않게 다른 계정이 만들어질 수 있음. `if (S.user && S.user.username === \`${sid} ${name}\`) { /* skip doAuth */ }` 가드를 추가하면 불필요한 왕복 요청 1건 절약.
+
+- **진행자 바차트 y축 이름 잘림 (30명 이상 시)** (`app.js:350`, `app.js:328-365`): `y: {ticks: {color: '#e6edf3'}}` 설정에 `maxTicksLimit`이나 `callback`이 없어 학생이 많아질수록 이름이 겹치거나 잘림. `ticks: { callback: (_, i) => labels[i]?.length > 8 ? labels[i].slice(0,8)+'…' : labels[i], font:{size:10} }` 형태로 이름을 잘라주거나, 학생 수가 15명 초과 시 차트 컨테이너 높이를 `members.length * 28`px로 동적 조정하면 가독성 향상. `app.js:329` 참조.
+
+- **`enterParticipantGame()` 페이지 초기화 루프 후 불필요한 `querySelector` 호출** (`app.js:437-445`, `app.js:443`): `PAGE_ORDER.forEach` 루프 후 `document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'))`와 `document.getElementById('nav-market').classList.add('active')` 두 줄이 나오는데, 게임에 처음 입장하는 경우 `.nav-item.active`는 항상 `nav-market`이어야 하므로 루프 전체를 `document.querySelectorAll('#screen-p-game .page').forEach(p => p.setAttribute('hidden',''))` + `document.getElementById('pg-market').removeAttribute('hidden')` 두 줄과 nav 리셋 1회로 단순화 가능 (어제 제안과 연계, 실제 코드 변경은 간단함).
