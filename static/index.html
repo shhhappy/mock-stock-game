@@ -497,6 +497,7 @@
     <div class="modal-handle"></div>
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
       <div>
+        <button class="back-btn" style="font-size:13px;margin-bottom:4px;display:block" onclick="closeModal('modal-stock')">← 뒤로</button>
         <div style="font-size:18px;font-weight:700" id="ms-name">–</div>
         <span class="chip chip-blue" id="ms-sector">–</span>
       </div>
@@ -512,7 +513,7 @@
       <button class="period-tab" onclick="loadChart('3mo')">3달</button>
       <button class="period-tab" onclick="loadChart('1y')">1년</button>
     </div>
-    <div style="position:relative;height:200px;margin-bottom:16px">
+    <div style="position:relative;height:130px;margin-bottom:12px">
       <canvas id="stock-chart"></canvas>
     </div>
     <div class="divider"></div>
