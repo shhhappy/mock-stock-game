@@ -94,6 +94,12 @@ function goHome() {
   showLanding();
 }
 
+function confirmLeaveGame() {
+  if (confirm('게임을 나가시겠습니까?\n진행 중인 게임에서 퇴장합니다.')) {
+    goHome();
+  }
+}
+
 // ── Room: Create ─────────────────────────────────────────
 async function doCreateRoom() {
   const sid      = document.getElementById('host-student-id').value.trim();
