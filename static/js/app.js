@@ -390,8 +390,8 @@ async function loadHostMembers() {
           ${sign}${m.gain_pct.toFixed(1)}%
         </span>
         <span style="font-weight:700;min-width:90px;text-align:right;font-size:13px">${krw(m.total_value)}</span>
-        <button class="btn btn-secondary btn-sm" onclick="openStudentTxn(${m.user_id},'${m.username.replace(/'/g,&quot;\\\'&quot;)}')" style="margin-left:4px;padding:4px 8px;font-size:11px">거래</button>
-        <button class="btn btn-secondary btn-sm" onclick="openAdjust(${m.user_id},'${m.username.replace(/'/g,&quot;\\\'&quot;)}',${m.cash})" style="margin-left:4px;padding:4px 8px">조정</button>
+        <button class="btn btn-secondary btn-sm" onclick="openStudentTxn(${m.user_id},'${m.username.replace(/'/g,"\\'")}')" style="margin-left:4px;padding:4px 8px;font-size:11px">거래</button>
+        <button class="btn btn-secondary btn-sm" onclick="openAdjust(${m.user_id},'${m.username.replace(/'/g,"\\'")}',${m.cash})" style="margin-left:4px;padding:4px 8px">조정</button>
       </div>`;
   }).join('');
 
