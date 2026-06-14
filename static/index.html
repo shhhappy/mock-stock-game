@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>모의주식게임</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=13">
+  <link rel="stylesheet" href="/static/css/style.css?v=14">
 </head>
 <body>
 
@@ -201,6 +201,35 @@
       </div>
       <button class="btn btn-secondary btn-full btn-sm" onclick="doSetQuizSettings()">적용</button>
       <div id="quiz-settings-msg" style="font-size:12px;color:var(--muted);margin-top:6px"></div>
+    </div>
+
+    <div style="margin-top:12px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px">
+      <div class="section-title" style="margin-bottom:4px">🎰 룰렛 배율 설정</div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:10px">꽝(70%)은 항상 0배 고정 · 확률은 변경 불가</div>
+      <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 10px;align-items:center;margin-bottom:12px">
+        <span style="font-size:12px;color:var(--muted)">20% 칸</span>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input id="rlt-mult-1" class="form-input" type="number" min="1" max="9999" step="1" value="1" style="width:72px;text-align:center">
+          <span style="font-size:12px;color:var(--muted)">배 (현: <span id="rlt-mult-1-cur">1배</span>)</span>
+        </div>
+        <span style="font-size:12px;color:var(--muted)">7% 칸</span>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input id="rlt-mult-2" class="form-input" type="number" min="1" max="9999" step="1" value="2" style="width:72px;text-align:center">
+          <span style="font-size:12px;color:var(--muted)">배 (현: <span id="rlt-mult-2-cur">2배</span>)</span>
+        </div>
+        <span style="font-size:12px;color:var(--muted)">2% 칸</span>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input id="rlt-mult-3" class="form-input" type="number" min="1" max="9999" step="1" value="5" style="width:72px;text-align:center">
+          <span style="font-size:12px;color:var(--muted)">배 (현: <span id="rlt-mult-3-cur">5배</span>)</span>
+        </div>
+        <span style="font-size:12px;color:var(--muted)">1% 칸</span>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input id="rlt-mult-4" class="form-input" type="number" min="1" max="9999" step="1" value="25" style="width:72px;text-align:center">
+          <span style="font-size:12px;color:var(--muted)">배 (현: <span id="rlt-mult-4-cur">25배</span>)</span>
+        </div>
+      </div>
+      <button class="btn btn-secondary btn-full btn-sm" onclick="doSetRltConfig()">적용</button>
+      <div id="rlt-config-msg" style="font-size:12px;color:var(--muted);margin-top:6px"></div>
     </div>
 
   </div>
@@ -468,11 +497,11 @@
         <div class="roulette-center"></div>
       </div>
       <div class="roulette-legend">
-        <span class="rl-item rl-kkang">꽝 70%</span>
-        <span class="rl-item rl-1x">1배 20%</span>
-        <span class="rl-item rl-2x">2배 7%</span>
-        <span class="rl-item rl-5x">5배 2%</span>
-        <span class="rl-item rl-25x">25배 1%</span>
+        <span class="rl-item rl-kkang" id="rlt-leg-0">꽝 70%</span>
+        <span class="rl-item rl-1x"    id="rlt-leg-1">1배 20%</span>
+        <span class="rl-item rl-2x"    id="rlt-leg-2">2배 7%</span>
+        <span class="rl-item rl-5x"    id="rlt-leg-3">5배 2%</span>
+        <span class="rl-item rl-25x"   id="rlt-leg-4">25배 1%</span>
       </div>
       <div id="rlt-bet-section">
         <div style="font-size:12px;color:var(--muted);margin-bottom:6px;text-align:center">
@@ -755,6 +784,6 @@
 <div class="toast-container" id="toasts"></div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
-<script src="/static/js/app.js?v=11"></script>
+<script src="/static/js/app.js?v=12"></script>
 </body>
 </html>

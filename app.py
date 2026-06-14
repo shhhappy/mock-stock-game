@@ -116,6 +116,18 @@ ROULETTE_OUTCOMES = [
     {'label': '25배','multiplier': 25, 'weight': 1,  'seg_start': 356.4, 'seg_end': 360},
 ]
 
+_roulette_config = {}  # room_id -> list of 5 multipliers (index 0 is always 0 = 꽝)
+_DEFAULT_RLT_MULTS = [0, 1, 2, 5, 25]
+
+def _rlt_outcomes(rid):
+    mults = _roulette_config.get(rid, _DEFAULT_RLT_MULTS)
+    result = []
+    for i, o in enumerate(ROULETTE_OUTCOMES):
+        m = mults[i] if i < len(mults) else o['multiplier']
+        label = '꽝' if m == 0 else f'{int(m)}배' if m == int(m) else f'{m}배'
+        result.append({**o, 'multiplier': m, 'label': label})
+    return result
+
 def room_dict(room, uid=None):
     now = datetime.utcnow()
     remaining = 0
@@ -681,7 +693,8 @@ def get_minigame(rid):
     if not m:
         return jsonify({'error': '참여자가 아닙니다.'}), 403
     spins_used = RoomTransaction.query.filter_by(room_id=rid, user_id=user.id, action='RLT').count()
-    return jsonify({'spins_left': max(0, 3 - spins_used), 'cash': m.cash})
+    mults = _roulette_config.get(rid, _DEFAULT_RLT_MULTS)
+    return jsonify({'spins_left': max(0, 3 - spins_used), 'cash': m.cash, 'multipliers': mults})
 
 @app.route('/api/rooms/<int:rid>/minigame/spin', methods=['POST'])
 @login_required
@@ -709,7 +722,8 @@ def minigame_spin(rid):
         return jsonify({'error': '금액 오류'}), 400
     if bet <= 0 or bet > m.cash:
         return jsonify({'error': '베팅 금액이 올바르지 않습니다.'}), 400
-    outcome = _random.choices(ROULETTE_OUTCOMES, weights=[o['weight'] for o in ROULETTE_OUTCOMES])[0]
+    outcomes = _rlt_outcomes(rid)
+    outcome = _random.choices(outcomes, weights=[o['weight'] for o in outcomes])[0]
     winnings = round(bet * outcome['multiplier'])
     net = winnings - bet
     m.cash = m.cash - bet + winnings
@@ -933,6 +947,23 @@ def host_market_event(rid):
     label = '전체 시장' if sector == 'all' else f'{sector} 섹터'
     sign = '+' if pct > 0 else ''
     return jsonify({'message': f'{label} {sign}{pct:.0f}% 적용 ({len(affected)}개 종목)', 'count': len(affected)})
+
+
+@app.route('/api/rooms/<int:rid>/host/roulette-config', methods=['GET', 'POST'])
+@login_required
+def host_roulette_config(rid):
+    room = Room.query.get_or_404(rid)
+    user = cur_user()
+    if room.host_id != user.id: return jsonify({'error': '권한 없음'}), 403
+    if request.method == 'GET':
+        return jsonify({'multipliers': _roulette_config.get(rid, list(_DEFAULT_RLT_MULTS))})
+    d = request.json or {}
+    raw = d.get('multipliers', _DEFAULT_RLT_MULTS)
+    if not isinstance(raw, list) or len(raw) != 5:
+        return jsonify({'error': '형식 오류'}), 400
+    mults = [0] + [max(0, float(x)) for x in raw[1:]]
+    _roulette_config[rid] = mults
+    return jsonify({'ok': True, 'multipliers': mults})
 
 
 @app.route('/api/rooms/<int:rid>/host/quiz-settings', methods=['GET', 'POST'])

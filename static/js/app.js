@@ -237,6 +237,7 @@ function enterHostGame() {
   switchHostTab('rank');
   loadHostMembers();
   loadNewsInterval();
+  loadRltConfig();
   startNewsPolling();
   updatePauseBtn();
   S.pollInterval = setInterval(() => {
@@ -821,10 +822,55 @@ const RLT_SEGS = [
 ];
 let _rltSpinning = false;
 let _rltCash = 0;
+let _rltMults = [0, 1, 2, 5, 25];
+const _RLT_WEIGHTS = [70, 20, 7, 2, 1];
+
+function _rltLabel(m) { return m === 0 ? '꽝' : `${Number.isInteger(m) ? m : m}배`; }
+
+function updateRltLegend(mults) {
+  _rltMults = mults;
+  const labels = mults.map(_rltLabel);
+  labels.forEach((lbl, i) => {
+    const el = document.getElementById(`rlt-leg-${i}`);
+    if (el) el.textContent = `${lbl} ${_RLT_WEIGHTS[i]}%`;
+  });
+}
+
+async function loadRltConfig() {
+  const data = await api.get(`/api/rooms/${S.room.id}/host/roulette-config`);
+  if (data.error) return;
+  const m = data.multipliers;
+  _rltMults = m;
+  ['rlt-mult-1','rlt-mult-2','rlt-mult-3','rlt-mult-4'].forEach((id, i) => {
+    const el = document.getElementById(id);
+    if (el) el.value = m[i + 1];
+  });
+  ['rlt-mult-1-cur','rlt-mult-2-cur','rlt-mult-3-cur','rlt-mult-4-cur'].forEach((id, i) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = `${m[i + 1]}배`;
+  });
+}
+
+async function doSetRltConfig() {
+  const inputs = ['rlt-mult-1','rlt-mult-2','rlt-mult-3','rlt-mult-4']
+    .map(id => parseFloat(document.getElementById(id)?.value) || 1);
+  const mults = [0, ...inputs];
+  const data = await api.post(`/api/rooms/${S.room.id}/host/roulette-config`, { multipliers: mults });
+  const msg = document.getElementById('rlt-config-msg');
+  if (data.error) { msg.style.color = 'var(--down)'; msg.textContent = data.error; return; }
+  msg.style.color = 'var(--muted)';
+  msg.textContent = `적용됨: 꽝 / ${inputs[0]}배 / ${inputs[1]}배 / ${inputs[2]}배 / ${inputs[3]}배`;
+  ['rlt-mult-1-cur','rlt-mult-2-cur','rlt-mult-3-cur','rlt-mult-4-cur'].forEach((id, i) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = `${inputs[i]}배`;
+  });
+  _rltMults = data.multipliers;
+}
 
 async function openRouletteModal() {
   const data = await api.get(`/api/rooms/${S.room.id}/minigame`);
   if (data.error || data.spins_left <= 0) return;
+  if (data.multipliers) updateRltLegend(data.multipliers);
   _rltCash = data.cash;
   document.getElementById('rlt-spins').textContent = data.spins_left;
   document.getElementById('rlt-cash').textContent = krw(_rltCash);
@@ -864,10 +910,9 @@ async function doRouletteSpin() {
     return;
   }
 
-  // 스핀 애니메이션
-  const seg = RLT_SEGS.find(s => s.label === data.outcome) || RLT_SEGS[0];
-  const half = (seg.seg_end - seg.seg_start) / 2 * 0.65;
-  const centerDeg = (seg.seg_start + seg.seg_end) / 2 + (Math.random() * 2 - 1) * half;
+  // 스핀 애니메이션 (seg_start/seg_end는 서버에서 수신)
+  const half = (data.seg_end - data.seg_start) / 2 * 0.65;
+  const centerDeg = (data.seg_start + data.seg_end) / 2 + (Math.random() * 2 - 1) * half;
   const spinDeg = 3600 + (360 - centerDeg % 360);
   const wheel = document.getElementById('roulette-wheel');
   wheel.style.transition = 'none';
@@ -892,7 +937,7 @@ async function doRouletteSpin() {
       <div style="color:var(--muted);font-size:13px">베팅금 ${krw(data.bet)} 소멸</div>`;
     toast('💸 꽝! 베팅금 소멸', 'error');
   } else {
-    const emoji = data.multiplier >= 25 ? '🎊' : data.multiplier >= 5 ? '🎉' : '✨';
+    const emoji = data.multiplier >= _rltMults[4] ? '🎊' : data.multiplier >= _rltMults[3] ? '🎉' : '✨';
     const gain = data.winnings - data.bet;
     resultEl.innerHTML = `<div style="font-size:44px">${emoji}</div>
       <div style="font-size:22px;font-weight:800;color:var(--up);margin:6px 0">${data.outcome} 당첨!</div>
