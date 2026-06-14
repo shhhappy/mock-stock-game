@@ -67,6 +67,47 @@ def _end_room(room):
     db.session.commit()
     cleanup_room_service(room.id)
 
+# ── Lottery System ────────────────────────────────────────
+_lots = {}   # room_id -> {done: set(), current: dict|None}
+
+LOTTO_PICK_SECS = 60   # participant number-picking window
+LOTTO_DRAW_SECS = 45   # host number-drawing window
+
+def _lot_round_due(room, remaining, total_s):
+    if room.status != 'active' or total_s <= 0: return None
+    lot = _lots.get(room.id, {})
+    cur = lot.get('current')
+    if cur and cur.get('state') in ('picking', 'drawing'): return None
+    done = lot.get('done', set())
+    pct = 1 - remaining / total_s  # fraction elapsed
+    if pct >= 1/3 and pct < 2/3 and 1 not in done: return 1
+    if pct >= 2/3 and 2 not in done: return 2
+    return None
+
+def _do_reveal(rid, cur):
+    winning = cur['winning']
+    results = {}
+    for uid_str, picks in cur.get('picks', {}).items():
+        uid = int(uid_str)
+        matched = len(set(picks) & set(winning))
+        prize = (cur['prize'] if matched == 6
+                 else round(cur['prize'] / 25) if matched == 5
+                 else round(cur['prize'] / 18) if matched == 4
+                 else round(cur['prize'] / 11) if matched == 3
+                 else 0)
+        results[uid_str] = {'matched': matched, 'prize': prize, 'picks': picks}
+        if prize > 0:
+            m = RoomMember.query.filter_by(room_id=rid, user_id=uid).first()
+            if m:
+                m.cash += prize
+                db.session.add(RoomTransaction(room_id=rid, user_id=uid, symbol='LOTTO',
+                    action='ADJ', shares=0, price=0, amount=prize,
+                    note=f'복권 {matched}개 일치'))
+    db.session.commit()
+    cur['results'] = results
+    cur['state'] = 'revealed'
+    _lots.setdefault(rid, {}).setdefault('done', set()).add(cur['round'])
+
 ROULETTE_OUTCOMES = [
     {'label': '꽝',  'multiplier': 0,  'weight': 70, 'seg_start': 0,     'seg_end': 252},
     {'label': '1배', 'multiplier': 1,  'weight': 20, 'seg_start': 252,   'seg_end': 324},
@@ -97,6 +138,8 @@ def room_dict(room, uid=None):
         'member_count': RoomMember.query.filter_by(room_id=room.id).count(),
         'is_host': uid == room.host_id,
         'minigame_available': room.status == 'active' and total_s > 0 and remaining <= int(total_s * 0.05),
+        'lottery_round_due': _lot_round_due(room, remaining, total_s) if room.status == 'active' else None,
+        'lottery_active': (_lots.get(room.id, {}).get('current') or {}).get('state') in ('picking', 'drawing', 'revealed'),
     }
 
 def find_active_room(uid):
@@ -680,6 +723,123 @@ def minigame_spin(rid):
         'spins_left': max(0, 3 - (spins_used + 1)),
         'seg_start': outcome['seg_start'], 'seg_end': outcome['seg_end'],
     })
+
+
+# ── Lottery ───────────────────────────────────────────────
+
+@app.route('/api/rooms/<int:rid>/lottery/start', methods=['POST'])
+@login_required
+def lottery_start(rid):
+    room = Room.query.get_or_404(rid)
+    user = cur_user()
+    if room.host_id != user.id: return jsonify({'error': '진행자만 시작할 수 있습니다.'}), 403
+    if room.status != 'active': return jsonify({'error': '게임이 진행 중이 아닙니다.'}), 400
+    d = request.json or {}
+    round_n = int(d.get('round', 1))
+    prize = float(d.get('prize', 0))
+    if prize <= 0: return jsonify({'error': '상금을 입력하세요.'}), 400
+    lot = _lots.setdefault(rid, {'done': set()})
+    if (lot.get('current') or {}).get('state') in ('picking', 'drawing'):
+        return jsonify({'error': '이미 진행 중인 복권이 있습니다.'}), 400
+    lot['current'] = {
+        'round': round_n, 'state': 'picking', 'prize': prize,
+        'picks': {}, 'winning': None, 'results': None,
+        'pick_dl': time.time() + LOTTO_PICK_SECS, 'draw_dl': None,
+    }
+    return jsonify({'ok': True})
+
+@app.route('/api/rooms/<int:rid>/lottery')
+@login_required
+def get_lottery(rid):
+    lot = _lots.get(rid, {})
+    cur = lot.get('current')
+    if not cur:
+        return jsonify({'state': None})
+    now = time.time()
+    if cur['state'] == 'picking' and now >= cur['pick_dl']:
+        cur['state'] = 'drawing'
+        cur['draw_dl'] = now + LOTTO_DRAW_SECS
+    if cur['state'] == 'drawing' and now >= (cur.get('draw_dl') or float('inf')):
+        if not cur.get('winning'):
+            cur['winning'] = sorted(_random.sample(range(1, 46), 6))
+        _do_reveal(rid, cur)
+    user = cur_user()
+    uid_str = str(user.id)
+    result = {
+        'state': cur['state'],
+        'round': cur['round'],
+        'prize': cur['prize'],
+        'pick_deadline': cur.get('pick_dl'),
+        'draw_deadline': cur.get('draw_dl'),
+        'my_picks': cur.get('picks', {}).get(uid_str),
+    }
+    if cur['state'] == 'revealed':
+        result['winning'] = cur['winning']
+        result['my_result'] = (cur.get('results') or {}).get(uid_str)
+        room = Room.query.get_or_404(rid)
+        if room.host_id == user.id:
+            result['all_results'] = cur.get('results', {})
+    return jsonify(result)
+
+@app.route('/api/rooms/<int:rid>/lottery/pick', methods=['POST'])
+@login_required
+def lottery_pick(rid):
+    lot = _lots.get(rid, {})
+    cur = lot.get('current')
+    if not cur or cur.get('state') != 'picking':
+        return jsonify({'error': '번호 입력 시간이 아닙니다.'}), 400
+    if time.time() >= cur['pick_dl']:
+        return jsonify({'error': '입력 시간이 종료되었습니다.'}), 400
+    user = cur_user()
+    room = Room.query.get_or_404(rid)
+    if room.host_id == user.id: return jsonify({'error': '진행자는 참여 불가'}), 403
+    if not RoomMember.query.filter_by(room_id=rid, user_id=user.id).first():
+        return jsonify({'error': '참여자가 아닙니다.'}), 403
+    raw = (request.json or {}).get('numbers', [])
+    try:
+        nums = sorted(set(int(n) for n in raw if 1 <= int(n) <= 45))
+    except Exception:
+        return jsonify({'error': '번호 형식 오류'}), 400
+    if len(nums) != 6:
+        return jsonify({'error': '1~45 사이 숫자 6개를 선택하세요.'}), 400
+    cur['picks'][str(user.id)] = nums
+    return jsonify({'ok': True, 'picks': nums})
+
+@app.route('/api/rooms/<int:rid>/lottery/draw', methods=['POST'])
+@login_required
+def lottery_draw(rid):
+    room = Room.query.get_or_404(rid)
+    user = cur_user()
+    if room.host_id != user.id: return jsonify({'error': '진행자만 추첨할 수 있습니다.'}), 403
+    lot = _lots.get(rid, {})
+    cur = lot.get('current')
+    if not cur or cur.get('state') != 'drawing':
+        return jsonify({'error': '추첨 시간이 아닙니다.'}), 400
+    raw = (request.json or {}).get('numbers', [])
+    if raw:
+        try:
+            nums = sorted(set(int(n) for n in raw if 1 <= int(n) <= 45))
+        except Exception:
+            return jsonify({'error': '번호 형식 오류'}), 400
+        if len(nums) != 6:
+            return jsonify({'error': '1~45 사이 숫자 6개를 선택하세요.'}), 400
+        cur['winning'] = nums
+    else:
+        cur['winning'] = sorted(_random.sample(range(1, 46), 6))
+    _do_reveal(rid, cur)
+    return jsonify({'ok': True, 'winning': cur['winning'], 'results': cur.get('results', {})})
+
+@app.route('/api/rooms/<int:rid>/lottery/skip', methods=['POST'])
+@login_required
+def lottery_skip(rid):
+    room = Room.query.get_or_404(rid)
+    user = cur_user()
+    if room.host_id != user.id: return jsonify({'error': '권한 없음'}), 403
+    d = request.json or {}
+    round_n = int(d.get('round', 1))
+    lot = _lots.setdefault(rid, {'done': set()})
+    lot.setdefault('done', set()).add(round_n)
+    return jsonify({'ok': True})
 
 
 # ── Education ─────────────────────────────────────────────

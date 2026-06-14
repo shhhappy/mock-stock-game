@@ -19,6 +19,8 @@ const S = {
   assetHistory: [],
   quizTimerInterval: null,
   rouletteOpened: false,
+  lotteryRoundDue: null,
+  lotteryHostModalOpen: false,
 };
 
 let _newsPopupTimer = null;
@@ -550,6 +552,9 @@ async function loadPLobbyMembers() {
 function enterParticipantGame() {
   S.depositWarningShown = false;
   S.rouletteOpened = false;
+  _stopLotPolling();
+  _lotParticipantPicks = [];
+  _lotPickerSubmitted = false;
   S.depRate = S.room.deposit_rate;
   document.getElementById('dep-rate-display').textContent = S.room.deposit_rate + '%';
   showScreen('screen-p-game');
@@ -585,6 +590,9 @@ function enterParticipantGame() {
         if (r.minigame_available && !S.rouletteOpened) {
           S.rouletteOpened = true;
           openRouletteModal();
+        }
+        if (r.lottery_active && !_lotPollInterval) {
+          _startLotPolling(S.room.id);
         }
       }
     }
@@ -973,6 +981,14 @@ async function refreshRoomStatus() {
   } else {
     S.room = r;
     updatePauseBtn();
+    // Lottery: notify bar for host
+    if (r.lottery_round_due && r.lottery_round_due !== S.lotteryRoundDue) {
+      showLotteryNotifyBar(r.lottery_round_due);
+    }
+    // Lottery: active → start polling for host
+    if (r.lottery_active && !_lotPollInterval) {
+      _startLotPolling(S.room.id);
+    }
   }
 }
 
@@ -1723,6 +1739,299 @@ async function loadTips() {
 
 function showEduStandalone() {
   toast('학습은 게임 중 [학습] 탭에서 볼 수 있습니다.', 'info');
+}
+
+// ── Lottery System ────────────────────────────────────────
+
+let _lotPollInterval = null;
+let _lotCountdownTimer = null;
+let _lotParticipantPicks = [];
+let _lotHostPicks = [];
+let _lotPickerSubmitted = false;
+
+function _startLotPolling(rid) {
+  if (_lotPollInterval) return;
+  _checkLotteryStatus(rid);
+  _lotPollInterval = setInterval(() => _checkLotteryStatus(rid), 3000);
+}
+
+function _stopLotPolling() {
+  clearInterval(_lotPollInterval);
+  _lotPollInterval = null;
+  clearInterval(_lotCountdownTimer);
+  _lotCountdownTimer = null;
+}
+
+async function _checkLotteryStatus(rid) {
+  const d = await api.get(`/api/rooms/${rid}/lottery`).catch(() => null);
+  if (!d || !d.state) { _stopLotPolling(); return; }
+  const isHost = S.room?.host_id === S.user?.id;
+  if (d.state === 'picking') {
+    if (isHost) {
+      _showLotHostPickingUI(d);
+    } else {
+      _showLotParticipantPicker(d);
+    }
+  } else if (d.state === 'drawing') {
+    if (isHost) {
+      _showLotHostDrawingUI(d);
+    } else {
+      _showLotParticipantWaiting(d);
+    }
+  } else if (d.state === 'revealed') {
+    _stopLotPolling();
+    _showLotteryResult(d, isHost);
+  }
+}
+
+function _lotCountdown(elemId, deadline) {
+  clearInterval(_lotCountdownTimer);
+  const el = document.getElementById(elemId);
+  if (!el) return;
+  _lotCountdownTimer = setInterval(() => {
+    const left = Math.max(0, Math.ceil(deadline - Date.now() / 1000));
+    el.textContent = left;
+    if (left <= 0) clearInterval(_lotCountdownTimer);
+  }, 500);
+}
+
+// ── HOST side ──
+
+function showLotteryNotifyBar(round) {
+  S.lotteryRoundDue = round;
+  document.getElementById('lottery-notify-round').textContent = round;
+  document.getElementById('lstart-round').textContent = round;
+  const bar = document.getElementById('lottery-notify-bar');
+  bar.style.display = 'flex';
+}
+
+function hideLotteryNotifyBar() {
+  document.getElementById('lottery-notify-bar').style.display = 'none';
+}
+
+function openLotteryStartModal() {
+  hideLotteryNotifyBar();
+  document.getElementById('lottery-prize-input').value = '';
+  document.getElementById('lottery-start-err').textContent = '';
+  openModal('modal-lottery-start');
+}
+
+async function doStartLottery() {
+  const prize = parseFloat(document.getElementById('lottery-prize-input').value);
+  if (!prize || prize <= 0) {
+    document.getElementById('lottery-start-err').textContent = '상금을 입력하세요.';
+    return;
+  }
+  const d = await api.post(`/api/rooms/${S.room.id}/lottery/start`, { round: S.lotteryRoundDue, prize });
+  if (d.error) { document.getElementById('lottery-start-err').textContent = d.error; return; }
+  closeModal('modal-lottery-start');
+  toast(`제${S.lotteryRoundDue}회 복권 추첨 시작!`, 'info');
+  S.lotteryHostModalOpen = false;
+  _lotHostPicks = [];
+  _startLotPolling(S.room.id);
+}
+
+async function skipLottery() {
+  hideLotteryNotifyBar();
+  await api.post(`/api/rooms/${S.room.id}/lottery/skip`, { round: S.lotteryRoundDue });
+  S.lotteryRoundDue = null;
+}
+
+function _showLotHostPickingUI(d) {
+  if (!S.lotteryHostModalOpen) {
+    S.lotteryHostModalOpen = true;
+    document.getElementById('lhost-picking-section').style.display = 'block';
+    document.getElementById('lhost-drawing-section').style.display = 'none';
+    openModal('modal-lottery-host');
+  }
+  _lotCountdown('lhost-pick-countdown', d.pick_deadline);
+}
+
+function _showLotHostDrawingUI(d) {
+  S.lotteryHostModalOpen = true;
+  document.getElementById('lhost-picking-section').style.display = 'none';
+  const drawSec = document.getElementById('lhost-drawing-section');
+  drawSec.style.display = 'block';
+  document.getElementById('lhost-draw-err').textContent = '';
+  if (!document.getElementById('host-draw-grid').children.length || _lotHostPicks.length === 0) {
+    _lotHostPicks = [];
+    _renderLotGrid('host-draw-grid', [], _toggleHostNum);
+    document.getElementById('lhost-draw-count').textContent = '0';
+  }
+  openModal('modal-lottery-host');
+  _lotCountdown('lhost-draw-countdown', d.draw_deadline);
+}
+
+function _renderLotGrid(containerId, selected, clickFn) {
+  const el = document.getElementById(containerId);
+  let html = '';
+  for (let i = 1; i <= 45; i++) {
+    const sel = selected.includes(i) ? 'selected' : '';
+    html += `<button class="lottery-num ${sel}" onclick="${clickFn.name}(this,${i})">${i}</button>`;
+  }
+  el.innerHTML = html;
+}
+
+function _toggleHostNum(btn, n) {
+  const idx = _lotHostPicks.indexOf(n);
+  if (idx >= 0) {
+    _lotHostPicks.splice(idx, 1);
+    btn.classList.remove('selected');
+  } else {
+    if (_lotHostPicks.length >= 6) { toast('6개만 선택할 수 있습니다.', 'warn'); return; }
+    _lotHostPicks.push(n);
+    btn.classList.add('selected');
+  }
+  document.getElementById('lhost-draw-count').textContent = _lotHostPicks.length;
+}
+
+async function doSubmitLotteryDraw() {
+  if (_lotHostPicks.length !== 6) {
+    document.getElementById('lhost-draw-err').textContent = '6개를 선택해주세요.';
+    return;
+  }
+  const d = await api.post(`/api/rooms/${S.room.id}/lottery/draw`, { numbers: _lotHostPicks });
+  if (d.error) { document.getElementById('lhost-draw-err').textContent = d.error; return; }
+  closeModal('modal-lottery-host');
+  S.lotteryHostModalOpen = false;
+  _stopLotPolling();
+  _showLotteryResult(d, true);
+}
+
+async function doRandomLotteryDraw() {
+  const d = await api.post(`/api/rooms/${S.room.id}/lottery/draw`, {});
+  if (d.error) { document.getElementById('lhost-draw-err').textContent = d.error; return; }
+  closeModal('modal-lottery-host');
+  S.lotteryHostModalOpen = false;
+  _stopLotPolling();
+  _showLotteryResult(d, true);
+}
+
+// ── PARTICIPANT side ──
+
+function _showLotParticipantPicker(d) {
+  const overlay = document.getElementById('lottery-overlay');
+  if (overlay.style.display === 'flex' && document.getElementById('lottery-picker-section').style.display !== 'none') {
+    _lotCountdown('lottery-countdown', d.pick_deadline);
+    return;
+  }
+  _lotParticipantPicks = d.my_picks || [];
+  _lotPickerSubmitted = !!d.my_picks;
+  document.getElementById('lottery-round-label').textContent = `제${d.round}회 복권`;
+  document.getElementById('lottery-prize-display').textContent = (d.prize || 0).toLocaleString() + '원';
+  document.getElementById('lottery-picks-count').textContent = _lotParticipantPicks.length;
+  const submitBtn = document.getElementById('lottery-submit-btn');
+  submitBtn.disabled = _lotPickerSubmitted;
+  submitBtn.textContent = _lotPickerSubmitted ? '제출 완료!' : '제출하기';
+  _renderLotGrid('lottery-picker-grid', _lotParticipantPicks, _toggleParticipantNum);
+  if (_lotPickerSubmitted) {
+    document.querySelectorAll('#lottery-picker-grid .lottery-num').forEach(b => b.disabled = true);
+  }
+  document.getElementById('lottery-picker-section').style.display = 'block';
+  document.getElementById('lottery-waiting-section').style.display = 'none';
+  document.getElementById('lottery-result-section').style.display = 'none';
+  overlay.style.display = 'flex';
+  _lotCountdown('lottery-countdown', d.pick_deadline);
+}
+
+function _toggleParticipantNum(btn, n) {
+  if (_lotPickerSubmitted) return;
+  const idx = _lotParticipantPicks.indexOf(n);
+  if (idx >= 0) {
+    _lotParticipantPicks.splice(idx, 1);
+    btn.classList.remove('selected');
+  } else {
+    if (_lotParticipantPicks.length >= 6) { toast('6개만 선택할 수 있습니다.', 'warn'); return; }
+    _lotParticipantPicks.push(n);
+    btn.classList.add('selected');
+  }
+  document.getElementById('lottery-picks-count').textContent = _lotParticipantPicks.length;
+}
+
+async function doSubmitLotteryPick() {
+  if (_lotParticipantPicks.length !== 6) { toast('6개를 선택해주세요.', 'warn'); return; }
+  const d = await api.post(`/api/rooms/${S.room.id}/lottery/pick`, { numbers: _lotParticipantPicks });
+  if (d.error) { toast(d.error, 'error'); return; }
+  _lotPickerSubmitted = true;
+  const btn = document.getElementById('lottery-submit-btn');
+  btn.disabled = true;
+  btn.textContent = '제출 완료!';
+  document.querySelectorAll('#lottery-picker-grid .lottery-num').forEach(b => b.disabled = true);
+  toast('번호 제출 완료!', 'success');
+}
+
+function _showLotParticipantWaiting(d) {
+  document.getElementById('lottery-picker-section').style.display = 'none';
+  document.getElementById('lottery-waiting-section').style.display = 'block';
+  document.getElementById('lottery-result-section').style.display = 'none';
+  document.getElementById('lottery-overlay').style.display = 'flex';
+  if (_lotParticipantPicks.length > 0) {
+    document.getElementById('lottery-my-submitted').textContent = `내 선택: ${_lotParticipantPicks.sort((a,b)=>a-b).join(', ')}`;
+  }
+  _lotCountdown('lottery-draw-countdown', d.draw_deadline);
+}
+
+function _showLotteryResult(d, isHost) {
+  clearInterval(_lotCountdownTimer);
+  const winning = d.winning || [];
+
+  if (isHost) {
+    document.getElementById('lresult-winning-nums').innerHTML =
+      winning.map(n => `<span class="lottery-winning-num">${n}</span>`).join('');
+    const results = d.results || d.all_results || {};
+    const entries = Object.entries(results).sort((a,b) => b[1].matched - a[1].matched);
+    if (entries.length === 0) {
+      document.getElementById('lresult-detail').innerHTML = '<div class="muted">제출한 참여자가 없습니다.</div>';
+    } else {
+      document.getElementById('lresult-detail').innerHTML =
+        `<table style="width:100%;font-size:12px;border-collapse:collapse">
+          <tr style="color:var(--muted);border-bottom:1px solid var(--border)">
+            <th style="text-align:left;padding:4px 0">번호</th>
+            <th style="text-align:center">일치</th>
+            <th style="text-align:right">당첨금</th>
+          </tr>` +
+        entries.map(([uid, r]) => {
+          const pStr = (r.picks || []).join(', ');
+          const prizeColor = r.prize > 0 ? 'color:var(--up)' : 'color:var(--muted)';
+          return `<tr style="border-bottom:1px solid var(--border)">
+            <td style="padding:5px 0;font-size:11px">${pStr}</td>
+            <td style="text-align:center;font-weight:700">${r.matched}개</td>
+            <td style="text-align:right;font-weight:700;${prizeColor}">${r.prize > 0 ? '+' + (r.prize||0).toLocaleString() + '원' : '꽝'}</td>
+          </tr>`;
+        }).join('') + '</table>';
+    }
+    openModal('modal-lottery-result');
+  } else {
+    document.getElementById('lottery-picker-section').style.display = 'none';
+    document.getElementById('lottery-waiting-section').style.display = 'none';
+    const res = document.getElementById('lottery-result-section');
+    res.style.display = 'block';
+    document.getElementById('lottery-overlay').style.display = 'flex';
+    document.getElementById('lottery-result-winning').innerHTML =
+      winning.map(n => `<span class="lottery-winning-num">${n}</span>`).join('');
+    const my = d.my_result;
+    if (my) {
+      const myPicks = (my.picks || []).sort((a,b)=>a-b);
+      document.getElementById('lottery-my-picks-result').textContent = `내 번호: ${myPicks.join(', ')}`;
+      if (my.prize > 0) {
+        document.getElementById('lottery-result-detail').innerHTML =
+          `<span style="color:var(--up)">🎉 ${my.matched}개 일치 — +${(my.prize).toLocaleString()}원 당첨!</span>`;
+      } else {
+        document.getElementById('lottery-result-detail').innerHTML =
+          `<span style="color:var(--muted)">${my.matched}개 일치 — 꽝</span>`;
+      }
+    } else {
+      document.getElementById('lottery-my-picks-result').textContent = '';
+      document.getElementById('lottery-result-detail').innerHTML =
+        '<span class="muted">번호를 제출하지 않았습니다.</span>';
+    }
+  }
+  S.lotteryHostModalOpen = false;
+}
+
+function closeLotteryOverlay() {
+  document.getElementById('lottery-overlay').style.display = 'none';
+  _stopLotPolling();
 }
 
 // ── Init ─────────────────────────────────────────────────

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>모의주식게임</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=12">
+  <link rel="stylesheet" href="/static/css/style.css?v=13">
 </head>
 <body>
 
@@ -126,6 +126,15 @@
     <div style="text-align:right">
       <div style="font-size:11px;color:var(--muted)">방 코드</div>
       <div style="font-weight:700;letter-spacing:2px;color:var(--accent)" id="host-code">–</div>
+    </div>
+  </div>
+
+  <!-- Lottery notification bar -->
+  <div id="lottery-notify-bar" style="display:none;background:var(--warn);color:#000;padding:10px 14px;display:none;align-items:center;justify-content:space-between;gap:8px">
+    <span style="font-weight:700;font-size:13px">🎟 제<span id="lottery-notify-round">1</span>회 복권 추첨 시간!</span>
+    <div style="display:flex;gap:6px;flex-shrink:0">
+      <button class="btn btn-sm" style="background:#000;color:var(--warn);padding:5px 10px" onclick="openLotteryStartModal()">진행하기</button>
+      <button class="btn btn-sm" style="background:rgba(0,0,0,0.2);color:#000;padding:5px 10px" onclick="skipLottery()">건너뛰기</button>
     </div>
   </div>
 
@@ -409,6 +418,42 @@
   <!-- Quiz FAB -->
   <button class="quiz-fab" onclick="openQuiz()">🧠 퀴즈</button>
 
+  <!-- Lottery overlay (participant) -->
+  <div id="lottery-overlay" style="display:none;position:fixed;inset:0;z-index:1100;background:rgba(0,0,0,0.88);align-items:center;justify-content:center;padding:16px">
+    <div class="lottery-box">
+      <div style="text-align:center;margin-bottom:14px">
+        <div style="font-size:30px">🎟</div>
+        <div style="font-size:18px;font-weight:800;color:var(--warn);margin-top:4px" id="lottery-round-label">제1회 복권</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:3px">상금: <span id="lottery-prize-display">–</span></div>
+      </div>
+      <!-- Picking section -->
+      <div id="lottery-picker-section">
+        <div style="text-align:center;font-size:13px;font-weight:600;margin-bottom:8px">
+          6개 번호 선택 &nbsp;·&nbsp; <span id="lottery-picks-count">0</span>/6 &nbsp;·&nbsp; <span style="color:var(--warn)" id="lottery-countdown">60</span>초 남음
+        </div>
+        <div id="lottery-picker-grid" class="lottery-number-grid"></div>
+        <div style="text-align:center;margin-top:12px">
+          <button id="lottery-submit-btn" class="btn btn-primary" style="padding:10px 36px;font-size:15px" onclick="doSubmitLotteryPick()">제출하기</button>
+        </div>
+      </div>
+      <!-- Waiting section -->
+      <div id="lottery-waiting-section" style="display:none;text-align:center;padding:24px 0">
+        <div style="font-size:32px;margin-bottom:10px">⏳</div>
+        <div style="font-size:15px;font-weight:700">당첨 번호 추첨 중...</div>
+        <div class="muted" style="margin-top:6px;font-size:13px">잠시 후 결과 공개 · <span id="lottery-draw-countdown">45</span>초 남음</div>
+        <div id="lottery-my-submitted" class="muted" style="font-size:12px;margin-top:10px"></div>
+      </div>
+      <!-- Result section -->
+      <div id="lottery-result-section" style="display:none">
+        <div style="font-size:14px;font-weight:700;margin-bottom:8px;text-align:center">🎯 당첨 번호</div>
+        <div id="lottery-result-winning" style="display:flex;flex-wrap:wrap;justify-content:center;gap:4px;margin-bottom:14px"></div>
+        <div id="lottery-my-picks-result" style="font-size:12px;color:var(--muted);text-align:center;margin-bottom:6px"></div>
+        <div id="lottery-result-detail" style="text-align:center;font-size:16px;font-weight:800;margin-bottom:14px"></div>
+        <button class="btn btn-secondary btn-full" onclick="closeLotteryOverlay()">닫기</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Roulette mini-game overlay -->
   <div id="roulette-overlay" class="quiz-overlay" style="display:none">
     <div class="roulette-box">
@@ -592,6 +637,60 @@
   </div>
 </div>
 
+<!-- Host: Lottery start -->
+<div id="modal-lottery-start" class="modal-overlay" onclick="closeModalOutside(event,'modal-lottery-start')">
+  <div class="modal-sheet" style="max-height:55vh">
+    <div class="modal-handle"></div>
+    <div class="modal-title">🎟 제<span id="lstart-round">1</span>회 복권 추첨</div>
+    <div class="muted" style="font-size:13px;margin-bottom:14px">참가자들이 1~45 중 6개 번호를 선택합니다. 상금을 입력하세요.</div>
+    <div class="form-group">
+      <label class="form-label">상금 금액 (원)</label>
+      <input id="lottery-prize-input" class="form-input" type="number" min="1" placeholder="예: 500000">
+    </div>
+    <div class="error-msg" id="lottery-start-err"></div>
+    <button class="btn btn-primary btn-full" onclick="doStartLottery()" style="margin-top:8px">진행하기 🎟</button>
+    <button class="btn btn-secondary btn-full" onclick="closeModal('modal-lottery-start')" style="margin-top:6px">취소</button>
+  </div>
+</div>
+
+<!-- Host: Lottery active panel -->
+<div id="modal-lottery-host" class="modal-overlay" onclick="closeModalOutside(event,'modal-lottery-host')">
+  <div class="modal-sheet" style="max-height:85vh;overflow-y:auto">
+    <div class="modal-handle"></div>
+    <!-- Picking status (host waits) -->
+    <div id="lhost-picking-section" style="text-align:center;padding:12px 0">
+      <div style="font-size:36px">⏳</div>
+      <div style="font-size:17px;font-weight:700;margin-top:10px">참가자 번호 선택 중...</div>
+      <div class="muted" style="margin-top:6px">남은 시간: <span id="lhost-pick-countdown" style="color:var(--warn);font-weight:700">60</span>초</div>
+      <div class="muted" style="font-size:12px;margin-top:6px">시간이 지나면 자동으로 당첨 번호 입력 단계로 넘어갑니다.</div>
+    </div>
+    <!-- Drawing section (host inputs winning numbers) -->
+    <div id="lhost-drawing-section" style="display:none">
+      <div style="font-size:16px;font-weight:800;margin-bottom:4px">🎯 당첨 번호 선택</div>
+      <div class="muted" style="font-size:12px;margin-bottom:10px">
+        남은 시간: <span id="lhost-draw-countdown" style="color:var(--warn);font-weight:700">45</span>초 &nbsp;·&nbsp;
+        <span id="lhost-draw-count" style="font-weight:700">0</span>/6 선택됨
+      </div>
+      <div id="host-draw-grid" class="lottery-number-grid"></div>
+      <div class="error-msg" id="lhost-draw-err" style="margin-top:6px"></div>
+      <button class="btn btn-primary btn-full" style="margin-top:12px" onclick="doSubmitLotteryDraw()">추첨하기 🎟</button>
+      <button class="btn btn-secondary btn-full" style="margin-top:6px" onclick="doRandomLotteryDraw()">랜덤 추첨</button>
+    </div>
+  </div>
+</div>
+
+<!-- Lottery result (shared) -->
+<div id="modal-lottery-result" class="modal-overlay" onclick="closeModalOutside(event,'modal-lottery-result')">
+  <div class="modal-sheet" style="max-height:80vh;overflow-y:auto">
+    <div class="modal-handle"></div>
+    <div class="modal-title">🎟 복권 추첨 결과</div>
+    <div style="font-size:13px;font-weight:600;margin-bottom:8px">당첨 번호</div>
+    <div id="lresult-winning-nums" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:14px"></div>
+    <div id="lresult-detail"></div>
+    <button class="btn btn-secondary btn-full" onclick="closeModal('modal-lottery-result')" style="margin-top:12px">닫기</button>
+  </div>
+</div>
+
 <!-- Host: Adjust cash -->
 <div id="modal-adjust" class="modal-overlay" onclick="closeModalOutside(event,'modal-adjust')">
   <div class="modal-sheet" style="max-height:55vh">
@@ -656,6 +755,6 @@
 <div class="toast-container" id="toasts"></div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
-<script src="/static/js/app.js?v=10"></script>
+<script src="/static/js/app.js?v=11"></script>
 </body>
 </html>
