@@ -18,6 +18,7 @@ const S = {
   watchlistOnly: false,
   assetHistory: [],
   quizTimerInterval: null,
+  rouletteOpened: false,
 };
 
 let _newsPopupTimer = null;
@@ -548,6 +549,7 @@ async function loadPLobbyMembers() {
 // ── Participant: Game ────────────────────────────────────
 function enterParticipantGame() {
   S.depositWarningShown = false;
+  S.rouletteOpened = false;
   S.depRate = S.room.deposit_rate;
   document.getElementById('dep-rate-display').textContent = S.room.deposit_rate + '%';
   showScreen('screen-p-game');
@@ -580,6 +582,10 @@ function enterParticipantGame() {
       } else {
         hidePausedBanner();
         if (r.remaining_seconds <= 60) checkDepositMaturity();
+        if (r.minigame_available && !S.rouletteOpened) {
+          S.rouletteOpened = true;
+          openRouletteModal();
+        }
       }
     }
     refreshMyRank();
@@ -795,6 +801,121 @@ function closeQuiz() {
 
 function escHtml(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Roulette Mini-game ────────────────────────────────────
+const RLT_SEGS = [
+  {label:'꽝',  seg_start:0,     seg_end:252},
+  {label:'1배', seg_start:252,   seg_end:324},
+  {label:'2배', seg_start:324,   seg_end:349.2},
+  {label:'5배', seg_start:349.2, seg_end:356.4},
+  {label:'25배',seg_start:356.4, seg_end:360},
+];
+let _rltSpinning = false;
+let _rltCash = 0;
+
+async function openRouletteModal() {
+  const data = await api.get(`/api/rooms/${S.room.id}/minigame`);
+  if (data.error || data.spins_left <= 0) return;
+  _rltCash = data.cash;
+  document.getElementById('rlt-spins').textContent = data.spins_left;
+  document.getElementById('rlt-cash').textContent = krw(_rltCash);
+  document.getElementById('rlt-bet-input').value = '';
+  document.getElementById('rlt-err').textContent = '';
+  document.getElementById('rlt-bet-section').style.display = '';
+  document.getElementById('rlt-result').style.display = 'none';
+  document.getElementById('rlt-again-btn').style.display = 'none';
+  document.getElementById('rlt-close-btn').style.display = 'none';
+  document.getElementById('rlt-spin-btn').disabled = false;
+  const wheel = document.getElementById('roulette-wheel');
+  wheel.style.transition = 'none';
+  wheel.style.transform = 'rotate(0deg)';
+  document.getElementById('roulette-overlay').style.display = 'flex';
+}
+
+function setRltPct(pct) {
+  document.getElementById('rlt-bet-input').value = Math.floor(_rltCash * pct / 100) || 1;
+}
+
+async function doRouletteSpin() {
+  if (_rltSpinning) return;
+  const bet = parseFloat(document.getElementById('rlt-bet-input').value);
+  const errEl = document.getElementById('rlt-err');
+  errEl.textContent = '';
+  if (!bet || bet <= 0) { errEl.textContent = '베팅 금액을 입력하세요.'; return; }
+  if (bet > _rltCash)   { errEl.textContent = '잔액이 부족합니다.'; return; }
+
+  _rltSpinning = true;
+  document.getElementById('rlt-spin-btn').disabled = true;
+
+  const data = await api.post(`/api/rooms/${S.room.id}/minigame/spin`, {bet});
+  if (data.error) {
+    document.getElementById('rlt-err').textContent = data.error;
+    document.getElementById('rlt-spin-btn').disabled = false;
+    _rltSpinning = false;
+    return;
+  }
+
+  // 스핀 애니메이션
+  const seg = RLT_SEGS.find(s => s.label === data.outcome) || RLT_SEGS[0];
+  const half = (seg.seg_end - seg.seg_start) / 2 * 0.65;
+  const centerDeg = (seg.seg_start + seg.seg_end) / 2 + (Math.random() * 2 - 1) * half;
+  const spinDeg = 3600 + (360 - centerDeg % 360);
+  const wheel = document.getElementById('roulette-wheel');
+  wheel.style.transition = 'none';
+  wheel.style.transform = 'rotate(0deg)';
+  void wheel.offsetWidth;
+  wheel.style.transition = 'transform 4s cubic-bezier(0.17,0.67,0.12,0.99)';
+  wheel.style.transform = `rotate(${spinDeg}deg)`;
+
+  await new Promise(r => setTimeout(r, 4300));
+
+  // 결과 표시
+  _rltCash = data.cash;
+  document.getElementById('rlt-spins').textContent = data.spins_left;
+  document.getElementById('rlt-cash').textContent = krw(_rltCash);
+  document.getElementById('rlt-bet-section').style.display = 'none';
+
+  const resultEl = document.getElementById('rlt-result');
+  resultEl.style.display = '';
+  if (data.multiplier === 0) {
+    resultEl.innerHTML = `<div style="font-size:44px">💸</div>
+      <div style="font-size:22px;font-weight:800;color:var(--down);margin:6px 0">꽝!</div>
+      <div style="color:var(--muted);font-size:13px">베팅금 ${krw(data.bet)} 소멸</div>`;
+    toast('💸 꽝! 베팅금 소멸', 'error');
+  } else {
+    const emoji = data.multiplier >= 25 ? '🎊' : data.multiplier >= 5 ? '🎉' : '✨';
+    const gain = data.winnings - data.bet;
+    resultEl.innerHTML = `<div style="font-size:44px">${emoji}</div>
+      <div style="font-size:22px;font-weight:800;color:var(--up);margin:6px 0">${data.outcome} 당첨!</div>
+      <div style="color:var(--up);font-size:15px;font-weight:700">+${krw(gain)}</div>
+      <div style="color:var(--muted);font-size:12px;margin-top:4px">${krw(data.bet)} → ${krw(data.winnings)}</div>`;
+    toast(`${emoji} ${data.outcome} 당첨! +${krw(gain)}`, 'success');
+  }
+
+  if (data.spins_left > 0) {
+    document.getElementById('rlt-again-btn').style.display = '';
+  } else {
+    document.getElementById('rlt-close-btn').style.display = '';
+  }
+  refreshMyRank();
+  _rltSpinning = false;
+}
+
+function resetRltSpin() {
+  document.getElementById('rlt-result').style.display = 'none';
+  document.getElementById('rlt-again-btn').style.display = 'none';
+  document.getElementById('rlt-bet-section').style.display = '';
+  document.getElementById('rlt-bet-input').value = '';
+  document.getElementById('rlt-err').textContent = '';
+  document.getElementById('rlt-spin-btn').disabled = false;
+  const wheel = document.getElementById('roulette-wheel');
+  wheel.style.transition = 'none';
+  wheel.style.transform = 'rotate(0deg)';
+}
+
+function closeRoulette() {
+  document.getElementById('roulette-overlay').style.display = 'none';
 }
 
 async function doSetQuizSettings() {

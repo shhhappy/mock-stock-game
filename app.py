@@ -67,6 +67,14 @@ def _end_room(room):
     db.session.commit()
     cleanup_room_service(room.id)
 
+ROULETTE_OUTCOMES = [
+    {'label': '꽝',  'multiplier': 0,  'weight': 70, 'seg_start': 0,     'seg_end': 252},
+    {'label': '1배', 'multiplier': 1,  'weight': 20, 'seg_start': 252,   'seg_end': 324},
+    {'label': '2배', 'multiplier': 2,  'weight': 7,  'seg_start': 324,   'seg_end': 349.2},
+    {'label': '5배', 'multiplier': 5,  'weight': 2,  'seg_start': 349.2, 'seg_end': 356.4},
+    {'label': '25배','multiplier': 25, 'weight': 1,  'seg_start': 356.4, 'seg_end': 360},
+]
+
 def room_dict(room, uid=None):
     now = datetime.utcnow()
     remaining = 0
@@ -76,6 +84,7 @@ def room_dict(room, uid=None):
         else:
             remaining = max(0, int((room.end_time - now).total_seconds()))
     host = db.session.get(User, room.host_id)
+    total_s = room.duration_minutes * 60
     return {
         'id': room.id, 'name': room.name, 'code': room.code,
         'host_id': room.host_id, 'host_name': host.username if host else '',
@@ -87,6 +96,7 @@ def room_dict(room, uid=None):
         'end_time': room.end_time.strftime('%Y-%m-%dT%H:%M:%SZ') if room.end_time else None,
         'member_count': RoomMember.query.filter_by(room_id=room.id).count(),
         'is_host': uid == room.host_id,
+        'minigame_available': room.status == 'active' and total_s > 0 and remaining <= int(total_s * 0.05),
     }
 
 def find_active_room(uid):
@@ -613,6 +623,63 @@ def withdraw_deposit(rid, did):
     m.cash += dep.amount
     db.session.commit()
     return jsonify({'message': f'예금 해지 — {dep.amount:,.0f}원 반환 (이자 없음)', 'cash': m.cash})
+
+
+# ── Mini-game: Roulette ───────────────────────────────────
+
+@app.route('/api/rooms/<int:rid>/minigame')
+@login_required
+def get_minigame(rid):
+    room = Room.query.get_or_404(rid)
+    user = cur_user()
+    if room.host_id == user.id:
+        return jsonify({'error': '진행자는 참여할 수 없습니다.'}), 403
+    m = RoomMember.query.filter_by(room_id=rid, user_id=user.id).first()
+    if not m:
+        return jsonify({'error': '참여자가 아닙니다.'}), 403
+    spins_used = RoomTransaction.query.filter_by(room_id=rid, user_id=user.id, action='RLT').count()
+    return jsonify({'spins_left': max(0, 3 - spins_used), 'cash': m.cash})
+
+@app.route('/api/rooms/<int:rid>/minigame/spin', methods=['POST'])
+@login_required
+def minigame_spin(rid):
+    room = Room.query.get_or_404(rid)
+    if room.status != 'active':
+        return jsonify({'error': '게임이 진행 중이 아닙니다.'}), 400
+    now = datetime.utcnow()
+    remaining = max(0, (room.end_time - now).total_seconds()) if room.end_time else 0
+    total_s = room.duration_minutes * 60
+    if total_s > 0 and remaining > total_s * 0.05:
+        return jsonify({'error': '아직 미니게임 시간이 아닙니다.'}), 400
+    user = cur_user()
+    if room.host_id == user.id:
+        return jsonify({'error': '진행자는 참여할 수 없습니다.'}), 403
+    m = RoomMember.query.filter_by(room_id=rid, user_id=user.id).first()
+    if not m:
+        return jsonify({'error': '참여자가 아닙니다.'}), 403
+    spins_used = RoomTransaction.query.filter_by(room_id=rid, user_id=user.id, action='RLT').count()
+    if spins_used >= 3:
+        return jsonify({'error': '기회를 모두 사용했습니다.'}), 400
+    try:
+        bet = float((request.json or {}).get('bet', 0))
+    except (TypeError, ValueError):
+        return jsonify({'error': '금액 오류'}), 400
+    if bet <= 0 or bet > m.cash:
+        return jsonify({'error': '베팅 금액이 올바르지 않습니다.'}), 400
+    outcome = _random.choices(ROULETTE_OUTCOMES, weights=[o['weight'] for o in ROULETTE_OUTCOMES])[0]
+    winnings = round(bet * outcome['multiplier'])
+    net = winnings - bet
+    m.cash = m.cash - bet + winnings
+    note = f"룰렛 {outcome['label']} (베팅 {bet:,.0f}원)"
+    db.session.add(RoomTransaction(room_id=rid, user_id=user.id, symbol='ROULETTE',
+                                   action='RLT', shares=0, price=0, amount=net, note=note))
+    db.session.commit()
+    return jsonify({
+        'outcome': outcome['label'], 'multiplier': outcome['multiplier'],
+        'bet': bet, 'winnings': winnings, 'net': net, 'cash': m.cash,
+        'spins_left': max(0, 3 - (spins_used + 1)),
+        'seg_start': outcome['seg_start'], 'seg_end': outcome['seg_end'],
+    })
 
 
 # ── Education ─────────────────────────────────────────────

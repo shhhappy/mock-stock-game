@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>모의주식게임</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=11">
+  <link rel="stylesheet" href="/static/css/style.css?v=12">
 </head>
 <body>
 
@@ -409,6 +409,49 @@
   <!-- Quiz FAB -->
   <button class="quiz-fab" onclick="openQuiz()">🧠 퀴즈</button>
 
+  <!-- Roulette mini-game overlay -->
+  <div id="roulette-overlay" class="quiz-overlay" style="display:none">
+    <div class="roulette-box">
+      <div style="text-align:center;margin-bottom:14px">
+        <div style="font-size:32px">🎰</div>
+        <div style="font-size:19px;font-weight:800;color:var(--warn);margin-top:4px">역전의 기회!</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:4px">남은 기회 <span id="rlt-spins">3</span>/3회</div>
+      </div>
+      <div class="roulette-wheel-wrap">
+        <div class="roulette-pointer"></div>
+        <div id="roulette-wheel" class="roulette-wheel"></div>
+        <div class="roulette-center"></div>
+      </div>
+      <div class="roulette-legend">
+        <span class="rl-item rl-kkang">꽝 70%</span>
+        <span class="rl-item rl-1x">1배 20%</span>
+        <span class="rl-item rl-2x">2배 7%</span>
+        <span class="rl-item rl-5x">5배 2%</span>
+        <span class="rl-item rl-25x">25배 1%</span>
+      </div>
+      <div id="rlt-bet-section">
+        <div style="font-size:12px;color:var(--muted);margin-bottom:6px;text-align:center">
+          보유 현금: <span id="rlt-cash">–</span>
+        </div>
+        <input id="rlt-bet-input" class="form-input" type="number" min="1" placeholder="베팅 금액" style="text-align:center;font-size:18px;font-weight:700">
+        <div style="display:flex;gap:5px;margin-top:6px">
+          <button class="btn btn-secondary btn-sm" style="flex:1" onclick="setRltPct(10)">10%</button>
+          <button class="btn btn-secondary btn-sm" style="flex:1" onclick="setRltPct(25)">25%</button>
+          <button class="btn btn-secondary btn-sm" style="flex:1" onclick="setRltPct(50)">50%</button>
+          <button class="btn btn-secondary btn-sm" style="flex:1" onclick="setRltPct(100)">전액</button>
+        </div>
+        <div class="error-msg" id="rlt-err"></div>
+        <button id="rlt-spin-btn" class="btn btn-full" onclick="doRouletteSpin()"
+          style="margin-top:10px;background:var(--warn);color:#000;font-weight:800;font-size:16px">
+          🎰 베팅하기
+        </button>
+      </div>
+      <div id="rlt-result" style="display:none;text-align:center;padding:10px 0"></div>
+      <button id="rlt-again-btn" class="btn btn-secondary btn-full" onclick="resetRltSpin()" style="display:none;margin-top:8px">다시 베팅 →</button>
+      <button id="rlt-close-btn" class="btn btn-secondary btn-full" onclick="closeRoulette()" style="display:none;margin-top:8px">닫기</button>
+    </div>
+  </div>
+
   <!-- Quiz overlay -->
   <div id="quiz-overlay" class="quiz-overlay" style="display:none">
     <div class="quiz-box">
@@ -613,6 +656,6 @@
 <div class="toast-container" id="toasts"></div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
-<script src="/static/js/app.js?v=9"></script>
+<script src="/static/js/app.js?v=10"></script>
 </body>
 </html>
