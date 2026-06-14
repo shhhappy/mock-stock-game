@@ -12,6 +12,10 @@ NEWS_TEMPLATES_UP = [
     "{name} 신제품 흥행 돌풍 — 기대 이상 판매 실적",
     "{sector} 기관 순매수 전환 포착 — 강세 흐름",
     "{name} 대규모 자사주 매입 발표 — 주주가치 제고",
+    "월가, {name} 목표주가 대폭 상향 — 강력 매수 의견",
+    "{name} AI 신사업 발표로 투자 심리 급반등",
+    "{sector} 섹터 美 금리 인하 수혜 기대 — 글로벌 자금 유입",
+    "{name} 분기 실적 '어닝 서프라이즈' — 주가 급등 예고",
 ]
 
 NEWS_TEMPLATES_DOWN = [
@@ -23,6 +27,10 @@ NEWS_TEMPLATES_DOWN = [
     "{name} 주요 고객사 이탈 소식 — 실적 악화 우려",
     "{sector} 글로벌 수요 둔화 경고 — 조정 국면 진입",
     "{name} 대주주 지분 대량 매도 — 오버행 리스크",
+    "美 연준 긴축 장기화 우려 — {sector} 섹터 전반 하락",
+    "{name} 반독점 규제 조사 착수 소식 — 투자자 이탈",
+    "{sector} 섹터 환율 악재 겹쳐 — 외국인 매도 급증",
+    "{name} 경영진 돌발 사임 — 불확실성 확대",
 ]
 
 STOCKS = {
@@ -66,6 +74,26 @@ STOCKS = {
     # 건설/지주
     'SMCNS': {'name': '삼성물산',         'sector': '건설',   'base': 145000, 'vol': 0.020},
     'LGGRP': {'name': 'LG',              'sector': '지주',   'base': 92000,  'vol': 0.018},
+    # 해외IT (USD 기준 KRW 환산, 환율 약 1,390원)
+    'APPL':  {'name': 'Apple',           'sector': '해외IT', 'base': 270000, 'vol': 0.025},
+    'GOOGL': {'name': 'Alphabet(Google)','sector': '해외IT', 'base': 240000, 'vol': 0.025},
+    'MSFT':  {'name': 'Microsoft',       'sector': '해외IT', 'base': 580000, 'vol': 0.020},
+    'AMZN':  {'name': 'Amazon',          'sector': '해외IT', 'base': 265000, 'vol': 0.028},
+    'META':  {'name': 'Meta',            'sector': '해외IT', 'base': 710000, 'vol': 0.032},
+    # 해외반도체
+    'NVDA':  {'name': 'NVIDIA',          'sector': '해외반도체', 'base': 160000,  'vol': 0.048},
+    'ASML':  {'name': 'ASML',            'sector': '해외반도체', 'base': 1050000, 'vol': 0.028},
+    'TSM':   {'name': 'TSMC',            'sector': '해외반도체', 'base': 215000,  'vol': 0.030},
+    # 전기차
+    'TSLA':  {'name': 'Tesla',           'sector': '전기차', 'base': 475000, 'vol': 0.055},
+    'BYDCO': {'name': 'BYD',             'sector': '전기차', 'base': 45000,  'vol': 0.042},
+    # 일본
+    'SONY':  {'name': 'Sony',            'sector': '일본',   'base': 125000, 'vol': 0.025},
+    'TOYOT': {'name': 'Toyota',          'sector': '일본',   'base': 290000, 'vol': 0.020},
+    'NTDO':  {'name': 'Nintendo',        'sector': '일본',   'base': 75000,  'vol': 0.030},
+    # 중국IT
+    'BABA':  {'name': 'Alibaba',         'sector': '중국IT', 'base': 100000, 'vol': 0.048},
+    'TENCE': {'name': 'Tencent',         'sector': '중국IT', 'base': 70000,  'vol': 0.042},
 }
 
 SECTORS = sorted({v['sector'] for v in STOCKS.values()})
