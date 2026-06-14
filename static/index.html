@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>모의주식게임</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=14">
+  <link rel="stylesheet" href="/static/css/style.css?v=15">
 </head>
 <body>
 
@@ -204,30 +204,44 @@
     </div>
 
     <div style="margin-top:12px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px">
-      <div class="section-title" style="margin-bottom:4px">🎰 룰렛 배율 설정</div>
-      <div style="font-size:11px;color:var(--muted);margin-bottom:10px">꽝(70%)은 항상 0배 고정 · 확률은 변경 불가</div>
-      <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 10px;align-items:center;margin-bottom:12px">
-        <span style="font-size:12px;color:var(--muted)">20% 칸</span>
-        <div style="display:flex;align-items:center;gap:6px">
-          <input id="rlt-mult-1" class="form-input" type="number" min="1" max="9999" step="1" value="1" style="width:72px;text-align:center">
-          <span style="font-size:12px;color:var(--muted)">배 (현: <span id="rlt-mult-1-cur">1배</span>)</span>
-        </div>
-        <span style="font-size:12px;color:var(--muted)">7% 칸</span>
-        <div style="display:flex;align-items:center;gap:6px">
-          <input id="rlt-mult-2" class="form-input" type="number" min="1" max="9999" step="1" value="2" style="width:72px;text-align:center">
-          <span style="font-size:12px;color:var(--muted)">배 (현: <span id="rlt-mult-2-cur">2배</span>)</span>
-        </div>
-        <span style="font-size:12px;color:var(--muted)">2% 칸</span>
-        <div style="display:flex;align-items:center;gap:6px">
-          <input id="rlt-mult-3" class="form-input" type="number" min="1" max="9999" step="1" value="5" style="width:72px;text-align:center">
-          <span style="font-size:12px;color:var(--muted)">배 (현: <span id="rlt-mult-3-cur">5배</span>)</span>
-        </div>
-        <span style="font-size:12px;color:var(--muted)">1% 칸</span>
-        <div style="display:flex;align-items:center;gap:6px">
-          <input id="rlt-mult-4" class="form-input" type="number" min="1" max="9999" step="1" value="25" style="width:72px;text-align:center">
-          <span style="font-size:12px;color:var(--muted)">배 (현: <span id="rlt-mult-4-cur">25배</span>)</span>
-        </div>
-      </div>
+      <div class="section-title" style="margin-bottom:2px">🎰 룰렛 설정</div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:10px">확률은 비율값으로 입력 · 꽝 배율은 0배 고정</div>
+      <table style="width:100%;font-size:12px;border-collapse:collapse;margin-bottom:12px">
+        <thead>
+          <tr style="color:var(--muted);border-bottom:1px solid var(--border)">
+            <th style="text-align:left;padding:3px 4px 6px 0;font-weight:600">칸</th>
+            <th style="text-align:center;padding:3px 4px 6px;font-weight:600">확률 (비율)</th>
+            <th style="text-align:center;padding:3px 0 6px;font-weight:600">배율</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="padding:4px 4px 4px 0"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#c0392b;vertical-align:middle;margin-right:5px"></span>꽝</td>
+            <td style="padding:4px;text-align:center"><input id="rlt-w-0" class="form-input" type="number" min="0" max="9999" step="1" value="70" style="width:60px;text-align:center;padding:3px 4px;font-size:12px;height:28px"></td>
+            <td style="padding:4px 0;text-align:center;color:var(--muted)">0배 고정</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 4px 4px 0"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#e67e22;vertical-align:middle;margin-right:5px"></span>2칸</td>
+            <td style="padding:4px;text-align:center"><input id="rlt-w-1" class="form-input" type="number" min="0" max="9999" step="1" value="20" style="width:60px;text-align:center;padding:3px 4px;font-size:12px;height:28px"></td>
+            <td style="padding:4px 0;text-align:center"><input id="rlt-mult-1" class="form-input" type="number" min="1" max="9999" step="1" value="1" style="width:54px;text-align:center;padding:3px 4px;font-size:12px;height:28px"> 배</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 4px 4px 0"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#f1c40f;vertical-align:middle;margin-right:5px"></span>3칸</td>
+            <td style="padding:4px;text-align:center"><input id="rlt-w-2" class="form-input" type="number" min="0" max="9999" step="1" value="7" style="width:60px;text-align:center;padding:3px 4px;font-size:12px;height:28px"></td>
+            <td style="padding:4px 0;text-align:center"><input id="rlt-mult-2" class="form-input" type="number" min="1" max="9999" step="1" value="2" style="width:54px;text-align:center;padding:3px 4px;font-size:12px;height:28px"> 배</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 4px 4px 0"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#27ae60;vertical-align:middle;margin-right:5px"></span>4칸</td>
+            <td style="padding:4px;text-align:center"><input id="rlt-w-3" class="form-input" type="number" min="0" max="9999" step="1" value="2" style="width:60px;text-align:center;padding:3px 4px;font-size:12px;height:28px"></td>
+            <td style="padding:4px 0;text-align:center"><input id="rlt-mult-3" class="form-input" type="number" min="1" max="9999" step="1" value="5" style="width:54px;text-align:center;padding:3px 4px;font-size:12px;height:28px"> 배</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 4px 4px 0"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#3498db;vertical-align:middle;margin-right:5px"></span>5칸</td>
+            <td style="padding:4px;text-align:center"><input id="rlt-w-4" class="form-input" type="number" min="0" max="9999" step="1" value="1" style="width:60px;text-align:center;padding:3px 4px;font-size:12px;height:28px"></td>
+            <td style="padding:4px 0;text-align:center"><input id="rlt-mult-4" class="form-input" type="number" min="1" max="9999" step="1" value="25" style="width:54px;text-align:center;padding:3px 4px;font-size:12px;height:28px"> 배</td>
+          </tr>
+        </tbody>
+      </table>
       <button class="btn btn-secondary btn-full btn-sm" onclick="doSetRltConfig()">적용</button>
       <div id="rlt-config-msg" style="font-size:12px;color:var(--muted);margin-top:6px"></div>
     </div>
@@ -784,6 +798,6 @@
 <div class="toast-container" id="toasts"></div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
-<script src="/static/js/app.js?v=12"></script>
+<script src="/static/js/app.js?v=13"></script>
 </body>
 </html>

@@ -116,16 +116,31 @@ ROULETTE_OUTCOMES = [
     {'label': '25배','multiplier': 25, 'weight': 1,  'seg_start': 356.4, 'seg_end': 360},
 ]
 
-_roulette_config = {}  # room_id -> list of 5 multipliers (index 0 is always 0 = 꽝)
-_DEFAULT_RLT_MULTS = [0, 1, 2, 5, 25]
+_roulette_config = {}  # room_id -> {'multipliers': [...], 'weights': [...]}
+_DEFAULT_RLT_CFG = {'multipliers': [0, 1, 2, 5, 25], 'weights': [70, 20, 7, 2, 1]}
+
+def _rlt_cfg(rid):
+    c = _roulette_config.get(rid, {})
+    return (
+        c.get('multipliers', list(_DEFAULT_RLT_CFG['multipliers'])),
+        c.get('weights',     list(_DEFAULT_RLT_CFG['weights'])),
+    )
 
 def _rlt_outcomes(rid):
-    mults = _roulette_config.get(rid, _DEFAULT_RLT_MULTS)
+    mults, weights = _rlt_cfg(rid)
+    total = sum(weights) or 1
+    cumulative = 0.0
     result = []
     for i, o in enumerate(ROULETTE_OUTCOMES):
         m = mults[i] if i < len(mults) else o['multiplier']
-        label = '꽝' if m == 0 else f'{int(m)}배' if m == int(m) else f'{m}배'
-        result.append({**o, 'multiplier': m, 'label': label})
+        w = weights[i] if i < len(weights) else o['weight']
+        pct = w / total
+        seg_start = round(cumulative * 360, 4)
+        seg_end   = round((cumulative + pct) * 360, 4)
+        cumulative += pct
+        label = '꽝' if m == 0 else (f'{int(m)}배' if float(m) == int(m) else f'{m}배')
+        result.append({'label': label, 'multiplier': m, 'weight': w,
+                       'seg_start': seg_start, 'seg_end': seg_end})
     return result
 
 def room_dict(room, uid=None):
@@ -693,8 +708,9 @@ def get_minigame(rid):
     if not m:
         return jsonify({'error': '참여자가 아닙니다.'}), 403
     spins_used = RoomTransaction.query.filter_by(room_id=rid, user_id=user.id, action='RLT').count()
-    mults = _roulette_config.get(rid, _DEFAULT_RLT_MULTS)
-    return jsonify({'spins_left': max(0, 3 - spins_used), 'cash': m.cash, 'multipliers': mults})
+    mults, weights = _rlt_cfg(rid)
+    return jsonify({'spins_left': max(0, 3 - spins_used), 'cash': m.cash,
+                    'multipliers': mults, 'weights': weights})
 
 @app.route('/api/rooms/<int:rid>/minigame/spin', methods=['POST'])
 @login_required
@@ -956,14 +972,20 @@ def host_roulette_config(rid):
     user = cur_user()
     if room.host_id != user.id: return jsonify({'error': '권한 없음'}), 403
     if request.method == 'GET':
-        return jsonify({'multipliers': _roulette_config.get(rid, list(_DEFAULT_RLT_MULTS))})
+        mults, weights = _rlt_cfg(rid)
+        return jsonify({'multipliers': mults, 'weights': weights})
     d = request.json or {}
-    raw = d.get('multipliers', _DEFAULT_RLT_MULTS)
-    if not isinstance(raw, list) or len(raw) != 5:
+    raw_m = d.get('multipliers', _DEFAULT_RLT_CFG['multipliers'])
+    raw_w = d.get('weights',     _DEFAULT_RLT_CFG['weights'])
+    if not (isinstance(raw_m, list) and isinstance(raw_w, list)
+            and len(raw_m) == 5 and len(raw_w) == 5):
         return jsonify({'error': '형식 오류'}), 400
-    mults = [0] + [max(0, float(x)) for x in raw[1:]]
-    _roulette_config[rid] = mults
-    return jsonify({'ok': True, 'multipliers': mults})
+    mults   = [0] + [max(0, float(x)) for x in raw_m[1:]]
+    weights = [max(0, float(x)) for x in raw_w]
+    if sum(weights) == 0:
+        return jsonify({'error': '확률 합계가 0이 될 수 없습니다.'}), 400
+    _roulette_config[rid] = {'multipliers': mults, 'weights': weights}
+    return jsonify({'ok': True, 'multipliers': mults, 'weights': weights})
 
 
 @app.route('/api/rooms/<int:rid>/host/quiz-settings', methods=['GET', 'POST'])

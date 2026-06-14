@@ -823,54 +823,77 @@ const RLT_SEGS = [
 let _rltSpinning = false;
 let _rltCash = 0;
 let _rltMults = [0, 1, 2, 5, 25];
-const _RLT_WEIGHTS = [70, 20, 7, 2, 1];
+let _rltWeights = [70, 20, 7, 2, 1];
+const _RLT_COLORS = ['#c0392b', '#e67e22', '#f1c40f', '#27ae60', '#3498db'];
 
-function _rltLabel(m) { return m === 0 ? '꽝' : `${Number.isInteger(m) ? m : m}배`; }
+function _rltLabel(m) { return m === 0 ? '꽝' : `${m}배`; }
 
-function updateRltLegend(mults) {
-  _rltMults = mults;
-  const labels = mults.map(_rltLabel);
-  labels.forEach((lbl, i) => {
-    const el = document.getElementById(`rlt-leg-${i}`);
-    if (el) el.textContent = `${lbl} ${_RLT_WEIGHTS[i]}%`;
+function _rltPctStr(weights) {
+  const total = weights.reduce((a, b) => a + b, 0) || 1;
+  return weights.map(w => (w / total * 100).toFixed(1));
+}
+
+function updateRltWheel(weights) {
+  const total = weights.reduce((a, b) => a + b, 0) || 1;
+  let cum = 0;
+  const stops = weights.map((w, i) => {
+    const from = (cum / total * 100).toFixed(2);
+    cum += w;
+    const to = (cum / total * 100).toFixed(2);
+    return `${_RLT_COLORS[i]} ${from}% ${to}%`;
   });
+  const wheel = document.getElementById('roulette-wheel');
+  if (wheel) wheel.style.background = `conic-gradient(${stops.join(', ')})`;
+}
+
+function updateRltLegend(mults, weights) {
+  _rltMults = mults;
+  if (weights) _rltWeights = weights;
+  const pcts = _rltPctStr(_rltWeights);
+  mults.forEach((m, i) => {
+    const el = document.getElementById(`rlt-leg-${i}`);
+    if (el) el.textContent = `${_rltLabel(m)} ${pcts[i]}%`;
+  });
+  updateRltWheel(_rltWeights);
 }
 
 async function loadRltConfig() {
   const data = await api.get(`/api/rooms/${S.room.id}/host/roulette-config`);
   if (data.error) return;
-  const m = data.multipliers;
+  const m = data.multipliers || [0,1,2,5,25];
+  const w = data.weights    || [70,20,7,2,1];
   _rltMults = m;
-  ['rlt-mult-1','rlt-mult-2','rlt-mult-3','rlt-mult-4'].forEach((id, i) => {
-    const el = document.getElementById(id);
-    if (el) el.value = m[i + 1];
+  _rltWeights = w;
+  m.slice(1).forEach((v, i) => {
+    const el = document.getElementById(`rlt-mult-${i+1}`);
+    if (el) el.value = v;
   });
-  ['rlt-mult-1-cur','rlt-mult-2-cur','rlt-mult-3-cur','rlt-mult-4-cur'].forEach((id, i) => {
-    const el = document.getElementById(id);
-    if (el) el.textContent = `${m[i + 1]}배`;
+  w.forEach((v, i) => {
+    const el = document.getElementById(`rlt-w-${i}`);
+    if (el) el.value = v;
   });
 }
 
 async function doSetRltConfig() {
-  const inputs = ['rlt-mult-1','rlt-mult-2','rlt-mult-3','rlt-mult-4']
-    .map(id => parseFloat(document.getElementById(id)?.value) || 1);
-  const mults = [0, ...inputs];
-  const data = await api.post(`/api/rooms/${S.room.id}/host/roulette-config`, { multipliers: mults });
+  const weights = [0,1,2,3,4].map(i => parseFloat(document.getElementById(`rlt-w-${i}`)?.value) || 0);
+  const mults   = [0, ...[1,2,3,4].map(i => parseFloat(document.getElementById(`rlt-mult-${i}`)?.value) || 1)];
   const msg = document.getElementById('rlt-config-msg');
+  if (weights.every(w => w === 0)) {
+    msg.style.color = 'var(--down)'; msg.textContent = '확률 합계가 0이 될 수 없습니다.'; return;
+  }
+  const data = await api.post(`/api/rooms/${S.room.id}/host/roulette-config`, { multipliers: mults, weights });
   if (data.error) { msg.style.color = 'var(--down)'; msg.textContent = data.error; return; }
-  msg.style.color = 'var(--muted)';
-  msg.textContent = `적용됨: 꽝 / ${inputs[0]}배 / ${inputs[1]}배 / ${inputs[2]}배 / ${inputs[3]}배`;
-  ['rlt-mult-1-cur','rlt-mult-2-cur','rlt-mult-3-cur','rlt-mult-4-cur'].forEach((id, i) => {
-    const el = document.getElementById(id);
-    if (el) el.textContent = `${inputs[i]}배`;
-  });
   _rltMults = data.multipliers;
+  _rltWeights = data.weights;
+  const pcts = _rltPctStr(data.weights);
+  msg.style.color = 'var(--up)';
+  msg.textContent = `적용됨 · 꽝 ${pcts[0]}% / ${mults[1]}배 ${pcts[1]}% / ${mults[2]}배 ${pcts[2]}% / ${mults[3]}배 ${pcts[3]}% / ${mults[4]}배 ${pcts[4]}%`;
 }
 
 async function openRouletteModal() {
   const data = await api.get(`/api/rooms/${S.room.id}/minigame`);
   if (data.error || data.spins_left <= 0) return;
-  if (data.multipliers) updateRltLegend(data.multipliers);
+  if (data.multipliers) updateRltLegend(data.multipliers, data.weights);
   _rltCash = data.cash;
   document.getElementById('rlt-spins').textContent = data.spins_left;
   document.getElementById('rlt-cash').textContent = krw(_rltCash);
