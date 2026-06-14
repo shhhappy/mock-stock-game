@@ -541,9 +541,10 @@
       <span style="font-weight:700;color:var(--warn)" id="trade-total">–</span>
     </div>
     <div class="trade-btns">
-      <button class="btn btn-success" onclick="execTrade('BUY')">▲ 매수</button>
-      <button class="btn btn-danger"  onclick="execTrade('SELL')">▼ 매도</button>
+      <button id="trade-buy-btn" class="btn btn-success" onclick="execTrade('BUY')">▲ 매수</button>
+      <button id="trade-sell-btn" class="btn btn-danger"  onclick="execTrade('SELL')">▼ 매도</button>
     </div>
+    <div id="trade-paused-msg" style="display:none;text-align:center;font-size:13px;color:var(--warn);font-weight:600;margin-top:6px">⏸ 게임 일시정지 중 — 거래 불가</div>
     <div id="trade-fb" style="min-height:20px;font-size:13px;text-align:center;margin-top:8px"></div>
   </div>
 </div>
@@ -578,6 +579,19 @@
     <div class="modal-title" id="guide-title"></div>
     <span class="chip chip-blue" id="guide-cat" style="margin-bottom:14px;display:inline-block"></span>
     <div class="guide-content" id="guide-body"></div>
+  </div>
+</div>
+
+<!-- Host: Student Transaction History -->
+<div id="modal-student-txn" class="modal-overlay" onclick="closeModalOutside(event,'modal-student-txn')">
+  <div class="modal-sheet">
+    <div class="modal-handle"></div>
+    <button class="back-btn" style="font-size:13px;margin-bottom:8px;display:block" onclick="closeModal('modal-student-txn')">← 뒤로</button>
+    <div class="modal-title" style="margin-bottom:12px">📋 거래 내역 — <span id="stxn-username">–</span></div>
+    <div id="stxn-list"></div>
+    <div style="text-align:center;margin-top:10px" id="stxn-more-wrap" hidden>
+      <button class="btn btn-secondary btn-sm" onclick="loadMoreStudentTxn()">더 보기</button>
+    </div>
   </div>
 </div>
 

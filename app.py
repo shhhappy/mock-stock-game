@@ -303,6 +303,30 @@ def host_adjust(rid):
     return jsonify({'message': f'{target.username} 자산 {delta:+,.0f}원 조정', 'new_cash': m.cash})
 
 
+@app.route('/api/rooms/<int:rid>/host/members/<int:uid>/transactions')
+@login_required
+def host_member_transactions(rid, uid):
+    room = Room.query.get_or_404(rid)
+    user = cur_user()
+    if room.host_id != user.id: return jsonify({'error': '권한 없음'}), 403
+    page = request.args.get('page', 1, type=int)
+    pg = (RoomTransaction.query.filter_by(room_id=rid, user_id=uid)
+          .order_by(RoomTransaction.timestamp.desc())
+          .paginate(page=page, per_page=30, error_out=False))
+    target = db.session.get(User, uid)
+    return jsonify({
+        'username': target.username if target else str(uid),
+        'transactions': [{
+            'id': t.id,
+            'name': STOCKS.get(t.symbol,{}).get('name', '자산조정') if t.action != 'ADJ' else '자산조정',
+            'action': t.action, 'shares': t.shares, 'price': t.price,
+            'amount': t.amount, 'note': t.note,
+            'timestamp': t.timestamp.replace(tzinfo=timezone.utc).astimezone(KST).strftime('%m-%d %H:%M'),
+        } for t in pg.items],
+        'total': pg.total, 'pages': pg.pages, 'current_page': page,
+    })
+
+
 @app.route('/api/rooms/<int:rid>/host/news-interval', methods=['GET', 'POST'])
 @login_required
 def host_news_interval(rid):

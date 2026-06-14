@@ -8,6 +8,8 @@ const S = {
   timerInterval: null, pollInterval: null, newsInterval: null,
   newsTs: 0,
   txnPage: 1, txnTotalPages: 1,
+  studentTxnUid: null, studentTxnPage: 1, studentTxnTotalPages: 1,
+  depositWarningShown: false,
   adjustTargetUid: null,
   depRate: 3, depCash: 0,
   eduTab: 'glossary', glossaryData: [],
@@ -153,7 +155,7 @@ function resumeRoom() {
   if (S.room.is_host) {
     if (S.room.status === 'waiting') enterHostLobby();
     else if (S.room.status === 'active' || S.room.status === 'paused') enterHostGame();
-    else loadResults();
+    else loadResults().then(() => showScreen('screen-results'));
   } else {
     if (S.room.status === 'waiting') enterParticipantLobby();
     else if (S.room.status === 'active' || S.room.status === 'paused') enterParticipantGame();
@@ -388,7 +390,8 @@ async function loadHostMembers() {
           ${sign}${m.gain_pct.toFixed(1)}%
         </span>
         <span style="font-weight:700;min-width:90px;text-align:right;font-size:13px">${krw(m.total_value)}</span>
-        <button class="btn btn-secondary btn-sm" onclick="openAdjust(${m.user_id},'${m.username}',${m.cash})" style="margin-left:6px;padding:4px 8px">조정</button>
+        <button class="btn btn-secondary btn-sm" onclick="openStudentTxn(${m.user_id},'${m.username.replace(/'/g,&quot;\\\'&quot;)}')" style="margin-left:4px;padding:4px 8px;font-size:11px">거래</button>
+        <button class="btn btn-secondary btn-sm" onclick="openAdjust(${m.user_id},'${m.username.replace(/'/g,&quot;\\\'&quot;)}',${m.cash})" style="margin-left:4px;padding:4px 8px">조정</button>
       </div>`;
   }).join('');
 
@@ -465,6 +468,43 @@ async function doAdjust() {
   loadHostMembers();
 }
 
+function openStudentTxn(uid, username) {
+  S.studentTxnUid = uid;
+  S.studentTxnPage = 1;
+  S.studentTxnTotalPages = 1;
+  document.getElementById('stxn-username').textContent = username;
+  document.getElementById('stxn-list').innerHTML = '<div class="loading-center"><span class="spinner"></span></div>';
+  document.getElementById('stxn-more-wrap').hidden = true;
+  openModal('modal-student-txn');
+  loadStudentTxn(true);
+}
+
+async function loadStudentTxn(reset = false) {
+  const data = await api.get(`/api/rooms/${S.room.id}/host/members/${S.studentTxnUid}/transactions?page=${S.studentTxnPage}`);
+  const list = document.getElementById('stxn-list');
+  if (!data.transactions?.length && reset) {
+    list.innerHTML = '<div class="empty-state"><div class="e-icon">📋</div>거래 내역 없음</div>';
+    return;
+  }
+  S.studentTxnTotalPages = data.pages || 1;
+  const html = (data.transactions || []).map(t => `
+    <div class="txn-item">
+      <div>
+        <div style="font-weight:600">${t.name}</div>
+        <div class="muted" style="font-size:11px">${t.timestamp}${t.note ? ' · ' + t.note : ''}</div>
+      </div>
+      <div style="text-align:right">
+        <span class="txn-badge ${t.action.toLowerCase()}">${t.action==='BUY'?'매수':t.action==='SELL'?'매도':'조정'}</span>
+        ${t.action !== 'ADJ' ? `<div class="muted" style="font-size:11px">${t.shares}주 · ${krw(t.price)}</div>` : ''}
+        <div style="font-weight:600">${t.action==='ADJ'?(t.amount>=0?'+':'')+krw(t.amount):krw(t.amount)}</div>
+      </div>
+    </div>`).join('');
+  if (reset) list.innerHTML = html; else list.insertAdjacentHTML('beforeend', html);
+  document.getElementById('stxn-more-wrap').hidden = S.studentTxnPage >= S.studentTxnTotalPages;
+}
+
+async function loadMoreStudentTxn() { S.studentTxnPage++; await loadStudentTxn(false); }
+
 async function doEndGame() {
   if (!confirm('게임을 종료하시겠습니까?')) return;
   const data = await api.post(`/api/rooms/${S.room.id}/end`, {});
@@ -507,6 +547,7 @@ async function loadPLobbyMembers() {
 
 // ── Participant: Game ────────────────────────────────────
 function enterParticipantGame() {
+  S.depositWarningShown = false;
   S.depRate = S.room.deposit_rate;
   document.getElementById('dep-rate-display').textContent = S.room.deposit_rate + '%';
   showScreen('screen-p-game');
@@ -528,6 +569,7 @@ function enterParticipantGame() {
     const r = await api.get(`/api/rooms/${S.room.id}`);
     if (r.status === 'ended') {
       S.room = r; stopPolling(); stopTimer();
+      await showMaturedDepositResult();
       toast('⏰ 게임이 종료되었습니다!', 'info');
       await loadResults();
       showScreen('screen-results');
@@ -537,6 +579,7 @@ function enterParticipantGame() {
         showPausedBanner();
       } else {
         hidePausedBanner();
+        if (r.remaining_seconds <= 60) checkDepositMaturity();
       }
     }
     refreshMyRank();
@@ -554,10 +597,61 @@ function showPausedBanner() {
     banner.textContent = '⏸ 게임이 일시정지되었습니다';
     document.body.appendChild(banner);
   }
+  updateTradeButtonState();
 }
 
 function hidePausedBanner() {
   document.getElementById('paused-banner')?.remove();
+  updateTradeButtonState();
+}
+
+function updateTradeButtonState() {
+  const paused = S.room?.status === 'paused';
+  ['trade-buy-btn', 'trade-sell-btn'].forEach(id => {
+    const btn = document.getElementById(id);
+    if (btn) { btn.disabled = paused; btn.style.opacity = paused ? '0.5' : '1'; }
+  });
+  const msg = document.getElementById('trade-paused-msg');
+  if (msg) msg.style.display = paused ? '' : 'none';
+}
+
+async function checkDepositMaturity() {
+  if (S.depositWarningShown) return;
+  S.depositWarningShown = true;
+  const deps = await api.get(`/api/rooms/${S.room.id}/deposits`).catch(() => null);
+  if (!deps) return;
+  const active = deps.filter(d => d.status === 'active');
+  if (!active.length) return;
+  const totalAmount = active.reduce((s, d) => s + d.amount, 0);
+  const totalInterest = active.reduce((s, d) => s + (d.expected_interest || 0), 0);
+  const popup = document.createElement('div');
+  popup.id = 'dep-maturity-banner';
+  popup.style.cssText = 'position:fixed;bottom:70px;left:50%;transform:translateX(-50%);background:#1c2128;border:2px solid var(--warn);border-radius:12px;padding:14px 18px;z-index:8000;width:calc(100% - 32px);max-width:380px;box-shadow:0 4px 24px rgba(0,0,0,.5)';
+  popup.innerHTML = `
+    <div style="font-weight:700;font-size:15px;margin-bottom:6px;color:var(--warn)">🏦 예금 만기 임박!</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:8px">게임 종료 1분 전 — 예금이 곧 만기됩니다</div>
+    ${active.map(d => `
+      <div style="font-size:13px;display:flex;justify-content:space-between;margin-top:4px">
+        <span>원금 ${krw(d.amount)}</span>
+        <span style="color:var(--up)">+이자 ${krw(d.expected_interest)}</span>
+      </div>`).join('')}
+    <div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);font-weight:700;display:flex;justify-content:space-between">
+      <span>예상 수령액</span>
+      <span style="color:var(--warn)">${krw(totalAmount + totalInterest)}</span>
+    </div>`;
+  document.getElementById('dep-maturity-banner')?.remove();
+  document.body.appendChild(popup);
+  setTimeout(() => popup.remove(), 6000);
+}
+
+async function showMaturedDepositResult() {
+  const deps = await api.get(`/api/rooms/${S.room.id}/deposits`).catch(() => null);
+  if (!deps) return;
+  const matured = deps.filter(d => d.status === 'matured');
+  if (!matured.length) return;
+  const totalAmount = matured.reduce((s, d) => s + d.amount, 0);
+  const totalInterest = matured.reduce((s, d) => s + (d.interest_earned || 0), 0);
+  toast(`🏦 예금 만기! 원금 ${krw(totalAmount)} + 이자 ${krw(totalInterest)} 지급`, 'success');
 }
 
 async function refreshMyRank() {
@@ -792,7 +886,7 @@ async function loadMarket() {
   S.stocks  = data.stocks;
   S.sectors = data.sectors;
   renderSectors();
-  renderGrid(S.stocks, prev);
+  filterStocks(prev);
 }
 
 function renderSectors() {
@@ -809,7 +903,7 @@ function setSector(s) {
   filterStocks();
 }
 
-function filterStocks() {
+function filterStocks(prevPrices = {}) {
   const q = (document.getElementById('stock-search').value || '').toLowerCase();
   const filtered = S.stocks.filter(st =>
     (!S.activeSector || st.sector === S.activeSector) &&
@@ -821,7 +915,7 @@ function filterStocks() {
       '<div class="empty-state"><div class="e-icon">⭐</div>관심 종목을 추가해보세요</div>';
     return;
   }
-  renderGrid(filtered, {});
+  renderGrid(filtered, prevPrices);
 }
 
 function toggleWatchlistFilter() {
@@ -907,6 +1001,7 @@ async function openStockModal(symbol, fallback = null) {
 
   document.querySelectorAll('.period-tab').forEach((b, i) => b.classList.toggle('active', i === 2));
   openModal('modal-stock');
+  updateTradeButtonState();
   loadChart('1mo');
 }
 
@@ -976,6 +1071,11 @@ function setMaxSell() {
 }
 
 async function execTrade(action) {
+  if (S.room?.status === 'paused') {
+    const fb = document.getElementById('trade-fb');
+    fb.style.color = 'var(--warn)'; fb.textContent = '⏸ 게임 일시정지 중입니다.';
+    return;
+  }
   const shares = parseInt(document.getElementById('trade-qty').value);
   if (!shares) return;
   const fb = document.getElementById('trade-fb');
@@ -984,6 +1084,9 @@ async function execTrade(action) {
   if (data.error) { fb.style.color = 'var(--down)'; fb.textContent = data.error; return; }
   fb.style.color = 'var(--up)'; fb.textContent = data.message;
   toast(data.message, 'success');
+
+  document.getElementById('trade-qty').value = 1;
+  updateTotal();
 
   S.tradeCash = data.cash;
   document.getElementById('ms-cash').textContent = krw(data.cash);
