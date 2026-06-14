@@ -237,3 +237,41 @@
 - **Chart.js 인스턴스 미정리로 인한 메모리 누수** (`app.js:1032`, `app.js:398-403`): `S.portChart`, `S.assetLineChart` 등은 `loadPortfolio()` 재호출 시 `destroy()` 가드가 있지만, `showScreen()` 또는 `goHome()`으로 화면을 전환할 때는 cleanup 없이 방치됨. `showLanding()` 내에서 `[S.portChart, S.assetLineChart, S.hostBarChart, S.resultsBarChart].forEach(c => c?.destroy())` 한 줄 추가만으로 해결 가능.
 
 - **시간 포맷 함수 중복 구현** (`app.js:569-581`, `app.js:583-604`): 타이머(`startTimer`), 진행자 타이머, 결과 화면 등에서 `mm:ss` 포맷을 `String(m).padStart(2,'0')` 패턴으로 반복 구현. `function fmtMSS(sec){ const m=Math.floor(sec/60),s=sec%60; return \`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}\`; }` 유틸 함수 하나로 통합하면 약 10줄 이상의 중복 코드 제거 가능.
+
+---
+
+## 2026-06-14 (4차)
+
+### 추가하면 좋을 기능
+
+- **복권 참여자 제출 현황 진행자에게 실시간 표시** (`app.py:798-812`, `index.html:704-708`): 진행자의 `lhost-picking-section`은 "참가자 번호 선택 중..."과 남은 시간만 표시하고, 실제로 몇 명이 번호를 제출했는지 전혀 알 수 없음. `GET /api/rooms/<rid>/lottery` 응답(`app.py:808` 직전)에 `picks_count: len(cur.get('picks', {}))` 필드를 추가하고, 진행자 패널에 "X/Y명 제출" 카운터를 표시하면 진행자가 "이제 추첨해도 되겠다"를 스스로 판단 가능. 3초 폴링이 이미 동작 중이므로 서버 1줄 + 클라이언트 1줄 추가만으로 구현 가능.
+
+- **룰렛 스핀 애니메이션 중 오버레이 강제 닫기 방지** (`app.js:947`, `app.js:993-995`): `doRouletteSpin()`이 `await new Promise(r => setTimeout(r, 4300))`로 4.3초를 대기하는 동안 사용자가 오버레이 배경을 탭하면 `roulette-overlay`가 닫히고, 이후 `rlt-result` / `rlt-again-btn` DOM 조작이 숨겨진 요소에서 발생해 결과가 화면에 나타나지 않음. `closeRoulette()` 첫 줄에 `if (_rltSpinning) return;` 한 줄만 추가하면 방지 가능. 기존에 `_rltSpinning` 플래그가 이미 있으므로 별도 상태 추가 불필요.
+
+- **해외 주식 원화 환산 기준 배지 및 국가 구분** (`stock_service.py:78-97`, `app.js:1148-1165`): 해외 주식 15개(Apple 270,000원, NVIDIA 160,000원 등)가 국내 종목과 동일한 카드 레이아웃으로 표시되어 학생들이 "이게 실제 달러 가격인가요?"라는 혼란이 발생할 수 있음. `renderGrid()` 내에서 `st.sector`가 `'해외IT'`, `'해외반도체'`, `'전기차'`, `'일본'`, `'중국IT'` 중 하나이면 종목명 앞에 국기 이모지(🇺🇸/🇯🇵/🇨🇳)를 추가하거나, 카드 우측 하단에 `<span style="font-size:9px;color:var(--muted)">KRW환산</span>` 배지를 붙이면 서버 변경 없이 교육적 명확성 향상.
+
+- **복권 추첨 타이머 만료 자동 처리 서버 독립성 부재** (`app.py:789-795`): `picking → drawing` 전이와 `drawing → revealed` 전이가 모두 `GET /api/rooms/<rid>/lottery` 폴링 요청 처리 중 타임스탬프 비교로 발생함. 진행자·참여자가 모두 탭을 닫거나 네트워크가 끊기면 타이머가 만료돼도 상태 전이가 일어나지 않아 복권이 `drawing` 상태로 영구 정지됨. 다음 접속 때 폴링이 재시작되면 자동 복구되지만, 이 동안 새로 접속한 학생은 복권이 진행 중인지 알 수 없음. `lottery_start()` (`app.py:778`) 시점에 `threading.Timer(LOTTO_PICK_SECS + LOTTO_DRAW_SECS + 5, lambda: _auto_close(rid, cur_round))`를 등록하는 방식으로 서버 독립 자동 마감 구현 권장.
+
+- **20개 이상 섹터 나열로 인한 섹터 필터 UX 저하** (`app.js:1097-1102`, `stock_service.py:99`): 최근 해외 주식 15개 추가로 섹터 수가 `반도체`, `IT`, `자동차`, `배터리`, `바이오`, `제약`, `금융`, `통신`, `전자`, `철강`, `해운`, `에너지`, `엔터`, `게임`, `건설`, `지주`, `해외IT`, `해외반도체`, `전기차`, `일본`, `중국IT` 등 20여 개에 달함. 현재 `renderSectors()`는 이를 한 줄 가로 스크롤로 나열해 모바일 화면에서 탐색이 매우 불편함. 국내/해외를 먼저 탭으로 분류하거나, 섹터 선택을 드롭다운(`<select>`)으로 대체하면 화면 공간을 절약하면서 탐색이 빨라짐.
+
+- **`lottery_start()` 상금 최대값 검증 없음** (`app.py:769`): `prize = float(d.get('prize', 0))`에 상한선이 없음. 진행자가 입력 실수로 `500000000`(5억)을 입력하면 6개 번호 모두 맞춘 학생에게 5억이 지급되어 게임 밸런스가 무너짐. `if prize > room.starting_cash * RoomMember.query.filter_by(room_id=rid).count(): return jsonify({'error': '상금이 너무 큽니다'}), 400` 형태의 상한선 또는 `index.html:691`의 입력 필드에 `max` 속성 추가 권장.
+
+---
+
+### 제거/단순화할 것들
+
+- **`RLT_SEGS` 상수 — 완전한 dead code** (`app.js:816-822`): `const RLT_SEGS = [{label:'꽝',...}, ...]` 7줄이 선언되어 있지만 `openRouletteModal()`, `doRouletteSpin()`, `updateRltLegend()`, `updateRltWheel()` 어디서도 이 변수를 참조하지 않음. 스핀 결과의 회전 각도는 서버 응답 `data.seg_start/data.seg_end`를 직접 사용하고(`app.js:937`), 범례는 `data.multipliers/data.weights`를 사용함. 룰렛 배율 진행자 설정 기능 추가 시 이 상수가 남겨진 것으로 보이며 완전히 삭제 가능.
+
+- **`_lots[rid]['done']`이 Python `set` — JSON 직렬화 불호환** (`app.py:71`, `app.py:108-109`): `_lots.setdefault(rid, {}).setdefault('done', set()).add(cur['round'])` 패턴에서 `done` 값이 Python `set`임. `json.dumps(_lots)`를 호출하면 `TypeError: Object of type set is not JSON serializable`가 발생함. 현재 코드에서 이 딕셔너리를 직접 직렬화하지 않아 문제가 없지만, 로깅·디버깅 또는 향후 캐시 직렬화 시 즉시 폭발. `_lots[rid] = {'done': []}` 초기화로 통일하고 중복 추가는 `if round_n not in done: done.append(round_n)` 패턴으로 교체 권장.
+
+- **`_showLotParticipantPicker()` 매 3초 그리드 45개 버튼 재렌더링** (`app.js:1980-2003`, `app.js:1823`): `picking` 상태 60초 동안 3초 폴링으로 최대 20회 `_renderLotGrid('lottery-picker-grid', _lotParticipantPicks, ...)` 호출 → 매번 45개 버튼 DOM을 삭제 후 재생성. `app.js:1982-1985`에 이미 `overlay.style.display === 'flex' && picker-section이 표시 중`이면 `_lotCountdown()` 업데이트만 하고 조기 반환하는 로직이 있지만, 그 블록 밖에서도 `_renderLotGrid()` 호출이 남아 있음 (`app.js:1994`). `_lotPickerSubmitted`이거나 그리드에 이미 버튼이 있으면 카운트다운만 업데이트하고 그리드 재렌더링은 건너뛰도록 조건 추가 필요.
+
+- **`loadParticipantRankings()` 매 호출마다 스피너로 목록 초기화** (`app.js:1528-1529`): 순위 탭이 열린 상태에서 5초 폴링마다 `list.innerHTML = '<div class="loading-center"><span class="spinner"></span></div>'`로 기존 내용을 스피너로 덮어씌워 목록이 깜빡임. `loadHostMembers()`처럼 데이터를 먼저 받아온 뒤 조용히 갱신하거나, `if (!list.children.length)` 조건으로 초기 로딩 시에만 스피너를 표시하면 깜빡임 없이 부드러운 업데이트 가능.
+
+- **`host_adjust()` `user_id` 누락 시 불필요한 DB 쿼리 실행** (`app.py:374-378`): `target_uid = d.get('user_id')`가 JSON에 없으면 `None`이 되고, `RoomMember.query.filter_by(room_id=rid, user_id=None).first()`는 `WHERE user_id IS NULL`로 번역되어 의미 없는 쿼리가 실행됨. 결과가 None이면 404로 처리되므로 최종 동작은 맞지만, `if not target_uid: return jsonify({'error': 'user_id 필요'}), 400`으로 조기 반환하면 DB 쿼리를 줄이고 오류 원인도 명확해짐.
+
+- **`_renderLotGrid()` `onclick="${clickFn.name}(this,${i})"` 함수명 문자열 의존** (`app.js:1938`): `clickFn.name` 프로퍼티를 onclick 속성값으로 직접 삽입함. 향후 빌드 도구로 코드를 minify하면 함수가 `a`, `b` 등으로 축소되어 `onclick="a(this,1)"` 같은 형태가 되어 전역 함수 탐색 실패. 이벤트 위임으로 교체(`container.addEventListener('click', e => { const btn = e.target.closest('.lottery-num'); if (btn) clickFn(btn, parseInt(btn.textContent)); })`)하면 minify에 안전하고 45개 이벤트 리스너 대신 1개로 절약 가능.
+
+- **`lottery_draw()` 에서 서버가 당첨 번호 중복을 허용** (`app.py:851-856`): `raw = (request.json or {}).get('numbers', [])`로 받은 번호를 `sorted(set(int(n) for n in raw if 1 <= int(n) <= 45))`로 정제하지만, 진행자가 의도적으로 중복 번호를 제출하면 `set()`으로 중복이 제거된 뒤 `len(nums) != 6` 체크에서 실패해 오류가 반환됨. 문제없으나 `lottery_pick()`(`app.py:830`)도 동일 패턴으로 두 곳의 검증 로직이 복사-붙여넣기 수준으로 동일. 공통 헬퍼 `def _parse_lotto_numbers(raw)` 함수로 추출하면 중복 제거와 유지보수 편의.
+
+---
