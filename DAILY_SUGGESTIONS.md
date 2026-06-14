@@ -205,3 +205,35 @@
 - **`find_active_room()` 이중 쿼리** (`app.py:92-98`): `GET /api/auth/me`가 호출될 때마다 host 체크 쿼리와 member 체크 쿼리를 순차 실행함. 참여자가 많아지면 두 번째 `RoomMember.query.join(Room)` 쿼리에 JOIN 비용이 더해짐. 단일 `UNION` 쿼리 또는 ORM subquery로 통합하거나, 적어도 `Room` 인스턴스를 캐싱해 두 번째 쿼리의 `db.session.get(Room, m.room_id)` 호출을 생략하면 왕복 쿼리 1건 절약.
 
 - **`loadPLobbyMembers()`의 `.catch(() => [])` 로 403 에러 무시** (`app.js:499`): 2026-06-12에 지적된 참여자 로비 멤버 목록 버그(403 반환)가 여전히 수정되지 않은 채 `.catch(() => [])` 가드로 조용히 실패 중. 지금은 "대기 중인 참여자 0명"이 항상 표시됨. 단기 해결책으로 `app.py:275-285`의 `lobby_members` 엔드포인트에서 `if room.host_id != user.id:` 체크를 제거하고 `@login_required`만 남기면 참여자도 로비 목록을 볼 수 있음 — 목록 조회는 민감 정보가 아니므로 보안 위험 없음.
+
+---
+
+## 2026-06-14 (3차)
+
+### 추가하면 좋을 기능
+
+- **일시정지 중 매수/매도 버튼 비활성화** (`app.js:548-561`, `app.js:863-876`): 진행자가 게임을 일시정지하면 배너(`showPausedBanner()`)는 표시되지만 주식 모달의 매수/매도 버튼은 여전히 활성 상태. 서버의 `trade()` 엔드포인트가 `paused` 상태를 체크하더라도, 학생 입장에서는 버튼이 눌리는 것처럼 보여 혼란 유발. `showPausedBanner()` 내에서 `.btn-success, .btn-danger`를 `disabled = true`로 설정하고, `hidePausedBanner()` 시 복원하면 UX와 로직이 일치함.
+
+- **진행자 개별 학생 거래 내역 확인** (`app.js:272-337`, `index.html:134-143`): 진행자 순위 화면에서 학생 행을 클릭해도 아무 반응 없음. `GET /api/rooms/<rid>/host/member-portfolio?uid=<uid>` 엔드포인트를 추가하고 `host-member-row` 클릭 시 해당 학생의 보유 종목·평가 손익을 모달로 표시하면 교사가 수업 중 특정 학생의 투자 전략을 설명 자료로 활용 가능.
+
+- **게임 재진입(새로고침) 시 화면 복원** (`app.js:1505-1511`, `app.py:80-90`): 학생이 실수로 브라우저를 새로고침하면 `screen-landing`으로 돌아가 방 코드를 다시 입력해야 함. `localStorage`에 `{roomId, userId}`를 저장해 두고, 페이지 로드 시 `GET /api/rooms/<rid>` 상태가 `active`면 자동으로 게임 화면으로 복원하면 수업 중 실수로 인한 이탈을 방지할 수 있음 (`app.js:1505` `window.onload` 블록에 추가).
+
+- **거래 후 모달 수량 초기화 누락** (`app.js:972-999`, `index.html:538-541`): `execTrade()` 성공 후 수량 입력(`trade-qty`)이 이전 값을 유지해, 학생이 바로 다시 거래하려 할 때 직전 수량이 그대로 남아 있음. 성공 콜백에서 `document.getElementById('trade-qty').value = 1`과 `updateTotal()`을 호출해 수량과 예상 금액을 초기화하면 이중 주문 실수를 줄일 수 있음.
+
+- **섹터 필터 선택 상태가 모달 닫기 후 초기화됨** (`app.js:784-826`, `index.html:318-323`): 학생이 "반도체" 섹터를 선택한 뒤 종목 모달을 열었다 닫으면 필터가 해제되고 전체 목록이 다시 표시됨. `closeModal('modal-stock')` 시 `S.curSector` 상태를 유지하고 `renderGrid()`를 해당 필터로 재렌더링하면 여러 종목을 연속 비교할 때 편의성 향상.
+
+- **예금 만기 도달 시 자동 알림 없음** (`app.js:527-545`, `app.py:456-489`): 예금이 만기되어 이자가 지급되더라도 학생에게 별도 알림이 없음. 폴링 응답에 `matured_deposits: [{symbol, interest}]` 필드를 추가하고, 만기 예금이 있으면 폭탄뉴스와 유사한 팝업("예금 만기! 이자 ₩XXX 지급")을 표시하면 학생이 예금 전략의 결과를 즉시 인식 가능 (`app.js:530` 폴링 응답 처리 부분에 추가).
+
+---
+
+### 제거/단순화할 것들
+
+- **`execTrade()` 성공 후 중복 DOM 갱신** (`app.js:985-999`): 거래 성공 시 `ms-cash` DOM을 `data.cash`로 직접 갱신한 직후 `refreshMyRank()`를 호출해 같은 값을 다시 API로 가져와 덮어씀. `ms-cash` 직접 갱신을 제거하고 `refreshMyRank()` 응답으로만 헤더·모달 현금을 업데이트하면 API 왕복 없이 코드가 단순해짐.
+
+- **`loadMarket()` 매 호출마다 전체 종목 재요청** (`app.js:784-796`, `app.py:328-345`): 섹터 필터 변경·검색어 입력 시마다 `loadMarket()`이 전체 종목을 다시 받음. 종목의 심볼·이름·섹터는 불변이므로 초기 1회 전체 로드 후 `S.stocks` 캐시에 저장하고 이후 필터링은 로컬에서만 수행하면 요청 횟수와 응답 크기를 크게 줄일 수 있음.
+
+- **`room_dict()` 매 호출 시 호스트명 DB 재조회** (`app.py:70-90`): `room_dict()`는 `db.session.get(User, room.host_id)`로 호스트 이름을 매번 조회함. `get_room()`, `get_rankings()` 등 다수 엔드포인트가 이 함수를 호출하므로 불필요한 SELECT가 반복 발생. `Room` 모델에 `host_name = db.Column(db.String(50))` 컬럼을 추가해 방 생성 시 한 번만 저장하면 조인 없이 해결 가능.
+
+- **Chart.js 인스턴스 미정리로 인한 메모리 누수** (`app.js:1032`, `app.js:398-403`): `S.portChart`, `S.assetLineChart` 등은 `loadPortfolio()` 재호출 시 `destroy()` 가드가 있지만, `showScreen()` 또는 `goHome()`으로 화면을 전환할 때는 cleanup 없이 방치됨. `showLanding()` 내에서 `[S.portChart, S.assetLineChart, S.hostBarChart, S.resultsBarChart].forEach(c => c?.destroy())` 한 줄 추가만으로 해결 가능.
+
+- **시간 포맷 함수 중복 구현** (`app.js:569-581`, `app.js:583-604`): 타이머(`startTimer`), 진행자 타이머, 결과 화면 등에서 `mm:ss` 포맷을 `String(m).padStart(2,'0')` 패턴으로 반복 구현. `function fmtMSS(sec){ const m=Math.floor(sec/60),s=sec%60; return \`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}\`; }` 유틸 함수 하나로 통합하면 약 10줄 이상의 중복 코드 제거 가능.
