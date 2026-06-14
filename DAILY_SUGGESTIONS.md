@@ -175,3 +175,33 @@
 - **`doDeposit()` · `doWithdraw()` 이중 제출 방지 없음** (`app.js:1192-1215`): 2026-06-12에 `execTrade()` 이중 클릭 문제를 지적했으나, 예금/해지 버튼에도 동일 취약점이 있음. 느린 네트워크에서 "예금하기"를 두 번 클릭하면 동일 금액이 두 번 예금되고, `doWithdraw()`를 두 번 클릭하면 첫 번째 성공 후 두 번째는 `'이미 처리된 예금'` 에러가 나지만 UX를 혼란스럽게 함. `app.js:1196`과 `app.js:1209`에서 API 호출 직전 버튼 `disabled = true`, 응답 후 `disabled = false`를 추가하거나, 모듈 수준 `let _depInFlight = false` 가드를 함수 진입 시 확인하는 방식으로 방지 가능.
 
 - **`Room.query.get_or_404(rid)` 폐기 패턴 전체** (`app.py:184,192,203,215,231,245,265,276,287,307,329,350,366,381,388,399,449,484,506,527,554,558,580,620,636,669,687,708` 등 30여 곳): 2026-06-10에 `User.query.get()` → `db.session.get()` 교체를 권장했으나, 모든 라우트의 `Room.query.get_or_404(rid)`는 그대로 남아 있음. Flask-SQLAlchemy 3.1+에서는 `db.get_or_404(Room, rid)` 패턴을 권장함. 에디터 전체 치환(`Room.query.get_or_404` → `db.get_or_404(Room,`)으로 30초 안에 30여 군데를 일괄 수정 가능하며, SQLAlchemy 2.x 마이그레이션 준비에도 도움.
+
+---
+
+## 2026-06-14 (2차)
+
+### 추가하면 좋을 기능
+
+- **CDN 의존성 → 학교 네트워크 단절 위험** (`index.html:600-602`): Chart.js와 qrcodejs를 `cdn.jsdelivr.net`에서 동적으로 로드함. 한국 학교 인트라넷은 외부 CDN을 차단하거나 네트워크가 불안정한 경우가 잦아, 차트가 전혀 그려지지 않거나 QR코드가 생성되지 않을 수 있음. `npm run build`나 `wget`으로 두 파일을 `static/vendor/`에 미리 내려받아 자체 호스팅하면 CDN 의존 없이 수업 진행 가능.
+
+- **거래 횟수 제한(Rate Limiting) 없음** (`app.py:399-442`): `POST /api/rooms/<rid>/trade`에 사용자·시간 단위 제한이 없어 학생이 스크립트(또는 빠른 반복 클릭)로 초당 수십 건 거래를 실행할 수 있음. 서버 DB에 과부하를 줄 뿐 아니라 게임 공정성도 훼손됨. 가장 간단한 방법은 Flask-Limiter(`pip install flask-limiter`)로 `@limiter.limit("10 per second")` 한 줄 추가하거나, `RoomMember`에 `last_trade_at` 컬럼을 두고 1초 이내 재거래 시 400을 반환하는 방식으로 서버 측 쿨다운 구현.
+
+- **게임 시작 시 최소 인원 체크 없음** (`app.py:189-201`, `app.js:215-224`): `start_room()`은 참여자가 0명이어도 게임을 시작함. 교사가 코드를 배포하기 전에 실수로 "게임 시작"을 누르면 학생들이 없는 상태로 타이머가 시작됨. `RoomMember.query.filter_by(room_id=rid).count()` < 1이면 `{'error': '참여자가 없습니다. 학생이 입장한 후 시작하세요.'}` 로 응답하거나, 프론트에서 `data.member_count === 0`일 때 `doStartGame()` 확인 메시지에 경고를 포함하는 것으로 간단히 방지 가능.
+
+- **종목 모달에서 매도 확인 단계 없음** (`app.js:978-1000`, `index.html:543-546`): 매수는 금액·수량을 보고 버튼을 누르지만, 매도도 동일한 한 번의 탭으로 즉시 실행됨. 보유 수량이 많을 때 실수로 "전량 매도" 후 `setMaxSell()`을 눌러 전액 매도하는 상황이 수업 중 빈번히 발생할 수 있음. 매도 금액이 보유 현금의 30% 이상이면 `confirm('정말 ${shares}주를 매도할까요?')`를 표시하는 조건부 확인 로직을 `execTrade('SELL')` 첫 줄에 추가 권장.
+
+- **진행자 대시보드에 방 설정 정보(초기 자금·게임 시간) 표시 없음** (`index.html:114-135`): 호스트 게임 화면 상단 바(`host-topbar`)에 방 이름·코드·타이머만 있고 초기 자금·총 게임 시간이 없음. 수업 도중 학생이 "제 시작 자금이 얼마예요?" 물을 때 교사가 별도 확인할 방법이 없음. `<div style="font-size:10px">${krw(S.room.starting_cash)} · ${S.room.duration_minutes}분</div>`을 `host-topbar` 방 이름 아래에 한 줄 추가하는 것으로 즉시 해결 가능 (`app.js:228-229`).
+
+---
+
+### 제거/단순화할 것들
+
+- **뉴스 폴링 주기 하드코딩 3초 vs 서버 설정값 불일치** (`app.js:613-624`): 클라이언트는 3초마다 `GET /api/rooms/<rid>/news`를 호출하지만, 서버의 `_news_ttl`은 진행자가 5~300초로 자유롭게 설정 가능. 참여자 30명 × 20회/분 = 600 req/min이 뉴스 조회에만 소비됨. `loadNewsInterval()`에서 이미 `news_seconds`를 받아오므로 (`app.js:351-355`), 참여자 측에서도 첫 `get_room()` 응답에 `news_interval_seconds`를 포함시키거나 별도 쿼리로 받아와 `setInterval(…, news_seconds * 1000)`으로 동적 설정하면 불필요한 요청이 크게 줄어듦.
+
+- **`doEndGame()` API 호출 중 버튼 비활성화 없음** (`app.js:468-476`): `doStartGame()`은 `btn.disabled = true`로 이중 클릭을 방어하지만(`app.js:217-219`), `doEndGame()`에는 동일 처리가 없음. 교사가 종료 버튼을 두 번 클릭하면 첫 번째 `_end_room()`이 예금을 정산하는 도중 두 번째 호출이 `room.status == 'ended'` 체크를 통과해 충돌할 수 있음. `document.querySelector('.btn-danger[onclick="doEndGame()"]').disabled = true` 한 줄을 `doEndGame()` 첫 줄에 추가하면 방지 가능.
+
+- **종료된 방에서 `get_stocks()` 호출 시 새 StockService 생성** (`app.py:327-347`, `stock_service.py:280-284`): `_end_room()`이 `cleanup_room_service(room.id)`를 호출해 서비스를 제거하지만, 결과 화면 도달 전 잠깐 `GET /api/rooms/<rid>/stocks`를 호출하는 경우 `get_room_service(rid)`가 새로운 StockService 인스턴스를 생성해 완전히 다른 무작위 가격을 반환함. `get_stocks()` 맨 앞에 `if room.status == 'ended': return jsonify({'stocks': [], 'sectors': SECTORS})` 체크를 추가하면 불필요한 인스턴스 생성 없이 깔끔하게 처리 가능 (`app.py:330` 직후).
+
+- **`find_active_room()` 이중 쿼리** (`app.py:92-98`): `GET /api/auth/me`가 호출될 때마다 host 체크 쿼리와 member 체크 쿼리를 순차 실행함. 참여자가 많아지면 두 번째 `RoomMember.query.join(Room)` 쿼리에 JOIN 비용이 더해짐. 단일 `UNION` 쿼리 또는 ORM subquery로 통합하거나, 적어도 `Room` 인스턴스를 캐싱해 두 번째 쿼리의 `db.session.get(Room, m.room_id)` 호출을 생략하면 왕복 쿼리 1건 절약.
+
+- **`loadPLobbyMembers()`의 `.catch(() => [])` 로 403 에러 무시** (`app.js:499`): 2026-06-12에 지적된 참여자 로비 멤버 목록 버그(403 반환)가 여전히 수정되지 않은 채 `.catch(() => [])` 가드로 조용히 실패 중. 지금은 "대기 중인 참여자 0명"이 항상 표시됨. 단기 해결책으로 `app.py:275-285`의 `lobby_members` 엔드포인트에서 `if room.host_id != user.id:` 체크를 제거하고 `@login_required`만 남기면 참여자도 로비 목록을 볼 수 있음 — 목록 조회는 민감 정보가 아니므로 보안 위험 없음.
