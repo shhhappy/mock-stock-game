@@ -347,3 +347,37 @@
 - **`_lots` 딕셔너리에서 완료된 복권 데이터 영구 보존** (`app.py:71`, `app.py:109`): `_do_reveal()` 호출 시 `cur['state'] = 'revealed'`로만 변경하고 `_lots[rid]['current']`를 `None`으로 초기화하지 않음. 게임 종료 후에도 메모리에 남아 `lottery_active`가 'revealed' 상태를 반환 계속. `cleanup_room_service()`(`app.py:64-68`) 호출 시 `_lots.pop(rid, None)`을 함께 실행하면 게임 종료 시 복권 데이터가 메모리에서 정리됨.
 
 ---
+
+## 2026-06-15 (2차)
+
+### 추가하면 좋을 기능
+
+- **게임 룰 설명 창 교사 커스터마이징 불가** (`index.html:803-931`, `models.py:25-38`): 이번 커밋(275615e)으로 추가된 게임 룰 창은 108줄의 HTML이 `index.html`에 하드코딩되어 교사가 수업 맞춤 룰(예: "1인당 종목 최대 3개", "데이 트레이딩 금지")을 추가할 방법이 없음. `Room` 모델에 `custom_note = db.Column(db.Text, nullable=True)` 컬럼을 추가하고 방 생성 시 선택 입력란을 두면, `room_dict()`를 통해 참여자에게 전달되어 룰 창 하단 "선생님 공지" 섹션에 표시 가능. `openRules()`에서 `S.room.custom_note`가 있으면 해당 요소를 보이게 하는 3줄 추가로 구현 완료.
+
+- **`force_price()` / `force_sector_event()` 후 `_prev` 미갱신으로 강제 이벤트 직후 등락률 왜곡** (`stock_service.py:268-269`): `self._prev` 딕셔너리는 `_init_prices()`에서 초기화된 뒤 전혀 갱신되지 않음. 교사가 `-30%` 섹터 이벤트를 적용해도 `get_prev_close()`는 이벤트 이전 가격을 반환하므로, `get_stocks()` 응답의 `change_pct`가 게임 시작가 대비 누적 등락률로 표시됨. `force_price()` (line 232) 마지막과 `force_sector_event()` 루프 내부(line 244 직후)에 `self._prev[sym] = new_price`를 추가하면 이벤트 직후 시장 카드에 정확한 이벤트 기준 등락률이 보여 학생이 변화를 즉각 인식 가능.
+
+- **개인 투자 성과 요약 리포트** (`app.py:622-640`, `models.py:65-76`): 결과 화면에는 최종 자산·수익률만 표시. `GET /api/rooms/<rid>/my-report` 엔드포인트를 추가해 `{best_stock, worst_stock, total_trades, most_traded_sector, quiz_count}`를 `RoomTransaction` 집계로 반환하면 결과 화면에 "내 투자 리포트" 카드로 표시 가능. 신규 모델 변경 없이 기존 테이블만으로 구현되며, 게임 종료 후 교사의 "왜 이 종목을 선택했나요?" 토론에 데이터 근거를 제공해 교육 효과 향상.
+
+- **룰렛 `✕` 버튼이 스핀 애니메이션 중 동작해 결과 미표시** (`app.js:1002-1009`, `index.html:507`): d5c8e6d 커밋으로 추가된 `✕` 버튼이 `closeRoulette()`를 호출하는데, `doRouletteSpin()` 내 `await new Promise(r => setTimeout(r, 4300))` 대기 중에도 오버레이가 닫혀 4초 후 결과를 DOM에 기록해도 화면에 표시되지 않고 토스트만 남음. 2026-06-14 4차에서 오버레이 배경 탭 클릭 경로를 지적했으나 신규 버튼으로 같은 문제가 재발. `closeRoulette()` 첫 줄에 `if (_rltSpinning) return;` 한 줄만 추가하면 방지 가능.
+
+- **복권 번호 무제한 재제출로 마감 직전 번호 변경 가능** (`app.py:902-903`): `lottery_pick()`에서 `cur['picks'][str(user.id)] = nums`가 항상 최신 제출로 덮어씀. 제출 후 번호를 계속 바꿔 유리한 번호를 선택할 수 있어 공정성 훼손. `if str(user.id) in cur['picks']: return jsonify({'ok': True, 'picks': cur['picks'][str(user.id)]})` 패턴으로 초기 제출 고정. 또는 프론트에서 제출 후 `_lotPickerSubmitted = true`로 설정해 버튼을 즉시 비활성화하면(로직 이미 있음, `app.js:2049` 근방) 재제출 방지.
+
+- **`openRules()` 탭 상태 미초기화로 재오픈 시 이전 탭 잔류** (`app.js:2128-2135`): `openRules()`는 `openModal('modal-rules')`만 호출하고 탭 초기화를 하지 않음. 학생이 "복권" 탭을 보고 닫은 뒤 다시 열면 "기본 규칙" 대신 "복권" 탭이 기본 표시됨. `openRules()` 내부에 `document.querySelector('.rules-tab').click()` 또는 `switchRulesTab('basic', document.querySelector('.rules-tab'))` 한 줄을 추가하면 항상 첫 번째 탭으로 초기화되어 일관된 UX 제공.
+
+---
+
+### 제거/단순화할 것들
+
+- **`get_price()` 내 차트 캐시 무효화가 `HISTORY_CACHE_TTL` 완전 무력화** (`stock_service.py:176-179`): 가격 TTL(기본 20초) 만료 시 해당 종목의 차트 캐시를 삭제해 `HISTORY_CACHE_TTL = 120`의 의도가 완전히 무력화됨. 모달을 닫고 21초 후 다시 열면 항상 다른 차트가 표시되어 2026-06-10에 지적한 "캐싱으로 일관된 차트 제공" 목표를 달성할 수 없음. `stock_service.py:176-179`의 `del self._history_cache[key]` 루프를 제거하면 됨. 강제 가격 조정 시 캐시 무효화는 `force_price()` (line 217-219)와 `force_sector_event()` (line 247-249)에 이미 구현되어 있으므로 충분.
+
+- **`minigame_close()` / `_do_reveal()` deprecated `Room.query.get()` 사용** (`app.py:114`, `app.py:763`): 두 함수가 `Room.query.get(rid)` (SQLAlchemy 2.x 폐기 API)를 사용해 다른 라우트의 `Room.query.get_or_404(rid)` 패턴과도 불일치. `minigame_close()`에서는 `room`이 None이면 `.status` 접근 시 `AttributeError`가 발생할 수 있고, `_do_reveal()`에서도 동일 위험. `db.session.get(Room, rid)` + `if not room: return` 명시적 None 체크로 교체하면 안전성·일관성 동시 확보.
+
+- **`get_history()` `interval` 파라미터가 함수 본문에서 완전히 무시됨** (`stock_service.py:271`, `app.py:511`): `get_history(symbol, period, interval)` 서명에 `interval`이 있지만 함수 내부에서 전혀 사용되지 않음. `app.py:511`에서 `'5m'`, `'30m'`, `'1wk'` 등을 전달하나 모두 무시되어 기간에 상관없이 일봉 간격(86400초)으로 날짜를 계산. `interval_secs = {'5m': 300, '30m': 1800, '1d': 86400, '1wk': 604800}.get(interval, 86400)` 매핑을 `stock_service.py:283` 직전에 추가하고, line 287의 `i * 86400`을 `i * interval_secs`로 교체하면 기간에 맞는 봉 간격 표시 가능.
+
+- **`_next_price()` 가격 상한(base×1.4)과 `force_price()` 허용 상한(base×3.0) 불일치로 강제 조정 즉시 소멸** (`stock_service.py:137`, `stock_service.py:215`): `force_price()`로 base×2.0까지 올려도 다음 TTL 만료 시 `_next_price()`가 `min(base*1.4, new_price)`로 즉시 클램핑. 교사의 극단적 가격 조정 효과가 한 틱(20초)만에 사라져 수업 시연 효과가 없음. 수정 방법 1: `force_price()` 호출 후 해당 종목의 타임스탬프를 `now + price_ttl * 2`로 연장해 2틱 동안 강제 가격 유지. 수정 방법 2: `stock_service.py:137`의 클램프 범위를 `base * 3.0`까지 확대해 `force_price()` 허용 범위와 일치시킴.
+
+- **`export_rankings()` 함수 내부 `import openpyxl`** (`app.py:1081-1083`): `import openpyxl`, `from io import BytesIO`, `from openpyxl.styles import ...` 3줄이 라우트 함수 내부에 위치. `openpyxl` 미설치 환경에서 서버가 정상 시작되다가 교사가 엑셀 내보내기 버튼을 누를 때만 `ImportError`가 500 응답으로 반환됨. 모듈 상단으로 이동하면 서버 시작 시 즉시 오류 감지 가능. `BytesIO`는 표준 라이브러리이므로 영향 없으나 `openpyxl`은 외부 패키지 — `try: import openpyxl \nexcept ImportError: openpyxl = None` 패턴으로 서버 시작 로그에서 명시적 경고 표시 권장.
+
+- **`_rlt_active` 카운터 비원자적 업데이트로 다중 일시정지 위험** (`app.py:738-746`): `state['count'] += 1` 직후 `state['count'] == 1` 체크까지 Lock이 없음. Flask 개발 서버(단일 스레드)에서는 무관하나 Gunicorn 멀티 워커나 eventlet 환경에서 두 학생이 동시에 룰렛을 열면 두 요청이 모두 `count == 1`로 평가해 `room.status = 'paused'` + `paused_at` 설정을 중복 실행 가능. 두 번째 `paused_at` 덮어쓰기로 이후 `resume_room()` 타이머 연장값이 틀어짐. `_room_services_lock`과 같은 방식으로 `_rlt_active_lock = Lock()`을 추가하고 `open` / `close` 핸들러에서 해당 방의 count·auto_paused 변경을 원자적으로 실행하는 것이 안전.
+
+---
