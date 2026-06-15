@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>모의주식게임</title>
-  <link rel="stylesheet" href="/static/css/style.css?v=16">
+  <link rel="stylesheet" href="/static/css/style.css?v=17">
 </head>
 <body>
 
@@ -461,6 +461,9 @@
   <!-- Quiz FAB -->
   <button class="quiz-fab" onclick="openQuiz()">🧠 퀴즈</button>
 
+  <!-- Rules FAB -->
+  <button class="rules-fab" onclick="openRules()">❓ 룰</button>
+
   <!-- Lottery overlay (participant) -->
   <div id="lottery-overlay" style="display:none;position:fixed;inset:0;z-index:1100;background:rgba(0,0,0,0.88);align-items:center;justify-content:center;padding:16px">
     <div class="lottery-box">
@@ -793,6 +796,139 @@
     <div class="bomb-news-progress">
       <div id="bomb-news-bar" class="bomb-news-bar"></div>
     </div>
+  </div>
+</div>
+
+<!-- Rules modal -->
+<div id="modal-rules" class="modal-overlay" onclick="closeModalOutside(event,'modal-rules')">
+  <div class="modal-sheet" style="max-height:88vh;overflow-y:auto">
+    <div class="modal-handle"></div>
+    <div class="modal-title" style="margin-bottom:12px">📋 게임 규칙 안내</div>
+
+    <!-- Tab buttons -->
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px">
+      <button class="rules-tab active" onclick="switchRulesTab('basic',this)">📋 기본</button>
+      <button class="rules-tab" onclick="switchRulesTab('stock',this)">📈 주식</button>
+      <button class="rules-tab" onclick="switchRulesTab('deposit',this)">🏦 예금</button>
+      <button class="rules-tab" onclick="switchRulesTab('minigame',this)">🎮 미니게임</button>
+      <button class="rules-tab" onclick="switchRulesTab('quiz',this)">🧠 퀴즈</button>
+    </div>
+
+    <!-- 기본 규칙 -->
+    <div id="rules-basic" class="rules-section">
+      <div class="rules-card">
+        <div class="rules-card-title">🎯 목표</div>
+        <p>제한 시간 안에 <strong>총 자산(현금 + 주식 + 예금)</strong>을 가장 많이 늘린 사람이 1등!</p>
+      </div>
+      <div class="rules-card">
+        <div class="rules-card-title">💰 시작 자금</div>
+        <p>모든 참여자는 동일한 시작 자금을 받습니다. 이 돈으로 주식을 사거나 예금하거나 현금으로 보유할 수 있어요.</p>
+      </div>
+      <div class="rules-card">
+        <div class="rules-card-title">⏱ 게임 진행</div>
+        <ul class="rules-list">
+          <li>상단 타이머에서 남은 시간을 확인하세요.</li>
+          <li>게임 중간에 <strong>복권</strong>과 <strong>룰렛</strong> 미니게임이 등장합니다.</li>
+          <li>진행자가 게임을 일시정지할 수 있습니다.</li>
+        </ul>
+      </div>
+      <div class="rules-card">
+        <div class="rules-card-title">📊 순위 확인</div>
+        <p>하단 메뉴 <strong>순위</strong> 탭에서 실시간 순위를 확인할 수 있습니다.</p>
+      </div>
+    </div>
+
+    <!-- 주식 거래 -->
+    <div id="rules-stock" class="rules-section" style="display:none">
+      <div class="rules-card">
+        <div class="rules-card-title">📈 매수 (사기)</div>
+        <ul class="rules-list">
+          <li><strong>시장</strong> 탭에서 원하는 종목을 탭하세요.</li>
+          <li>수량을 입력하거나 <strong>전량매수</strong> 버튼으로 가진 돈 전부 투자.</li>
+          <li>매수 즉시 현금이 차감되고 주식이 보유됩니다.</li>
+        </ul>
+      </div>
+      <div class="rules-card">
+        <div class="rules-card-title">📉 매도 (팔기)</div>
+        <ul class="rules-list">
+          <li><strong>포트폴리오</strong> 탭 또는 시장에서 보유 종목을 탭하세요.</li>
+          <li>수량을 입력하거나 <strong>전량매도</strong>로 한 번에 팔기.</li>
+          <li>매도 즉시 현금이 지급됩니다.</li>
+        </ul>
+      </div>
+      <div class="rules-card">
+        <div class="rules-card-title">🔄 주가 변동</div>
+        <p>주가는 실시간으로 오르내립니다. <span style="color:var(--up)">▲ 빨간색</span>은 상승, <span style="color:var(--down)">▼ 파란색</span>은 하락입니다.</p>
+      </div>
+      <div class="rules-card">
+        <div class="rules-card-title">⭐ 관심종목</div>
+        <p>종목 옆 ⭐를 눌러 관심종목으로 등록하면 필터 버튼으로 빠르게 확인할 수 있어요.</p>
+      </div>
+    </div>
+
+    <!-- 예금 -->
+    <div id="rules-deposit" class="rules-section" style="display:none">
+      <div class="rules-card">
+        <div class="rules-card-title">🏦 예금이란?</div>
+        <p>보유 현금을 은행에 맡겨 이자를 받는 기능입니다. 주식보다 안전하지만 수익이 제한됩니다.</p>
+      </div>
+      <div class="rules-card">
+        <div class="rules-card-title">💵 이자 계산</div>
+        <ul class="rules-list">
+          <li>이자는 <strong>예금 보유 시간에 비례</strong>해서 지급됩니다.</li>
+          <li>게임 종료 시점에 자동으로 원금 + 이자가 현금으로 전환됩니다.</li>
+          <li>예: 금리 3%, 30분 게임 중 15분 보유 → 이자의 50% 지급</li>
+        </ul>
+      </div>
+      <div class="rules-card">
+        <div class="rules-card-title">⚠️ 주의사항</div>
+        <p>예금 중인 돈은 주식 매수에 사용할 수 없습니다. 예금 탭에서 <strong>중도해지</strong>하면 이자 없이 원금만 돌려받습니다.</p>
+      </div>
+    </div>
+
+    <!-- 미니게임 -->
+    <div id="rules-minigame" class="rules-section" style="display:none">
+      <div class="rules-card">
+        <div class="rules-card-title">🎟 복권 (게임 1/3 · 2/3 경과 시)</div>
+        <ul class="rules-list">
+          <li>진행자가 복권을 시작하면 게임이 잠시 멈춥니다.</li>
+          <li><strong>1~45 중 6개 번호</strong>를 60초 안에 선택하고 제출하세요.</li>
+          <li>당첨 번호와 많이 일치할수록 더 많은 상금을 받아요.</li>
+          <li>6개 전부 일치하면 1등 상금 전액!</li>
+        </ul>
+      </div>
+      <div class="rules-card">
+        <div class="rules-card-title">🎰 룰렛 (게임 마지막 5%)</div>
+        <ul class="rules-list">
+          <li>게임 종료 직전 자동으로 룰렛이 등장합니다.</li>
+          <li>베팅할 금액을 입력하고 <strong>총 3번</strong> 도전 가능.</li>
+          <li>결과: <span style="color:#e74c3c">꽝</span> / <span style="color:#3498db">1배</span> / <span style="color:#f39c12">2배</span> / <span style="color:#2ecc71">5배</span> / <span style="color:#9b59b6">25배</span></li>
+          <li>룰렛 중에는 게임 타이머가 멈춥니다.</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- 퀴즈 -->
+    <div id="rules-quiz" class="rules-section" style="display:none">
+      <div class="rules-card">
+        <div class="rules-card-title">🧠 퀴즈란?</div>
+        <p>화면 오른쪽 하단의 <strong>🧠 퀴즈</strong> 버튼을 눌러 경제·금융 퀴즈에 도전하세요!</p>
+      </div>
+      <div class="rules-card">
+        <div class="rules-card-title">💡 보상 & 패널티</div>
+        <ul class="rules-list">
+          <li><strong>정답</strong> → 시작 자금의 일정 % 현금 지급</li>
+          <li><strong>오답</strong> → 시작 자금의 일정 % 현금 차감</li>
+          <li>진행자가 보상/패널티 비율을 조절할 수 있습니다.</li>
+        </ul>
+      </div>
+      <div class="rules-card">
+        <div class="rules-card-title">📚 학습 탭</div>
+        <p>하단 메뉴 <strong>학습</strong> 탭에서 용어사전·투자 가이드·시장 팁을 볼 수 있어요. 퀴즈 힌트로 활용하세요!</p>
+      </div>
+    </div>
+
+    <button class="btn btn-secondary btn-full" onclick="closeModal('modal-rules')" style="margin-top:4px">닫기</button>
   </div>
 </div>
 

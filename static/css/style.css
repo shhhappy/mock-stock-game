@@ -685,6 +685,31 @@ html, body {
   transition: transform 0.1s;
 }
 .quiz-fab:active { transform: scale(0.95); }
+.rules-fab {
+  position: absolute; bottom: calc(var(--bot-h) + 14px); left: 16px;
+  background: #3498db; color: #fff; border: none; border-radius: 100px;
+  padding: 10px 18px; font-size: 13px; font-weight: 700; cursor: pointer;
+  box-shadow: 0 4px 16px rgba(52,152,219,0.35); z-index: 90;
+  transition: transform 0.1s;
+}
+.rules-fab:active { transform: scale(0.95); }
+.rules-tab {
+  padding: 6px 12px; border-radius: 100px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--muted); font-size: 12px; font-weight: 600;
+  cursor: pointer; transition: all 0.15s;
+}
+.rules-tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.rules-card {
+  background: var(--s2); border-radius: 12px; padding: 14px; margin-bottom: 10px;
+}
+.rules-card-title {
+  font-weight: 700; font-size: 14px; margin-bottom: 8px; color: var(--text);
+}
+.rules-card p { font-size: 13px; color: var(--muted); margin: 0; line-height: 1.6; }
+.rules-list {
+  font-size: 13px; color: var(--muted); margin: 0; padding-left: 18px; line-height: 1.8;
+}
+.rules-list strong { color: var(--text); }
 .quiz-btn-ox {
   flex: 1; padding: 20px; border-radius: 14px; border: 2px solid var(--border);
   font-size: 36px; font-weight: 900; cursor: pointer; transition: all 0.15s;

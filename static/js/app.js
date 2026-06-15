@@ -2123,6 +2123,17 @@ function closeLotteryResultModal() {
   closeModal('modal-lottery-result');
 }
 
+// ── Rules modal ──────────────────────────────────────────
+
+function openRules() { openModal('modal-rules'); }
+
+function switchRulesTab(tab, btn) {
+  document.querySelectorAll('.rules-section').forEach(el => el.style.display = 'none');
+  document.querySelectorAll('.rules-tab').forEach(el => el.classList.remove('active'));
+  document.getElementById(`rules-${tab}`).style.display = 'block';
+  btn.classList.add('active');
+}
+
 // ── Init ─────────────────────────────────────────────────
 window.addEventListener('load', async () => {
   document.getElementById('trade-qty')?.addEventListener('input', updateTotal);
