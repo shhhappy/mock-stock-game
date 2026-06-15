@@ -604,6 +604,8 @@ function enterParticipantGame() {
 }
 
 function showPausedBanner() {
+  // Suppress banner while lottery overlay is active (auto-paused for lottery)
+  if (_lotPollInterval || document.getElementById('lottery-overlay')?.style.display === 'flex') return;
   let banner = document.getElementById('paused-banner');
   if (!banner) {
     banner = document.createElement('div');
@@ -2100,6 +2102,7 @@ function _showLotteryResult(d, isHost) {
 function closeLotteryOverlay() {
   document.getElementById('lottery-overlay').style.display = 'none';
   _stopLotPolling();
+  document.getElementById('paused-banner')?.remove();
 }
 
 // ── Init ─────────────────────────────────────────────────

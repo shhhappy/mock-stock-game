@@ -107,6 +107,16 @@ def _do_reveal(rid, cur):
     cur['results'] = results
     cur['state'] = 'revealed'
     _lots.setdefault(rid, {}).setdefault('done', set()).add(cur['round'])
+    # Auto-resume the game if we paused it for the lottery
+    if cur.get('auto_paused'):
+        room = Room.query.get(rid)
+        if room and room.status == 'paused' and room.paused_at:
+            now_dt = datetime.utcnow()
+            room.end_time += (now_dt - room.paused_at)
+            room.status = 'active'
+            room.paused_at = None
+            db.session.commit()
+        cur['auto_paused'] = False
 
 ROULETTE_OUTCOMES = [
     {'label': '꽝',  'multiplier': 0,  'weight': 70, 'seg_start': 0,     'seg_end': 252},
@@ -771,10 +781,15 @@ def lottery_start(rid):
     lot = _lots.setdefault(rid, {'done': set()})
     if (lot.get('current') or {}).get('state') in ('picking', 'drawing'):
         return jsonify({'error': '이미 진행 중인 복권이 있습니다.'}), 400
+    # Auto-pause the game while lottery runs
+    room.status = 'paused'
+    room.paused_at = datetime.utcnow()
+    db.session.commit()
     lot['current'] = {
         'round': round_n, 'state': 'picking', 'prize': prize,
         'picks': {}, 'winning': None, 'results': None,
         'pick_dl': time.time() + LOTTO_PICK_SECS, 'draw_dl': None,
+        'auto_paused': True,
     }
     return jsonify({'ok': True})
 
