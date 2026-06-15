@@ -275,3 +275,37 @@
 - **`lottery_draw()` 에서 서버가 당첨 번호 중복을 허용** (`app.py:851-856`): `raw = (request.json or {}).get('numbers', [])`로 받은 번호를 `sorted(set(int(n) for n in raw if 1 <= int(n) <= 45))`로 정제하지만, 진행자가 의도적으로 중복 번호를 제출하면 `set()`으로 중복이 제거된 뒤 `len(nums) != 6` 체크에서 실패해 오류가 반환됨. 문제없으나 `lottery_pick()`(`app.py:830`)도 동일 패턴으로 두 곳의 검증 로직이 복사-붙여넣기 수준으로 동일. 공통 헬퍼 `def _parse_lotto_numbers(raw)` 함수로 추출하면 중복 제거와 유지보수 편의.
 
 ---
+
+## 2026-06-15
+
+### 추가하면 좋을 기능
+
+- **[긴급] PostgreSQL URL 자동 수정 누락** (`app.py:13`): Render 무료 티어가 제공하는 `DATABASE_URL` 환경 변수는 `postgres://...` 형식이지만, SQLAlchemy 1.4+는 `postgresql://`만 인식해 `OperationalError: Could not parse rfc1738 URL`로 서버 시작 자체가 실패함. `sqlite:///game.db` 기본값 사용 시에는 숨겨지지만 PostgreSQL로 전환하는 순간 즉시 터짐. `db_url = os.environ.get('DATABASE_URL', 'sqlite:///game.db'); db_url = db_url.replace('postgres://', 'postgresql://', 1); app.config['SQLALCHEMY_DATABASE_URI'] = db_url` 3줄 수정으로 해결.
+
+- **시장 카드에 보유 종목 표시 없음** (`app.js:1147-1165`, `stock_service.py:36-97`): 학생이 이미 보유한 종목이 시장 그리드에서 다른 종목과 동일하게 표시되어 추가 매수 또는 매도 결정을 위해 매번 포트폴리오 탭을 왔다 갔다 해야 함. `loadMarket()` 성공 시 `GET /api/rooms/<rid>/portfolio`의 `holdings` 배열을 심볼 Set으로 변환해 `S.heldSymbols`에 캐싱하고, `renderGrid()` 내 카드 생성 시 `S.heldSymbols.has(st.symbol)`이면 카드 테두리 색상을 `var(--accent)` 또는 좌측에 `<span class="chip chip-blue">보유</span>` 배지를 붙이면 서버 변경 없이 클라이언트만 수정해 즉시 구현 가능.
+
+- **진행자 수업 중 공지 브로드캐스트 기능 없음** (`app.py:470-481`, `index.html:114-145`): 게임 진행 중 교사가 학생 전원에게 "지금 IT 섹터 뉴스를 주목하세요!" 같은 안내를 전달할 방법이 없음. `POST /api/rooms/<rid>/host/announce` 엔드포인트를 추가해 최신 공지를 `StockService` 인스턴스(또는 `Room` 모델의 `announcement` 컬럼)에 저장하고, 참여자 폴링 응답(`get_room()`)에 `announcement` 필드를 포함해 변경 시 폭탄뉴스 팝업과 동일한 UI로 표시하면 수업 소통 도구로 즉시 활용 가능.
+
+- **관심종목(watchlist)이 방 ID와 무관하게 전역 저장** (`app.js:17`): `localStorage.getItem('watchlist')`로 저장하므로, 같은 브라우저에서 다른 수업(다른 방)에 참여하면 이전 수업의 관심종목이 그대로 남아 있음. `localStorage.getItem(\`watchlist-${S.room?.id || 'default'}\`)` 형태로 방 ID를 키에 포함시키면 방별로 독립된 관심종목 유지 가능. `app.js:17`, `app.js:1137`, `app.js:1138` 세 줄 수정으로 해결.
+
+- **게임 도중 참여자 실시간 접속 상태 표시 없음** (`app.py:421-425`, `index.html:146-155`): 진행자 순위 화면에서 어떤 학생이 지금 앱을 열고 있는지 알 수 없음. `RoomMember`에 `last_seen = db.Column(db.DateTime, nullable=True)` 컬럼을 추가하고 `get_rankings()` 또는 `get_portfolio()` 호출 시 갱신. 진행자 순위 목록에서 `last_seen`이 3분 이내이면 🟢, 이상이면 ⚫를 표시하면 교사가 이탈 학생을 즉시 파악 가능 (`app.py:330` `result.append()` 시 `last_seen` 포함, `app.js:385` 렌더링에 아이콘 추가).
+
+- **참여자 이탈 후 재진입 시 방 코드 재입력 필요** (`app.js:2106-2127`, `app.py:214-223`): 학생이 실수로 브라우저를 새로고침하거나 뒤로가기를 누르면 로딩 화면으로 돌아가 방 코드·학번·이름을 다시 입력해야 함. `enterParticipantGame()` 시작 시 `sessionStorage.setItem('lastRoom', S.room.id)`로 방 ID를 저장하고, `window.onload`(`app.js:2106`) 초기화 시 `sessionStorage`의 방 ID가 있으면 `GET /api/auth/me` → `active_room`으로 자동 복원하면 새로고침 후에도 게임 화면이 유지됨. (`sessionStorage`는 탭 닫기 시 자동 삭제되므로 `localStorage`보다 안전.)
+
+---
+
+### 제거/단순화할 것들
+
+- **`StockService._init_prices()` TTL 즉시 만료 초기화** (`stock_service.py:120-122`): `self._prices[sym] = (now - self._price_ttl, start)` 패턴으로 모든 종목의 타임스탬프를 이미 만료된 상태로 초기화함. 학생 30명이 게임 시작 후 동시에 시장 탭을 로드하면 첫 번째 `get_price()` 호출에서 전체 45개 종목 가격이 일제히 재계산되는 thundering herd가 발생. `(now, start)`로 교체하면 초기 가격이 `price_ttl`(기본 20초) 동안 안정적으로 유지되고 첫 로드 시 부하가 분산됨.
+
+- **`_lot_round_due()` 일시정지 상태에서 복권 알림 오작동** (`app.py:76-85`): 함수 시작 시 `if room.status != 'active': return None` 체크가 있지만 (`app.py:77`), 일시정지 상태는 `room.status == 'paused'`이므로 `!= 'active'`에 해당해 `None`을 반환함 — 이 부분은 올바름. 그러나 `room_dict()` 내 `lottery_round_due` 계산(`app.py:168`)에서 `_lot_round_due(room, remaining, total_s)`가 호출될 때, 일시정지 중 `remaining`은 `(end_time - paused_at)`로 계산되어 경과 비율이 고정됨. 따라서 복권 알림이 `picking` 상태로 진입하지 않아도 진행자 화면에 "복권 추첨 시간" 알림바가 남아 있는 것처럼 보일 수 있음. `_lot_round_due()` 내 `room.status` 체크를 `if room.status not in ('active',): return None`으로 명시적으로 제한해 의도를 분명히 할 것.
+
+- **`app.js:17` `S` 객체 초기화에 `watchlist` 로드가 인라인으로 포함** (`app.js:17`): `new Set(JSON.parse(localStorage.getItem('watchlist') || '[]'))` 파싱이 `S` 객체 리터럴 내부에 있어, `localStorage`에 손상된 JSON이 있으면 `JSON.parse` 예외가 발생해 `S` 전체 초기화가 실패하고 이후 모든 전역 상태가 `undefined`가 됨. `let watchlistRaw = []; try { watchlistRaw = JSON.parse(localStorage.getItem('watchlist') || '[]'); } catch(e) {}` 방어 코드를 `S` 선언 직전에 추가하고 `S.watchlist = new Set(watchlistRaw)`로 분리하면 손상된 캐시로 인한 전체 앱 오류를 방지.
+
+- **`app.py:637-655` 예금 이자 계산에 UTC vs 로컬 시간 불일치** (`app.py:639`, `app.py:642`): `get_deposits()`에서 `now = datetime.utcnow()`로 현재 시간을 계산하고 `held = (now - d.created_at).total_seconds()`로 보유 시간을 구함. `d.created_at`은 `datetime.utcnow()` 기본값(`models.py:88`)이므로 일관성은 있지만, `create_deposit()` 응답(`app.py:676`)에서는 `remaining = (room.end_time - datetime.utcnow()).total_seconds()`로 예상 이자를 계산함. 예금 직후 이 두 값이 동일한 방향으로 계산되지만, `room.end_time`이 일시정지로 인해 연장된 경우(`resume_room()`: `app.py:304`) `get_deposits()`의 `total_seconds`는 `room.duration_minutes * 60`으로 고정되어 실제 연장된 게임 시간이 반영되지 않음. `total_seconds = max(room.duration_minutes * 60, (room.end_time - room.start_time).total_seconds())` 처럼 실제 게임 총 시간으로 계산하면 정확성 향상.
+
+- **`app.py:146-170` `room_dict()` 매 호출 시 `RoomMember.query.filter_by().count()` 실행** (`app.py:165`): `'member_count': RoomMember.query.filter_by(room_id=room.id).count()`가 `room_dict()` 호출마다 COUNT 쿼리를 실행함. `get_room()`, `create_room()`, `join_room()`, `start_room()`, `end_room()` 등 방 상태를 반환하는 모든 엔드포인트가 이를 호출해 사용자 수만큼 COUNT 쿼리가 중복 발생. `Room` 모델에 `member_count = db.Column(db.Integer, default=0)` 컬럼을 추가하고 `join_room()` / `kick_member()` 시 `+1/-1` 증감 업데이트하거나, SQLAlchemy `lazy='dynamic'` + `count()` 대신 relationship backref로 미리 로드하면 쿼리 1회 절약.
+
+- **`submit_quiz()` `room.status` 미확인으로 게임 종료 후 현금 변경 가능** (`app.py:917-947`): `get_quiz()`는 `room.status != 'active'` 체크가 있어 (`app.py:905`) 종료 후 퀴즈 질문을 받을 수 없지만, `submit_quiz()`는 해당 체크가 없음. 학생이 퀴즈를 열어 둔 채 게임이 종료되면 `_quiz_state`의 `qid`가 남아 있어 게임 종료 후에도 답안을 제출해 `RoomMember.cash`가 변경될 수 있음 (종료 직후 포트폴리오 결산 전 또는 후에 따라 Excel 결과가 달라질 수 있음). `app.py:921` 직후에 `if room.status != 'active': return jsonify({'error': '게임이 종료되었습니다'}), 400` 체크를 추가하면 즉시 방지.
+
+---
