@@ -828,7 +828,7 @@ let _rltSpinning = false;
 let _rltCash = 0;
 let _rltMults = [0, 1, 2, 5, 25];
 let _rltWeights = [70, 20, 7, 2, 1];
-const _RLT_COLORS = ['#c0392b', '#e67e22', '#f1c40f', '#27ae60', '#3498db'];
+const _RLT_COLORS = ['#e74c3c', '#3498db', '#f39c12', '#2ecc71', '#9b59b6'];
 
 function _rltLabel(m) { return m === 0 ? '꽝' : `${m}배`; }
 
