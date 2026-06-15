@@ -309,3 +309,41 @@
 - **`submit_quiz()` `room.status` 미확인으로 게임 종료 후 현금 변경 가능** (`app.py:917-947`): `get_quiz()`는 `room.status != 'active'` 체크가 있어 (`app.py:905`) 종료 후 퀴즈 질문을 받을 수 없지만, `submit_quiz()`는 해당 체크가 없음. 학생이 퀴즈를 열어 둔 채 게임이 종료되면 `_quiz_state`의 `qid`가 남아 있어 게임 종료 후에도 답안을 제출해 `RoomMember.cash`가 변경될 수 있음 (종료 직후 포트폴리오 결산 전 또는 후에 따라 Excel 결과가 달라질 수 있음). `app.py:921` 직후에 `if room.status != 'active': return jsonify({'error': '게임이 종료되었습니다'}), 400` 체크를 추가하면 즉시 방지.
 
 ---
+
+## 2026-06-16
+
+### 오늘 수정된 버그 (참고)
+
+- **복권 입력 창 미표시** (`app.js:586-598`): 복권 시작 시 게임이 자동 일시정지(`room.status = 'paused'`)되는데, `lottery_active` 체크가 `else` 블록(게임 활성 시에만 실행) 안에 있어 참여자 화면에서 복권 폴링이 시작되지 않았음. `lottery_active` 체크를 `if(paused)/else` 분기 바깥으로 이동해 해결.
+
+- **복권 결과 창 반복 표시 / 룰렛 미표시** (`app.js:1816-1821`, `app.js:586`): 결과 창을 닫으면 `_lotResultShown = false`로 리셋되어 방 폴링이 복권 폴링을 즉시 재시작 → 결과 창이 무한 반복 표시. 이 루프가 화면을 점유해 룰렛도 표시 불가. `_lotResultShown` 대신 `_lotResultRound`(회차 번호)를 추적하고 같은 회차이면 재시작하지 않도록 수정, 서버에 `lottery_current_round` 필드 추가.
+
+---
+
+### 추가하면 좋을 기능
+
+- **복권 번호 선택 중 오버레이 강제 닫기 가능** (`app.js:2102-2106`, `index.html:495`): 참여자가 번호 선택 중 `closeLotteryOverlay()`를 호출(닫기 버튼 또는 브라우저 뒤로가기)하면 `_stopLotPolling()`이 실행되어 이후 결과를 영원히 볼 수 없음. `_lotResultRound`로 결과 재표시는 차단되고, 복권 폴링도 멈춘 상태라 당첨 여부를 확인할 방법이 없어짐. 'picking' · 'drawing' 상태일 때는 닫기 버튼을 `display:none`으로 숨기고 `closeLotteryOverlay()`에 `if (d.state === 'picking' || d.state === 'drawing') return;` 가드를 추가하면 실수 닫기 방지.
+
+- **복권 상금 출처 미처리** (`app.py:789-794`, `app.py:99-105`): `lottery_start()`에서 `prize`를 받아 `_lots[rid]['current']['prize']`에 저장하지만 진행자 또는 방 공동 자금에서 차감하지 않음. `_do_reveal()`에서 당첨자에게 현금이 지급되므로 상금 총액만큼 시스템 외부에서 돈이 생성됨. 수업용으로는 큰 문제가 없으나, `RoomMember` 전체 `cash` 합계가 게임 시작 시보다 늘어나 정확한 수익률 분석을 방해함. 진행자의 `RoomMember.cash`에서 `prize`를 차감하거나, `Room`에 `prize_pool` 컬럼을 두어 별도 관리 권장.
+
+- **복권 참여자 미제출 시 피드백 없음** (`app.py:87-105`, `app.js:2033-2041`): 번호를 제출하지 않은 참여자가 `drawing` 상태에서 대기 화면으로 전환되면 `lottery-my-submitted` 요소에 아무것도 표시되지 않음 (`_lotParticipantPicks.length > 0` 조건 실패). 미제출 참여자에게 "번호를 제출하지 않았습니다" 문구를 명시적으로 보여주면 혼란 방지. `app.js:2038` 조건을 `else` 분기로 확장하면 됨.
+
+- **복권 회차 번호 자동 지정 없음** (`app.py:779`, `app.js:1895`): `lottery_start()`의 `round_n = int(d.get('round', 1))`은 클라이언트가 보낸 값을 그대로 신뢰. 진행자가 1회차를 건너뛰고 2회차부터 시작하거나 같은 회차를 두 번 시작해도 서버에서 검증하지 않음 (`_lots[rid]['done']` Set에 없으면 통과). 서버 측에서 `done` Set의 최대값 + 1을 자동으로 `round_n`으로 계산하고 클라이언트 입력을 무시하면 회차 조작 방지.
+
+- **룰렛 미니게임 시간 만료 후 스핀 버튼 잠금 없음** (`app.py:729-735`, `app.js:919-936`): `minigame_spin()`은 서버에서 `remaining > total_s * 0.05`이면 400 오류를 반환하지만, 룰렛 오버레이는 한 번 열리면 게임 종료 후에도 열려 있을 수 있음. 게임 종료 시 `stopPolling()` 후 `showScreen('screen-results')`로 이동하는데, 룰렛 오버레이가 `position:fixed`로 위에 떠 있으면 결과 화면 뒤에서 클릭을 가로막음. `stopPolling()` 호출 시 `document.getElementById('roulette-overlay').style.display = 'none'`을 함께 실행하면 안전.
+
+---
+
+### 제거/단순화할 것들
+
+- **`closeLotteryResultModal()` 불필요한 래퍼 함수** (`app.js:2108-2110`): `closeLotteryResultModal()`이 `closeModal('modal-lottery-result')` 한 줄만 호출. 기존에는 `_lotResultShown = false` 리셋 로직이 있었으나 오늘 수정으로 제거됨. HTML(`index.html:733`)에서 `onclick="closeModal('modal-lottery-start')"` 패턴과 동일하게 `onclick="closeModal('modal-lottery-result')"` 직접 호출로 단순화하고 래퍼 삭제 가능.
+
+- **`lottery-notify-bar` 인라인 스타일에 `display:none` 중복** (`index.html:133`): `style="display:none;background:...;display:none;align-items:center;..."` 에서 `display:none`이 두 번 선언됨. CSS 파서가 마지막 선언을 사용하므로 결과적으로는 정상 동작하지만, `showLotteryNotifyBar()`에서 `bar.style.display = 'flex'`로 바꿀 때 두 번째 `display:none`이 이미 인라인 파싱 시 덮어쓰여 있어 혼동 유발. 첫 번째 `display:none` 하나만 남기고 삭제.
+
+- **`_checkLotteryStatus`에서 `_stopLotPolling()` 후 즉시 `_showLotteryResult` 호출** (`app.js:1853-1855`): 'revealed' 상태 감지 시 폴링을 멈추고 결과를 표시하는 흐름은 올바르나, `_stopLotPolling()`이 `_lotCountdownTimer`도 함께 초기화(`clearInterval`)하므로 이후 `_showLotteryResult` 내 `clearInterval(_lotCountdownTimer)` 호출(`app.js:2045`)이 중복 실행됨. 큰 문제는 없으나 `_showLotteryResult` 내 `clearInterval` 제거로 단순화 가능.
+
+- **`_startLotPolling()`에서 즉시 호출과 인터벌 중복** (`app.js:1822-1826`): `_checkLotteryStatus(rid)`를 즉시 한 번 호출한 뒤 3초 인터벌을 시작함. 즉시 호출이 완료되기 전에 인터벌 첫 번째 실행이 3초 후 따라오므로 서버 응답 지연 시 두 요청이 겹칠 가능성이 있음. `_lotPollInterval`을 1초 딜레이 후 시작하거나 즉시 호출을 `await`로 기다린 뒤 인터벌 등록 (`_checkLotteryStatus(rid).then(() => { _lotPollInterval = setInterval(...) })`)하면 중복 방지.
+
+- **`_lots` 딕셔너리에서 완료된 복권 데이터 영구 보존** (`app.py:71`, `app.py:109`): `_do_reveal()` 호출 시 `cur['state'] = 'revealed'`로만 변경하고 `_lots[rid]['current']`를 `None`으로 초기화하지 않음. 게임 종료 후에도 메모리에 남아 `lottery_active`가 'revealed' 상태를 반환 계속. `cleanup_room_service()`(`app.py:64-68`) 호출 시 `_lots.pop(rid, None)`을 함께 실행하면 게임 종료 시 복권 데이터가 메모리에서 정리됨.
+
+---
