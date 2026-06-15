@@ -583,6 +583,9 @@ function enterParticipantGame() {
       showScreen('screen-results');
     } else {
       S.room = r;
+      if (r.lottery_active && !_lotPollInterval && !_lotResultShown) {
+        _startLotPolling(S.room.id);
+      }
       if (r.status === 'paused') {
         showPausedBanner();
       } else {
@@ -591,9 +594,6 @@ function enterParticipantGame() {
         if (r.minigame_available && !S.rouletteOpened) {
           S.rouletteOpened = true;
           openRouletteModal();
-        }
-        if (r.lottery_active && !_lotPollInterval) {
-          _startLotPolling(S.room.id);
         }
       }
     }
@@ -1056,7 +1056,7 @@ async function refreshRoomStatus() {
       showLotteryNotifyBar(r.lottery_round_due);
     }
     // Lottery: active → start polling for host
-    if (r.lottery_active && !_lotPollInterval) {
+    if (r.lottery_active && !_lotPollInterval && !_lotResultShown) {
       _startLotPolling(S.room.id);
     }
   }
@@ -1818,6 +1818,7 @@ let _lotCountdownTimer = null;
 let _lotParticipantPicks = [];
 let _lotHostPicks = [];
 let _lotPickerSubmitted = false;
+let _lotResultShown = false;
 
 function _startLotPolling(rid) {
   if (_lotPollInterval) return;
@@ -2097,12 +2098,19 @@ function _showLotteryResult(d, isHost) {
     }
   }
   S.lotteryHostModalOpen = false;
+  _lotResultShown = true;
 }
 
 function closeLotteryOverlay() {
   document.getElementById('lottery-overlay').style.display = 'none';
   _stopLotPolling();
+  _lotResultShown = false;
   document.getElementById('paused-banner')?.remove();
+}
+
+function closeLotteryResultModal() {
+  closeModal('modal-lottery-result');
+  _lotResultShown = false;
 }
 
 // ── Init ─────────────────────────────────────────────────
