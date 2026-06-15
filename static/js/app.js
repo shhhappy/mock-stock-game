@@ -912,7 +912,11 @@ async function openRouletteModal() {
   wheel.style.transition = 'none';
   wheel.style.transform = 'rotate(0deg)';
   document.getElementById('roulette-overlay').style.display = 'flex';
-  api.post(`/api/rooms/${S.room.id}/minigame/open`).catch(() => {});
+  const pr = await api.post(`/api/rooms/${S.room.id}/minigame/open`, {}).catch(() => null);
+  if (pr?.paused) {
+    S.room.status = 'paused';
+    S.room.remaining_seconds = pr.remaining_seconds;
+  }
 }
 
 function setRltPct(pct) {
@@ -995,9 +999,13 @@ function resetRltSpin() {
   wheel.style.transform = 'rotate(0deg)';
 }
 
-function closeRoulette() {
+async function closeRoulette() {
   document.getElementById('roulette-overlay').style.display = 'none';
-  api.post(`/api/rooms/${S.room.id}/minigame/close`).catch(() => {});
+  const cr = await api.post(`/api/rooms/${S.room.id}/minigame/close`, {}).catch(() => null);
+  if (cr?.resumed && cr.end_time) {
+    S.room.status = 'active';
+    S.room.end_time = cr.end_time;
+  }
 }
 
 async function doSetQuizSettings() {

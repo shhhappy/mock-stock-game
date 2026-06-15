@@ -737,12 +737,17 @@ def minigame_open(rid):
         return jsonify({'error': '참여자가 아닙니다.'}), 403
     state = _rlt_active.setdefault(rid, {'count': 0, 'auto_paused': False})
     state['count'] += 1
+    paused_now = False
     if state['count'] == 1 and room.status == 'active':
         room.status = 'paused'
         room.paused_at = datetime.utcnow()
         db.session.commit()
         state['auto_paused'] = True
-    return jsonify({'ok': True})
+        paused_now = True
+    remaining = 0
+    if room.paused_at and room.end_time:
+        remaining = max(0, int((room.end_time - room.paused_at).total_seconds()))
+    return jsonify({'ok': True, 'paused': paused_now, 'remaining_seconds': remaining})
 
 @app.route('/api/rooms/<int:rid>/minigame/close', methods=['POST'])
 @login_required
@@ -751,6 +756,8 @@ def minigame_close(rid):
     if not state or state['count'] <= 0:
         return jsonify({'ok': True})
     state['count'] = max(0, state['count'] - 1)
+    resumed = False
+    new_end_time = None
     if state['count'] == 0 and state.get('auto_paused'):
         room = Room.query.get(rid)
         if room and room.status == 'paused' and room.paused_at:
@@ -758,8 +765,10 @@ def minigame_close(rid):
             room.status = 'active'
             room.paused_at = None
             db.session.commit()
+            resumed = True
+            new_end_time = room.end_time.strftime('%Y-%m-%dT%H:%M:%SZ')
         state['auto_paused'] = False
-    return jsonify({'ok': True})
+    return jsonify({'ok': True, 'resumed': resumed, 'end_time': new_end_time})
 
 @app.route('/api/rooms/<int:rid>/minigame/spin', methods=['POST'])
 @login_required
