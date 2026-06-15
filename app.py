@@ -66,6 +66,8 @@ def _end_room(room):
             m.cash += d.amount + interest
     db.session.commit()
     cleanup_room_service(room.id)
+    _lots.pop(room.id, None)
+    _rlt_active.pop(room.id, None)
 
 # ── Lottery System ────────────────────────────────────────
 _lots = {}   # room_id -> {done: set(), current: dict|None}
@@ -128,6 +130,7 @@ ROULETTE_OUTCOMES = [
 
 _roulette_config = {}  # room_id -> {'multipliers': [...], 'weights': [...]}
 _DEFAULT_RLT_CFG = {'multipliers': [0, 1, 2, 5, 25], 'weights': [70, 20, 7, 2, 1]}
+_rlt_active = {}  # room_id -> {'count': int, 'auto_paused': bool}
 
 def _rlt_cfg(rid):
     c = _roulette_config.get(rid, {})
@@ -723,14 +726,53 @@ def get_minigame(rid):
     return jsonify({'spins_left': max(0, 3 - spins_used), 'cash': m.cash,
                     'multipliers': mults, 'weights': weights})
 
+@app.route('/api/rooms/<int:rid>/minigame/open', methods=['POST'])
+@login_required
+def minigame_open(rid):
+    room = Room.query.get_or_404(rid)
+    user = cur_user()
+    if room.host_id == user.id:
+        return jsonify({'error': '진행자는 참여할 수 없습니다.'}), 403
+    if not RoomMember.query.filter_by(room_id=rid, user_id=user.id).first():
+        return jsonify({'error': '참여자가 아닙니다.'}), 403
+    state = _rlt_active.setdefault(rid, {'count': 0, 'auto_paused': False})
+    state['count'] += 1
+    if state['count'] == 1 and room.status == 'active':
+        room.status = 'paused'
+        room.paused_at = datetime.utcnow()
+        db.session.commit()
+        state['auto_paused'] = True
+    return jsonify({'ok': True})
+
+@app.route('/api/rooms/<int:rid>/minigame/close', methods=['POST'])
+@login_required
+def minigame_close(rid):
+    state = _rlt_active.get(rid)
+    if not state or state['count'] <= 0:
+        return jsonify({'ok': True})
+    state['count'] = max(0, state['count'] - 1)
+    if state['count'] == 0 and state.get('auto_paused'):
+        room = Room.query.get(rid)
+        if room and room.status == 'paused' and room.paused_at:
+            room.end_time += (datetime.utcnow() - room.paused_at)
+            room.status = 'active'
+            room.paused_at = None
+            db.session.commit()
+        state['auto_paused'] = False
+    return jsonify({'ok': True})
+
 @app.route('/api/rooms/<int:rid>/minigame/spin', methods=['POST'])
 @login_required
 def minigame_spin(rid):
     room = Room.query.get_or_404(rid)
-    if room.status != 'active':
+    rlt_paused = _rlt_active.get(rid, {}).get('auto_paused', False)
+    if room.status not in ('active', 'paused') or (room.status == 'paused' and not rlt_paused):
         return jsonify({'error': '게임이 진행 중이 아닙니다.'}), 400
     now = datetime.utcnow()
-    remaining = max(0, (room.end_time - now).total_seconds()) if room.end_time else 0
+    if room.status == 'paused' and room.paused_at:
+        remaining = max(0, (room.end_time - room.paused_at).total_seconds())
+    else:
+        remaining = max(0, (room.end_time - now).total_seconds()) if room.end_time else 0
     total_s = room.duration_minutes * 60
     if total_s > 0 and remaining > total_s * 0.05:
         return jsonify({'error': '아직 미니게임 시간이 아닙니다.'}), 400

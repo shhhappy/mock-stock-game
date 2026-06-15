@@ -605,8 +605,9 @@ function enterParticipantGame() {
 }
 
 function showPausedBanner() {
-  // Suppress banner while lottery overlay is active (auto-paused for lottery)
-  if (_lotPollInterval || document.getElementById('lottery-overlay')?.style.display === 'flex') return;
+  // Suppress banner while lottery or roulette overlay is active (auto-paused)
+  if (_lotPollInterval || document.getElementById('lottery-overlay')?.style.display === 'flex'
+      || document.getElementById('roulette-overlay')?.style.display === 'flex') return;
   let banner = document.getElementById('paused-banner');
   if (!banner) {
     banner = document.createElement('div');
@@ -911,6 +912,7 @@ async function openRouletteModal() {
   wheel.style.transition = 'none';
   wheel.style.transform = 'rotate(0deg)';
   document.getElementById('roulette-overlay').style.display = 'flex';
+  api.post(`/api/rooms/${S.room.id}/minigame/open`).catch(() => {});
 }
 
 function setRltPct(pct) {
@@ -995,6 +997,7 @@ function resetRltSpin() {
 
 function closeRoulette() {
   document.getElementById('roulette-overlay').style.display = 'none';
+  api.post(`/api/rooms/${S.room.id}/minigame/close`).catch(() => {});
 }
 
 async function doSetQuizSettings() {
