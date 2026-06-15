@@ -556,6 +556,7 @@ function enterParticipantGame() {
   _stopLotPolling();
   _lotParticipantPicks = [];
   _lotPickerSubmitted = false;
+  _lotResultRound = null;
   S.depRate = S.room.deposit_rate;
   document.getElementById('dep-rate-display').textContent = S.room.deposit_rate + '%';
   showScreen('screen-p-game');
@@ -583,7 +584,7 @@ function enterParticipantGame() {
       showScreen('screen-results');
     } else {
       S.room = r;
-      if (r.lottery_active && !_lotPollInterval && !_lotResultShown) {
+      if (r.lottery_active && !_lotPollInterval && _lotResultRound !== r.lottery_current_round) {
         _startLotPolling(S.room.id);
       }
       if (r.status === 'paused') {
@@ -1056,7 +1057,7 @@ async function refreshRoomStatus() {
       showLotteryNotifyBar(r.lottery_round_due);
     }
     // Lottery: active → start polling for host
-    if (r.lottery_active && !_lotPollInterval && !_lotResultShown) {
+    if (r.lottery_active && !_lotPollInterval && _lotResultRound !== r.lottery_current_round) {
       _startLotPolling(S.room.id);
     }
   }
@@ -1818,7 +1819,7 @@ let _lotCountdownTimer = null;
 let _lotParticipantPicks = [];
 let _lotHostPicks = [];
 let _lotPickerSubmitted = false;
-let _lotResultShown = false;
+let _lotResultRound = null;
 
 function _startLotPolling(rid) {
   if (_lotPollInterval) return;
@@ -2098,19 +2099,17 @@ function _showLotteryResult(d, isHost) {
     }
   }
   S.lotteryHostModalOpen = false;
-  _lotResultShown = true;
+  _lotResultRound = d.round;
 }
 
 function closeLotteryOverlay() {
   document.getElementById('lottery-overlay').style.display = 'none';
   _stopLotPolling();
-  _lotResultShown = false;
   document.getElementById('paused-banner')?.remove();
 }
 
 function closeLotteryResultModal() {
   closeModal('modal-lottery-result');
-  _lotResultShown = false;
 }
 
 // ── Init ─────────────────────────────────────────────────

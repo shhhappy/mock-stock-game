@@ -177,6 +177,7 @@ def room_dict(room, uid=None):
         'minigame_available': room.status == 'active' and total_s > 0 and remaining <= int(total_s * 0.05),
         'lottery_round_due': _lot_round_due(room, remaining, total_s) if room.status == 'active' else None,
         'lottery_active': (_lots.get(room.id, {}).get('current') or {}).get('state') in ('picking', 'drawing', 'revealed'),
+        'lottery_current_round': (_lots.get(room.id, {}).get('current') or {}).get('round'),
     }
 
 def find_active_room(uid):
