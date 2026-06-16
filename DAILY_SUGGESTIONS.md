@@ -382,6 +382,44 @@
 
 ---
 
+## 2026-06-16 (3차)
+
+### 추가하면 좋을 기능
+
+- **`submit_quiz()` 게임 종료 후 현금 변경 방지** (`app.py:986-1014`): `get_quiz()`는 `room.status != 'active'` 체크가 있으나 `submit_quiz()`에는 없음. 학생이 퀴즈를 열어 두고 게임이 종료된 후 제출하면 `RoomMember.cash`가 변경돼 결과 화면의 자산과 엑셀 파일 수치가 달라질 수 있음. `app.py:987` 직후 `if room.status != 'active': return jsonify({'error': '게임이 종료되었습니다'}), 400` 한 줄 추가로 즉시 방지 가능.
+
+- **`minigame_open()` 경쟁 조건으로 이중 일시정지 위험** (`app.py:738-745`): `state['count'] += 1` 직후 `if state['count'] == 1` 체크까지 Lock이 없음. Gunicorn 멀티 워커 또는 eventlet 환경에서 두 학생이 동시에 룰렛을 열면 두 요청 모두 `count == 1`로 평가해 `room.status = 'paused'`와 `room.paused_at` 설정이 중복 실행. 두 번째 `paused_at` 덮어쓰기로 `resume_room()`의 연장 시간이 틀어짐. `_room_services_lock` 과 같은 방식으로 `_rlt_active_lock = Lock()`을 추가하고 open/close 핸들러에서 count·auto_paused 변경을 원자적으로 실행 권장.
+
+- **`force_sector_event()` 구(舊) 타임스탬프 재사용으로 이벤트 효과 즉시 소멸** (`stock_service.py:244`): `self._prices[sym] = (ts, new_price)`에서 기존 `ts`를 재사용. TTL이 이미 만료된 종목은 다음 `get_price()` 호출에서 즉시 새 무작위 가격으로 덮어씌어짐. `(ts, new_price)` → `(time.time(), new_price)`로 교체하면 최소 `_price_ttl`(기본 20초)동안 강제 이벤트 가격이 유지됨. `force_price()`의 동일 버그(`stock_service.py:216`)도 함께 수정 필요.
+
+- **`_next_price()` 클램프 범위와 `force_price()` 허용 범위 불일치** (`stock_service.py:137`, `stock_service.py:215`): `force_price()`는 base×3.0까지 허용하지만 `_next_price()`는 base×1.4로 클램핑. 교사가 강제로 올린 가격이 한 틱(20초) 만에 base×1.4로 원상 복귀돼 수업 시연 효과가 사라짐. `stock_service.py:137`의 `min(base * 1.4, new_price)` → `min(base * 3.0, new_price)` 또는 force_price 후 `_current_biases[symbol] = direction`을 삽입해 모멘텀 유지 권장.
+
+- **`export_rankings()` 함수 내부 `import openpyxl`** (`app.py:1081-1083`): `import openpyxl`, `from io import BytesIO`, `from openpyxl.styles import ...` 3줄이 라우트 함수 내부에 위치. `openpyxl` 미설치 환경에서 서버가 정상 시작됐다가 교사가 엑셀 내보내기를 누를 때만 `ImportError: 500`이 반환됨. 모듈 상단으로 이동하면 서버 시작 시 즉시 오류 감지 가능하고, 코드 파악도 쉬워짐.
+
+- **`get_deposits()` 예금 이자 계산 시 일시정지 연장 게임 시간 미반영** (`app.py:652-658`): `total_seconds = room.duration_minutes * 60`으로 고정 계산하므로 진행자가 게임을 여러 번 일시정지해 전체 시간이 늘어났을 경우 이자 비율이 과다 계산됨. `total_seconds = max(room.duration_minutes * 60, (room.end_time - room.start_time).total_seconds()) if room.start_time and room.end_time else room.duration_minutes * 60` 처럼 실제 게임 총 시간을 기준으로 계산하면 정확도 향상.
+
+- **`StockService._init_prices()` 전 종목 TTL 즉시 만료 초기화** (`stock_service.py:124`): `self._prices[sym] = (now - self._price_ttl, start)` 패턴으로 모든 종목 타임스탬프를 이미 만료된 상태로 설정. 학생 30명이 게임 시작 후 동시에 시장 탭을 로드하면 첫 번째 `get_price()` 호출에서 45개 종목 가격이 일제히 재계산되는 thundering herd 발생. `(now, start)`로 교체하면 초기 20초 동안 가격이 안정적으로 유지되고 첫 로드 시 서버 부하가 분산됨.
+
+---
+
+### 제거/단순화할 것들
+
+- **`host_adjust()` `user_id` 누락 시 의미없는 DB 쿼리 실행** (`app.py:388-392`): `target_uid = d.get('user_id')`가 None이면 `RoomMember.query.filter_by(room_id=rid, user_id=None).first()`로 `WHERE user_id IS NULL` 쿼리가 실행됨. 결과는 None → 404로 처리되지만 불필요한 DB 쿼리 발생. `app.py:388` 직후 `if not target_uid: return jsonify({'error': 'user_id 필요'}), 400` 조기 반환으로 불필요한 쿼리와 모호한 오류 메시지를 동시에 제거 가능.
+
+- **`api.get/post/del` 모두 HTTP 오류 응답 미처리** (`app.js:30-34`): `api.get()`, `api.post()`, `api.del()` 모두 `fetch(...).json()`을 바로 호출해 서버가 500 에러로 HTML 오류 페이지를 반환하거나 네트워크 오류가 발생하면 `.json()` 파싱 실패로 처리되지 않는 `SyntaxError`가 발생해 UI가 조용히 멈춤. `const r = await fetch(url, opts); if (!r.ok) return {error: \`HTTP \${r.status}\`}; return r.json();` 패턴으로 세 함수를 일관성 있게 수정하면 안정성이 대폭 향상됨.
+
+- **`loadParticipantRankings()` 매 호출 시 스피너로 목록 초기화** (`app.js:676-694` 참조, 순위 렌더링 로직): 5초 폴링마다 `list.innerHTML = '<div class="loading-center"><span class="spinner"></span></div>'`로 기존 내용을 스피너로 덮어씌워 순위 목록이 깜빡임. `loadHostMembers()`처럼 데이터를 먼저 받아온 뒤 `innerHTML`을 교체하거나, `if (!list.children.length)` 조건으로 초기 로딩 시에만 스피너를 표시하면 깜빡임 없이 부드러운 업데이트 가능.
+
+- **`room_dict()` 매 호출 시 `RoomMember.query.filter_by().count()` 실행** (`app.py:178`): `'member_count': RoomMember.query.filter_by(room_id=room.id).count()`가 `room_dict()` 호출마다 COUNT 쿼리를 실행. `get_room()`, `create_room()`, `join_room()`, `start_room()` 등 방 상태를 반환하는 모든 엔드포인트가 이를 호출해 불필요한 COUNT 쿼리가 반복. `Room` 모델에 `member_count = db.Column(db.Integer, default=0)` 컬럼 추가 후 `join_room()`·`kick_member()` 시 증감 업데이트하면 쿼리 1회 절약.
+
+- **`goHome()` / `doLogout()` 에서 게임 중 누적 상태 미초기화** (`app.js:89-100`): `S.user = null; S.room = null`만 리셋하고 `S.assetHistory`, `S.stocks`, `S.sectors`, `S.newsTs` 등 게임 중 누적 데이터는 초기화하지 않음. 같은 세션에서 다른 방에 재입장하면 이전 게임 자산 히스토리가 포트폴리오 탭 차트에 혼합 표시되고, 이전 방 종목 가격 대비 플래시 애니메이션이 틀리게 발동됨. `showLanding()` 내 (`app.js:82`) `S.assetHistory = []; S.stocks = []; S.sectors = []; S.newsTs = 0;` 4줄 추가로 해결 가능.
+
+- **`S.watchlist` 초기화 시 손상된 JSON으로 앱 전체 실패 가능** (`app.js:17`): `new Set(JSON.parse(localStorage.getItem('watchlist') || '[]'))`가 `S` 객체 리터럴 내부에 있어 `localStorage`에 손상된 JSON이 있으면 `JSON.parse` 예외가 발생해 `S` 전체 초기화 실패 → 이후 모든 전역 상태가 `undefined`. `let watchlistRaw = []; try { watchlistRaw = JSON.parse(localStorage.getItem('watchlist') || '[]'); } catch(e) {}` 방어 코드를 `S` 선언 직전에 추가하고 `S.watchlist = new Set(watchlistRaw)`로 분리하면 손상된 캐시로 인한 전체 앱 오류 방지.
+
+- **`RLT_SEGS` 상수 완전한 dead code** (`app.js:820-826`): `const RLT_SEGS = [{label:'꽝',...}, ...]` 7줄이 선언되어 있지만 `openRouletteModal()`, `doRouletteSpin()`, `updateRltLegend()`, `updateRltWheel()` 어디서도 이 변수를 참조하지 않음. 스핀 결과는 서버 응답의 `data.seg_start/data.seg_end`를 직접 사용하고, 범례는 `data.multipliers/data.weights`를 사용. 완전히 삭제 가능.
+
+---
+
 ## 2026-06-15 (2차)
 
 ### 추가하면 좋을 기능
