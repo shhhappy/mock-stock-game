@@ -348,6 +348,40 @@
 
 ---
 
+## 2026-06-16 (2차)
+
+### 추가하면 좋을 기능
+
+- **주식 거래 수수료 설정 기능** (`app.py:252-258`, `models.py:25-38`): 방 생성 시 매수/매도 수수료율(0~1%)을 설정하면 "수수료가 투자 수익에 미치는 영향" 개념을 체험 가능. `Room`에 `trade_fee_pct = db.Column(db.Float, default=0.0)` 컬럼 추가 → `trade()` 내 `app.py:539~543`에서 매수 시 `amount *= (1 + room.trade_fee_pct / 100)`, 매도 시 `amount *= (1 - room.trade_fee_pct / 100)` 적용 → `RoomTransaction.note`에 수수료 금액 기록. 방 생성 폼(`index.html:62-75`)과 `doCreateRoom()`(`app.js:124`)에 입력란 1개 추가로 50줄 내 완성.
+
+- **시나리오 예약 이벤트 (교사 사전 설정)** (`app.py:1017-1032`): 교사가 게임 시작 전 특정 경과 시점(예: "전체 시간의 40% 경과 시 배터리 섹터 -20%")에 자동 발동할 이벤트를 등록하는 `POST /api/rooms/<rid>/host/schedule-event` 엔드포인트 추가. `_scheduled_events: dict[int, list]` 인메모리 구조로 저장하고, `room_dict()`(`app.py:159`) 내 경과 비율 계산 시 해당 이벤트를 트리거. 교사가 수업 흐름에 맞춰 주가 충격을 미리 계획해 수업 진행이 매끄러워지며, `force_sector_event()` 기존 로직을 재사용하므로 추가 구현량이 적음.
+
+- **결과 화면에 개인 거래내역 조회** (`index.html:587-625`, `app.js:1568-1649`): 게임 종료 후 `screen-results`에서 자신의 매수/매도 기록을 볼 방법이 없음. `loadResults()` 내 `app.js:1568` 직후에 `GET /api/rooms/<rid>/transactions?page=1` 결과를 "내 거래 내역 펼치기" 토글 섹션으로 추가하면, 게임 사후 "왜 이 종목을 선택했나요?" 토론에서 학생이 자신의 타이밍·종목을 데이터와 함께 발표 가능. 서버 변경 없이 클라이언트만 수정.
+
+- **Excel 내보내기에 전체 학생 거래내역 시트 추가** (`app.py:1078-1147`): 현재 엑셀은 최종 순위 시트 1개만 생성. `app.py:1140` 직후에 `ws2 = wb.create_sheet('거래내역')`를 만들고 `RoomTransaction.query.filter_by(room_id=rid).order_by(RoomTransaction.user_id, RoomTransaction.timestamp).all()` 결과를 [학번, 이름, 종목, 매수/매도, 수량, 단가, 금액, 시각] 컬럼으로 기록하면 교사가 사후 학생별 투자 패턴을 분석 가능. 약 30줄 추가로 구현 완료.
+
+- **포트폴리오 전량 청산 원클릭 버튼** (`index.html:378-395`, `app.js:1324-1435`): 게임 종료 직전 보유 종목을 하나씩 매도해야 해서 현금화가 번거로움. 포트폴리오 탭 상단 "보유 종목" 제목 옆에 "전체 매도" 버튼을 추가하고, `for...of` + `await execTrade('SELL', h.symbol, h.shares)` 루프로 순차 처리하면 됨. 실패한 종목은 toast로 알리고 나머지는 계속 진행하는 방식으로 partial 케이스 처리.
+
+- **진행자 화면에서 폭탄뉴스 팝업 비표시** (`app.js:725-737`, `app.js:1029-1056`): `startNewsPolling()`은 진행자·참여자 구분 없이 동일하게 `showBombNews()`를 호출해 진행자도 팝업을 받음. 진행자는 자신이 뉴스를 발송하는 주체이므로 팝업이 불필요하고 대시보드 시야를 가림. `startNewsPolling()` 내 `app.js:734`에 `if (S.room?.is_host) return;` 조건 한 줄만 추가하면 진행자에게만 팝업을 숨길 수 있음.
+
+---
+
+### 제거/단순화할 것들
+
+- **[중요 버그] `export_rankings()` 게임 종료 후 새 StockService 가격으로 자산 계산** (`app.py:1078`, `app.py:35-46`, `stock_service.py:304-312`): `_end_room()`이 `cleanup_room_service(room.id)`를 호출해 서비스를 삭제(`app.py:68`)하면, 이후 교사가 엑셀 다운로드 시 `member_total_value()` 내 `get_room_service(rid)`(`stock_service.py:308-311`)가 새 인스턴스를 생성해 완전히 다른 무작위 가격으로 보유 주식 평가액을 계산함. 결과 화면에 표시된 순위와 Excel 순위가 다를 수 있음. 해결책: `_end_room()` 내 `cleanup_room_service()` 호출 직전에 `for h in RoomHolding.query.filter_by(room_id=room.id): m = RoomMember.query.filter_by(room_id=room.id, user_id=h.user_id).first(); price = svc.get_price(h.symbol) or h.avg_price; m.cash += price * h.shares; db.session.delete(h)` 루프로 주식을 현재가에 일괄 청산하면 StockService 없이도 정확한 최종 자산 산출 가능.
+
+- **참여자 1명당 분당 최대 36회 폴링 요청 폭주** (`app.js:577-604`, `app.js:725-737`, `app.js:676-694`): 참여자 게임 화면에서 `S.pollInterval` (5초, `GET /rooms/<rid>`) + `S.newsInterval` (3초, `GET /rooms/<rid>/news`) + `refreshMyRank()` (5초마다, `GET /rooms/<rid>/rankings`) 세 가지 폴링이 독립 실행돼 학생 1명당 분당 최대 36회 요청 발생. 참여자 30명이면 분당 1,080회로 Render 무료 티어에 과부하. `GET /rooms/<rid>` 응답에 `{ status, remaining_seconds, news: {...}, my_rank, my_total_value, lottery_active }` 필드를 통합 포함해 3개 폴링을 1개로 줄이면 분당 360회 (3× 감소). 서버 `get_room()` 라우트 1곳 수정 + 클라이언트 폴링 통합으로 완결.
+
+- **`startTimer()` 클라이언트 로컬 시간 기반으로 타이머 오차 발생 가능** (`app.js:697-717`): `rem = Math.floor((new Date(S.room.end_time) - new Date()) / 1000)` 계산이 학생 기기의 로컬 시계에 의존. 기기 시계가 서버와 3분 차이 나면 타이머가 실제보다 3분 일찍/늦게 "00:00"이 되어 혼란 유발(실제 게임 종료는 서버 기준으로 정상 처리됨). `S.room.remaining_seconds`(서버가 계산한 값)를 기준으로 매 초 -1 카운트다운하고, `pollInterval` 응답으로 `remaining_seconds`를 교정하는 방식으로 전환하면 시계 오차와 무관하게 정확한 타이머 표시 가능 (`app.js:710`의 `new Date()` 계산 제거).
+
+- **`api.del()` HTTP 오류 응답 미처리** (`app.js:34`): 2026-06-14에 `api.get()`·`api.post()`의 동일 문제를 지적했으나 `api.del()`은 언급되지 않음. `(await fetch(url, {method:'DELETE'})).json()` 그대로 반환해 서버 500 시 `SyntaxError`로 UI 조용히 중단. `doWithdraw()`(`app.js:1530`)·`doKickMember()`(`app.js:208`)가 이를 사용. `api.get`/`api.post` 수정 패치 시 `api.del`도 동일하게 `const r = await fetch(url, {method:'DELETE'}); if (!r.ok) return {error: \`HTTP \${r.status}\`}; return r.json();` 패턴으로 함께 수정하면 세 함수를 일관성 있게 보호 가능.
+
+- **`openStockModal()` 매번 포트폴리오 API 호출** (`app.js:1212-1224`): 학생이 종목 카드를 탭할 때마다 `GET /api/rooms/<rid>/portfolio`를 실행해 현금 잔액과 보유 수량을 가져옴. 종목 모달을 빠르게 여닫으며 여러 종목을 비교하는 경우 매 탭마다 API 요청이 발생. `S` 상태에 `portfolioCache: {cash, holdingsMap, updatedAt}` 필드를 추가하고 10초 이내면 캐시를 재사용하면 요청 수를 크게 줄일 수 있음. `execTrade()` 성공 시(`app.js:1292-1322`) 캐시의 `cash`와 `holdingsMap`을 로컬 갱신하면 API 없이도 모달 내 현금·보유 수량이 즉시 반영됨.
+
+- **`S.assetHistory`·`S.stocks` 방 전환 시 미초기화** (`app.js:19`, `app.js:691-694`, `app.js:1097-1109`): `goHome()`(`app.js:96`)·`doLogout()`(`app.js:89`)이 `S.user = null; S.room = null`만 리셋하고, `S.assetHistory`, `S.stocks`, `S.sectors`, `S.newsTs` 등 게임 중 누적 데이터는 초기화하지 않음. 같은 세션에서 다른 방에 재입장하면 이전 게임 자산 히스토리가 포트폴리오 탭 차트에 혼합 표시되고, 이전 방 종목 가격 대비 플래시 애니메이션(`app.js:1181-1191`)이 틀리게 발동됨. `showLanding()` 내(`app.js:82-85`) 또는 `stopPolling()` 내에 `S.assetHistory = []; S.stocks = []; S.sectors = []; S.newsTs = 0;` 4줄 추가로 해결.
+
+---
+
 ## 2026-06-15 (2차)
 
 ### 추가하면 좋을 기능
