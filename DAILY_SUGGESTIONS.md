@@ -453,3 +453,29 @@
 - **`_rlt_active` 카운터 비원자적 업데이트로 다중 일시정지 위험** (`app.py:738-746`): `state['count'] += 1` 직후 `state['count'] == 1` 체크까지 Lock이 없음. Flask 개발 서버(단일 스레드)에서는 무관하나 Gunicorn 멀티 워커나 eventlet 환경에서 두 학생이 동시에 룰렛을 열면 두 요청이 모두 `count == 1`로 평가해 `room.status = 'paused'` + `paused_at` 설정을 중복 실행 가능. 두 번째 `paused_at` 덮어쓰기로 이후 `resume_room()` 타이머 연장값이 틀어짐. `_room_services_lock`과 같은 방식으로 `_rlt_active_lock = Lock()`을 추가하고 `open` / `close` 핸들러에서 해당 방의 count·auto_paused 변경을 원자적으로 실행하는 것이 안전.
 
 ---
+
+## 2026-06-17
+
+### 추가하면 좋을 기능
+
+- **룰렛 일시정지 영구 고착 방지 타임아웃** (`app.py:738-771`): 학생 브라우저가 룰렛 오버레이 열린 채로 비정상 종료되면 `_rlt_active[rid]['count']`가 1 이상으로 고착돼 `minigame_close`가 호출되지 않음 → 게임이 영구 일시정지 상태 유지. 교사가 수동 재개할 때까지 아무도 거래 불가. 해결책: `minigame_open` 호출 시 `threading.Timer(120, lambda: _force_resume(rid))` 같은 안전망 타이머를 등록하고, `minigame_close`에서 취소. 또는 `_rlt_active[rid]` 항목에 `opened_at` 타임스탬프를 기록하고, `get_room_status()` 폴링 응답에서 120초 초과 룰렛 세션을 자동 정리.
+
+- **퀴즈 중복 출제 방지** (`app.py:968-982`): `get_quiz()` 라우트가 `random.choice(QUIZ_QUESTIONS)` 단순 랜덤을 사용해 60초 쿨다운 직후 동일 학생에게 같은 문제가 다시 출제될 수 있음. `_quiz_state[rid][uid]` 딕셔너리에 `'seen': set()` 필드를 추가하고, `seen`에 없는 문제 중에서만 선택하도록 수정. 전체 문제를 소진하면 `seen`을 초기화해 순환.
+
+- **`host_adjust` 모달에 총 자산 표시** (`app.js:452-460`, `app.py:393`): 현재 교사가 학생 현금을 조정할 때 모달에 현금 잔액만 표시(`member.cash`). 주식을 많이 보유한 학생은 현금이 거의 없어도 총자산이 매우 크므로 현금 조정 효과가 미미함을 교사가 파악하기 어려움. `/api/rooms/<rid>/rankings` 응답의 `total` 값을 `host_adjust` 모달에 "총자산: ₩ X" 형태로 함께 표시하면 교사가 조정 필요 여부를 즉시 판단 가능.
+
+- **`force_price()` `show_hint` 파라미터화** (`stock_service.py:208-232`): `force_price()` 내부에서 `'show_hint': True`가 하드코딩되어 있어 교사가 가격을 강제 조정하면 항상 방향 힌트가 뉴스로 노출됨. 교사가 조용히 가격만 조정하고 싶은 상황(예: 오류 수정)에 대응 불가. `force_price(symbol, pct, room_id, show_hint=True)` 형태로 파라미터를 추가하고, `/api/rooms/<rid>/force_price` 라우트(`app.py:488`)에서 `request.json.get('show_hint', True)`로 전달하면 선택적 힌트 공개 가능.
+
+### 제거/단순화할 것들
+
+- **`enter()` IntegrityError 미처리로 500 반환** (`app.py:208-219`): 두 클라이언트가 동시에 같은 username으로 `/api/auth/enter`를 요청하면 둘 다 `User.query.filter_by(username=...)` 조회에서 None을 얻고, 두 번째 `db.session.commit()`에서 `IntegrityError`가 발생해 클라이언트에게 500 HTML이 반환됨. `api.post()`는 JSON 파싱을 시도해 `SyntaxError`로 이어짐. `db.session.commit()` 직후 `except IntegrityError`를 추가하고 롤백 후 기존 사용자를 재조회하는 패턴으로 수정하면 동시 가입 시 안전.
+
+- **`openStockModal()` 항상 `'1mo'` 차트로 초기화** (`app.js:1221-1224`): 사용자가 `'1wk'`로 기간을 바꿔 차트를 보다가 다른 종목을 클릭하면 `openStockModal()`이 `loadChart('1mo')`를 무조건 호출해 선택했던 기간 정보가 소멸. 전역 변수 `S.lastChartPeriod = '1mo'` (기본값)를 두고, 기간 버튼 클릭 시 업데이트, `openStockModal()`에서 `loadChart(S.lastChartPeriod)`로 호출하면 모달 간 기간 선택 상태 유지.
+
+- **`goHome()` / `doLogout()` 복권 관련 상태 미초기화** (`app.js:96-100`, `app.js:557-559`): `_lotParticipantPicks`, `_lotPickerSubmitted`, `_lotResultRound`, `_lotPolling` 변수가 `enterParticipantGame()`에서만 초기화되고 `goHome()`·`doLogout()`에서는 초기화되지 않음. 학생이 복권 진행 중 홈으로 나갔다가 다른 방에 재입장하면 이전 복권 선택값과 제출 상태가 남아 있어 복권 화면이 오작동. `goHome()` 내부(line 96)에 `_stopLotPolling(); _lotParticipantPicks = []; _lotPickerSubmitted = false; _lotResultRound = null;` 4줄 추가로 해결.
+
+- **`minigame_open` 중복 호출 시 count 이중 증가** (`app.py:738-746`): 학생 브라우저가 룰렛 오버레이 요청을 재시도(네트워크 지연·이중 탭)하면 동일 사용자가 `minigame_open`을 두 번 호출해 `state['count']`가 2 증가. 이후 `minigame_close` 한 번으로는 count가 1로 남아 게임 일시정지가 해제되지 않음. `_rlt_active[rid]` 에 `'openers': set()` 필드를 추가하고, `user_id`가 이미 `openers`에 있으면 count 증가를 건너뛰는 멱등성 처리가 필요.
+
+- **`refreshMyRank()` 자산 히스토리 X축 레이블에 로컬 시계 사용** (`app.js:690-693`): 자산 추이 차트 X축 레이블을 `new Date()`(클라이언트 로컬 시각)로 생성해 자정 근처나 학생 기기 시계가 다를 때 그래프 시간 축이 어긋남. 서버 응답에 `server_time` 필드를 포함시키거나, `portfolio` API 응답의 `timestamp` 값을 기준으로 레이블을 계산하면 서버 기준 KST로 일관된 시간 표시 가능.
+
+---
