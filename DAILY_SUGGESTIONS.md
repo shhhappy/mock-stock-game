@@ -479,3 +479,39 @@
 - **`refreshMyRank()` 자산 히스토리 X축 레이블에 로컬 시계 사용** (`app.js:690-693`): 자산 추이 차트 X축 레이블을 `new Date()`(클라이언트 로컬 시각)로 생성해 자정 근처나 학생 기기 시계가 다를 때 그래프 시간 축이 어긋남. 서버 응답에 `server_time` 필드를 포함시키거나, `portfolio` API 응답의 `timestamp` 값을 기준으로 레이블을 계산하면 서버 기준 KST로 일관된 시간 표시 가능.
 
 ---
+
+## 2026-06-17 (2차)
+
+### 추가하면 좋을 기능
+
+- **시장 탭 실시간 섹터 성과 요약 바** (`app.js:1097-1117`, `stock_service.py:99`): `loadMarket()` 성공 후 `S.stocks`를 섹터별로 그룹화해 평균 `change_pct`를 계산하고, 섹터 필터 버튼 위에 `"반도체 +1.2% | IT −0.5% | 배터리 +0.8%"` 형태의 한 줄 요약 바를 렌더링하면 학생이 종목 카드를 일일이 열지 않아도 강세/약세 섹터를 한눈에 파악 가능. `renderSectors()` 내부(`app.js:1111`)에 `const sectorAvg = ...` 계산 블록과 요약 텍스트 DOM 업데이트 10줄 추가로 서버 변경 없이 구현 완료.
+
+- **진행자 실시간 게임 통계 카드** (`app.py:601-617`, `app.py:620-640`): `GET /api/rooms/<rid>/host/stats` 엔드포인트를 추가해 `{total_trades, total_volume, most_active_username, most_traded_symbol, quiz_correct_rate, roulette_spin_count}`를 `RoomTransaction` 집계 쿼리로 반환. 진행자 대시보드 "순위" 탭 하단에 "📊 게임 통계" 카드를 두고 10초마다 갱신하면 교사가 "지금까지 OOO건 거래, OO이 가장 많이 거래" 형태로 수업 개입 포인트를 실시간 파악 가능. 서버 30줄, 클라이언트 15줄 내 완성.
+
+- **타이머 1분 전 모바일 진동 알림** (`app.js:710-716`): `startTimer()`의 `tick()` 함수에서 `rem === 60`이 처음 감지될 때 `navigator.vibrate?.([200, 100, 200])`을 호출하면, 스마트폰을 책상에 올려 둔 학생이 화면을 보지 않아도 진동으로 마감 1분 전을 인식 가능. `app.js:712` 직후 한 줄 추가로 구현되며 Web Vibration API 미지원 기기에서는 `?.`로 안전하게 무시됨. 동시에 `AudioContext.createOscillator()` 0.1초 비프음을 추가하면 소리 알림도 제공 가능 (볼륨 0.3 이하 권장).
+
+- **종목 모달 보유 평가손익 배지** (`app.js:1195-1224`): `openStockModal()` 내 `port` 응답에서 이미 보유 종목의 `avg_price`를 알 수 있음. `h.avg_price`를 `S.tradeAvgPrice`로 저장하고, `ms-holding` 아래에 `<div id="ms-pnl">` 요소를 추가해 `((S.tradePrice - S.tradeAvgPrice) / S.tradeAvgPrice * 100).toFixed(2) + '%'`를 색상 있는 뱃지로 표시하면 학생이 모달을 열자마자 현재 포지션 수익률을 즉시 확인 가능. 포트폴리오 탭으로 이동하지 않아도 돼 매수/매도 결정 속도 향상. 서버 변경 없이 클라이언트 5줄 수정으로 구현 가능.
+
+- **스마트 최대 매수 수량 실시간 힌트 레이블** (`app.js:1274-1277`): `updateTotal()` 함수가 이미 `trade-total`을 갱신하므로, 같은 함수 내에서 `Math.floor(S.tradeCash / S.tradePrice)`와 현재 입력값을 비교해 `"최대 N주 구매 가능"` 레이블을 수량 입력창 아래에 표시하면 학생이 잔액 대비 살 수 있는 최대 수량을 계산할 필요가 없어짐. `setMaxBuy()` 버튼(`app.js:1279`)은 이미 구현되어 있으나 버튼을 눌러야만 알 수 있는 반면, 실시간 힌트는 수량을 입력하면서 바로 확인 가능. API 호출 없이 `app.js:1276` 한 줄 추가로 구현 완료.
+
+- **진행자 순위표에 학생별 활동 배지** (`app.js:383-395`, `app.py:344-354`): `host_members()` 응답에 `{trade_count, quiz_taken}` 필드를 추가(`RoomTransaction.query.filter_by(room_id=rid, user_id=m.user_id).count()`로 계산)하고, 진행자 순위 행에 `<span>💹 N건</span>` 거래 횟수 배지를 렌더링. 거래를 한 번도 안 한 학생(0건)에 `⚠` 아이콘을 표시하면 교사가 "OO 학생, 아직 거래를 시작 안 했네요" 식으로 개입 포인트를 즉시 파악 가능. 서버 5줄 + 클라이언트 3줄 수정.
+
+---
+
+### 제거/단순화할 것들
+
+- **`enter()` 유효성 검사 메시지-코드 불일치** (`app.py:212-213`): `len(u) > 30`이면 400을 반환하지만 오류 메시지는 `"닉네임은 2~20자 사이여야 합니다."`로 20자라고 표기. 21~30자 닉네임을 입력한 사용자는 오류 없이 성공하는데 메시지에는 "20자 이하"가 맞다고 나와 혼란 유발. `len(u) > 20`으로 코드를 수정하거나 메시지를 `"2~30자 사이여야 합니다."`로 수정해 일관성 확보 필요.
+
+- **`get_lottery()` 동시 폴링으로 `_do_reveal()` 중복 호출 위험** (`app.py:856-862`): 참여자 30명이 동시에 3초 폴링을 수행하면 `cur['state'] == 'drawing'` 조건이 여러 요청에서 동시에 참이 될 수 있음. `_do_reveal()` 내부에서 `cur['state'] = 'revealed'`를 설정하기 전에 두 번째 요청이 진입하면 `RoomMember.cash` 이중 지급이 발생. `_lots` 딕셔너리 수정이 Lock 없이 이루어지므로 Thread-safety 보장 불가. `cur['state'] = 'drawing'` 체크 직전에 `if cur.get('state') == 'drawing': cur['state'] = 'revealing'` 원자적 선점 처리를 추가하거나, `_lots` 전역 접근을 `threading.Lock()`으로 보호 권장 (`app.py:73` 근방에 `_lots_lock = Lock()` 추가).
+
+- **`openRouletteModal()` 스핀 소진 시 무음 실패** (`app.js:897-920`): `if (data.error || data.spins_left <= 0) return;` 조건에서 `spins_left <= 0`이면 아무 피드백 없이 조용히 종료. 학생이 룰렛 버튼을 눌러도 화면에 아무 반응이 없어 앱이 멈춘 것으로 오해할 수 있음. `if (data.spins_left <= 0) { toast('룰렛 기회를 모두 사용했습니다.', 'info'); return; }` 한 줄로 사용자 피드백 제공. 마찬가지로 `data.error`가 있을 때도 현재는 토스트 없이 실패하므로 `toast(data.error, 'error');` 추가 권장.
+
+- **`submit_quiz()` `bool(d.get('answer'))` 문자열 `'false'`를 `True`로 처리** (`app.py:994`): JSON body로 `{"answer": false}`를 정상 전송하면 `bool(False) = False`로 올바르나, API를 직접 curl로 호출하거나 클라이언트 버그로 `{"answer": "false"}`(문자열)가 전송되면 `bool("false") = True`가 되어 오답이 정답으로 처리됨. `user_answer = d.get('answer') is True` 또는 `if d.get('answer') not in (True, False): return jsonify({'error': '잘못된 답변'}), 400` 검증을 추가하면 타입 강제 변환 취약점 차단 가능.
+
+- **`join_room()` 일시정지 상태 게임 중 신규 참여 허용** (`app.py:268`): `room.status == 'ended'`만 차단하므로 복권·룰렛으로 게임이 `'paused'` 상태일 때도 새 학생이 입장 가능. 복권 `drawing` 단계에서 입장한 학생은 `picks`가 없어 당첨 결과 0원을 받고, 갑자기 게임 화면으로 진입해 상황을 파악하지 못한 채 혼란 유발. `join_room()` 응답에 `'late_join': room.status in ('active', 'paused')`를 포함시키고, 클라이언트에서 `late_join`이 `true`이면 "게임이 이미 진행 중입니다 — 상황을 파악하고 거래를 시작하세요" 안내 토스트를 표시하는 것으로 최소한의 사용자 경험 보호 가능.
+
+- **`loadParticipantRankings()` / `loadResults()` `e.username` XSS 취약점** (`app.js:1549`, `app.js:1614`): 순위 목록과 결과 화면에서 `e.username`을 template literal로 innerHTML에 직접 삽입. 사용자명에 `<img src=x onerror="alert(document.cookie)">` 또는 `<script>` 태그를 포함시켜 입장하면 다른 학생의 브라우저에서 임의 JS가 실행될 수 있음. `escHtml()` 함수가 `app.js:815`에 이미 정의되어 있으므로 `${e.username}` → `${escHtml(e.username)}`으로 교체하면 즉시 방지 가능. 진행자 화면의 `loadHostMembers()`(`app.js:383`)와 거래 내역의 `t.note`(`app.js:1449`)도 동일하게 escaping 필요.
+
+- **`S.depositWarningShown` 방 변경 시 미초기화** (`app.js:12`, `app.js:96-100`): `S` 객체 초기화 시 `depositWarningShown: false`로 설정되지만, `goHome()`·`doLogout()`에서 `S.user = null; S.room = null`만 리셋하고 `S.depositWarningShown`은 초기화하지 않음. 학생이 첫 번째 게임에서 예금 만기 경고를 받은 후 홈으로 나갔다가 두 번째 게임에 예금을 하면, `checkDepositMaturity()` 첫 줄의 `if (S.depositWarningShown) return;` 가드(`app.js:638`)에 걸려 만기 임박 팝업이 절대 표시되지 않음. 2026-06-16에 지적한 `S.assetHistory` 미초기화와 동일한 패턴 — `showLanding()`(`app.js:82`) 또는 `stopPolling()` 내에서 `S.depositWarningShown = false;` 1줄 추가로 해결.
+
+---
