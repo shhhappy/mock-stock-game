@@ -281,7 +281,8 @@ def _auto_start_lottery_if_due(room):
     if not round_due: return
     lot = _lots.setdefault(room.id, {'done': set()})
     if (lot.get('current') or {}).get('state') in ('picking', 'drawing', 'revealed'): return
-    default_prize = max(100000, round(room.starting_cash * 0.5))
+    member_count = RoomMember.query.filter_by(room_id=room.id).count()
+    default_prize = member_count * 100_000_000
     room.status = 'paused'
     room.paused_at = now
     db.session.commit()
