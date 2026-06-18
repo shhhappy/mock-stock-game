@@ -536,7 +536,7 @@ function enterParticipantLobby() {
       S.room = r; stopPolling();
       await loadResults(); showScreen('screen-results');
     }
-  }, 3000);
+  }, 5000);
 }
 
 async function loadPLobbyMembers() {
@@ -601,7 +601,7 @@ function enterParticipantGame() {
     refreshMyRank();
     if (S.currentPage === 'market') loadMarket();
     if (S.currentPage === 'rankings') loadParticipantRankings();
-  }, 5000);
+  }, 10000);
 }
 
 function showPausedBanner() {
@@ -733,7 +733,7 @@ function startNewsPolling() {
       S.newsTs = data.timestamp;
       if (data.items && data.items.length) showBombNews(data.items, data.show_hint !== false);
     }
-  }, 3000);
+  }, 8000);
 }
 
 function stopNewsPolling() {
@@ -1835,7 +1835,7 @@ let _lotResultRound = null;
 function _startLotPolling(rid) {
   if (_lotPollInterval) return;
   _checkLotteryStatus(rid);
-  _lotPollInterval = setInterval(() => _checkLotteryStatus(rid), 3000);
+  _lotPollInterval = setInterval(() => _checkLotteryStatus(rid), 5000);
 }
 
 function _stopLotPolling() {

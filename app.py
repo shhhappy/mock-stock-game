@@ -1,7 +1,7 @@
 from flask import Flask, jsonify, request, send_from_directory, session, send_file
 from functools import wraps
 from datetime import datetime, timedelta, timezone
-import os
+import os, threading
 
 from models import db, User, Room, RoomMember, RoomHolding, RoomTransaction, Deposit
 from stock_service import get_room_service, cleanup_room_service, STOCKS, SECTORS
@@ -14,8 +14,66 @@ app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:/
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db.init_app(app)
 
+def _set_sqlite_pragmas(dbapi_conn, _):
+    cur = dbapi_conn.cursor()
+    cur.execute("PRAGMA journal_mode=WAL")
+    cur.execute("PRAGMA synchronous=NORMAL")
+    cur.execute("PRAGMA busy_timeout=5000")
+    cur.execute("PRAGMA cache_size=-32000")
+    cur.close()
+
 with app.app_context():
     db.create_all()
+    from sqlalchemy import event as _sa_event
+    _sa_event.listen(db.engine, "connect", _set_sqlite_pragmas)
+
+# ── Server-side room cache (1.5s TTL) ────────────────────────
+_room_cache: dict = {}
+_room_cache_lock = threading.Lock()
+ROOM_CACHE_TTL = 1.5
+
+def _invalidate_room_cache(rid):
+    with _room_cache_lock:
+        _room_cache.pop(rid, None)
+
+def _get_room_cached(room, uid):
+    rid = room.id
+    now = time.time()
+    with _room_cache_lock:
+        entry = _room_cache.get(rid)
+    if entry and now - entry['ts'] < ROOM_CACHE_TTL:
+        d = dict(entry['data'])
+        d['is_host'] = uid == room.host_id
+        return d
+    data = room_dict(room, uid)
+    base = {k: v for k, v in data.items() if k != 'is_host'}
+    with _room_cache_lock:
+        _room_cache[rid] = {'ts': now, 'data': base}
+    return data
+
+# ── News cache (2s TTL) ───────────────────────────────────────
+_news_cache: dict = {}
+_news_cache_lock = threading.Lock()
+NEWS_CACHE_TTL = 2.0
+
+def _get_news_cached(rid):
+    now = time.time()
+    with _news_cache_lock:
+        entry = _news_cache.get(rid)
+    if entry and now - entry['ts'] < NEWS_CACHE_TTL:
+        return entry['data']
+    data = get_room_service(rid).get_news()
+    with _news_cache_lock:
+        _news_cache[rid] = {'ts': now, 'data': data}
+    return data
+
+def _invalidate_news_cache(rid):
+    with _news_cache_lock:
+        _news_cache.pop(rid, None)
+
+# ── Lottery / roulette thread locks ──────────────────────────
+_lottery_lock = threading.Lock()
+_rlt_lock = threading.Lock()
 
 KST = timezone(timedelta(hours=9))
 
@@ -68,6 +126,8 @@ def _end_room(room):
     cleanup_room_service(room.id)
     _lots.pop(room.id, None)
     _rlt_active.pop(room.id, None)
+    _invalidate_room_cache(room.id)
+    _invalidate_news_cache(room.id)
 
 # ── Lottery System ────────────────────────────────────────
 _lots = {}   # room_id -> {done: set(), current: dict|None}
@@ -279,19 +339,21 @@ def _auto_start_lottery_if_due(room):
     total_s = room.duration_minutes * 60
     round_due = _lot_round_due(room, remaining, total_s)
     if not round_due: return
-    lot = _lots.setdefault(room.id, {'done': set()})
-    if (lot.get('current') or {}).get('state') in ('picking', 'drawing', 'revealed'): return
-    member_count = RoomMember.query.filter_by(room_id=room.id).count()
-    default_prize = member_count * 100_000_000
-    room.status = 'paused'
-    room.paused_at = now
-    db.session.commit()
-    lot['current'] = {
-        'round': round_due, 'state': 'picking', 'prize': default_prize,
-        'picks': {}, 'winning': None, 'results': None,
-        'pick_dl': time.time() + LOTTO_PICK_SECS, 'draw_dl': None,
-        'auto_paused': True,
-    }
+    with _lottery_lock:
+        lot = _lots.setdefault(room.id, {'done': set()})
+        if (lot.get('current') or {}).get('state') in ('picking', 'drawing', 'revealed'): return
+        member_count = RoomMember.query.filter_by(room_id=room.id).count()
+        default_prize = member_count * 100_000_000
+        room.status = 'paused'
+        room.paused_at = now
+        db.session.commit()
+        lot['current'] = {
+            'round': round_due, 'state': 'picking', 'prize': default_prize,
+            'picks': {}, 'winning': None, 'results': None,
+            'pick_dl': time.time() + LOTTO_PICK_SECS, 'draw_dl': None,
+            'auto_paused': True,
+        }
+    _invalidate_room_cache(room.id)
 
 @app.route('/api/rooms/<int:rid>')
 @login_required
@@ -299,9 +361,12 @@ def get_room(rid):
     room = Room.query.get_or_404(rid)
     if room.status == 'active' and room.end_time and datetime.utcnow() >= room.end_time:
         _end_room(room)
-    else:
-        _auto_start_lottery_if_due(room)
-    return jsonify(room_dict(room, cur_user().id))
+        return jsonify(room_dict(room, cur_user().id))
+    prev_status = room.status
+    _auto_start_lottery_if_due(room)
+    if room.status != prev_status:
+        _invalidate_room_cache(rid)
+    return jsonify(_get_room_cached(room, cur_user().id))
 
 @app.route('/api/rooms/<int:rid>/start', methods=['POST'])
 @login_required
@@ -315,6 +380,7 @@ def start_room(rid):
     room.start_time = now
     room.end_time = now + timedelta(minutes=room.duration_minutes)
     db.session.commit()
+    _invalidate_room_cache(rid)
     return jsonify({'room': room_dict(room, user.id)})
 
 @app.route('/api/rooms/<int:rid>/pause', methods=['POST'])
@@ -327,6 +393,7 @@ def pause_room(rid):
     room.status = 'paused'
     room.paused_at = datetime.utcnow()
     db.session.commit()
+    _invalidate_room_cache(rid)
     return jsonify({'room': room_dict(room, user.id)})
 
 @app.route('/api/rooms/<int:rid>/resume', methods=['POST'])
@@ -342,6 +409,7 @@ def resume_room(rid):
     room.status = 'active'
     room.paused_at = None
     db.session.commit()
+    _invalidate_room_cache(rid)
     return jsonify({'room': room_dict(room, user.id)})
 
 @app.route('/api/rooms/<int:rid>/end', methods=['POST'])
@@ -514,13 +582,14 @@ def host_send_news(rid):
     show_hint = bool(d.get('show_hint', True))
     svc = get_room_service(rid)
     svc.trigger_news(show_hint)
+    _invalidate_news_cache(rid)
     return jsonify(svc.get_news())
 
 @app.route('/api/rooms/<int:rid>/news')
 @login_required
 def get_room_news(rid):
     Room.query.get_or_404(rid)
-    return jsonify(get_room_service(rid).get_news())
+    return jsonify(_get_news_cached(rid))
 
 
 @app.route('/api/rooms/<int:rid>/stocks/<symbol>/chart')
@@ -758,15 +827,18 @@ def minigame_open(rid):
         return jsonify({'error': '진행자는 참여할 수 없습니다.'}), 403
     if not RoomMember.query.filter_by(room_id=rid, user_id=user.id).first():
         return jsonify({'error': '참여자가 아닙니다.'}), 403
-    state = _rlt_active.setdefault(rid, {'count': 0, 'auto_paused': False})
-    state['count'] += 1
     paused_now = False
-    if state['count'] == 1 and room.status == 'active':
-        room.status = 'paused'
-        room.paused_at = datetime.utcnow()
-        db.session.commit()
-        state['auto_paused'] = True
-        paused_now = True
+    with _rlt_lock:
+        state = _rlt_active.setdefault(rid, {'count': 0, 'auto_paused': False})
+        state['count'] += 1
+        if state['count'] == 1 and room.status == 'active':
+            room.status = 'paused'
+            room.paused_at = datetime.utcnow()
+            db.session.commit()
+            state['auto_paused'] = True
+            paused_now = True
+    if paused_now:
+        _invalidate_room_cache(rid)
     remaining = 0
     if room.paused_at and room.end_time:
         remaining = max(0, int((room.end_time - room.paused_at).total_seconds()))
@@ -775,22 +847,25 @@ def minigame_open(rid):
 @app.route('/api/rooms/<int:rid>/minigame/close', methods=['POST'])
 @login_required
 def minigame_close(rid):
-    state = _rlt_active.get(rid)
-    if not state or state['count'] <= 0:
-        return jsonify({'ok': True})
-    state['count'] = max(0, state['count'] - 1)
     resumed = False
     new_end_time = None
-    if state['count'] == 0 and state.get('auto_paused'):
-        room = Room.query.get(rid)
-        if room and room.status == 'paused' and room.paused_at:
-            room.end_time += (datetime.utcnow() - room.paused_at)
-            room.status = 'active'
-            room.paused_at = None
-            db.session.commit()
-            resumed = True
-            new_end_time = room.end_time.strftime('%Y-%m-%dT%H:%M:%SZ')
-        state['auto_paused'] = False
+    with _rlt_lock:
+        state = _rlt_active.get(rid)
+        if not state or state['count'] <= 0:
+            return jsonify({'ok': True})
+        state['count'] = max(0, state['count'] - 1)
+        if state['count'] == 0 and state.get('auto_paused'):
+            room = Room.query.get(rid)
+            if room and room.status == 'paused' and room.paused_at:
+                room.end_time += (datetime.utcnow() - room.paused_at)
+                room.status = 'active'
+                room.paused_at = None
+                db.session.commit()
+                resumed = True
+                new_end_time = room.end_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+            state['auto_paused'] = False
+    if resumed:
+        _invalidate_room_cache(rid)
     return jsonify({'ok': True, 'resumed': resumed, 'end_time': new_end_time})
 
 @app.route('/api/rooms/<int:rid>/minigame/spin', methods=['POST'])
@@ -866,6 +941,7 @@ def lottery_start(rid):
         'pick_dl': time.time() + LOTTO_PICK_SECS, 'draw_dl': None,
         'auto_paused': True,
     }
+    _invalidate_room_cache(rid)
     return jsonify({'ok': True})
 
 @app.route('/api/rooms/<int:rid>/lottery')
