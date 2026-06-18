@@ -78,7 +78,7 @@ _rlt_lock = threading.Lock()
 
 _results_published = {}  # room_id -> bool
 _ending_soon = set()    # room_ids whose host pressed end (1-min countdown active)
-_rlt_completed = {}     # room_id -> set of user_ids who finished post-game roulette
+_rlt_triggered = set()  # room_ids where end-of-game roulette was auto-triggered (5s remaining)
 
 KST = timezone(timedelta(hours=9))
 
@@ -148,7 +148,7 @@ def _end_room(room):
         del _quiz_state[k]
     _results_published[room.id] = False
     _ending_soon.discard(room.id)
-    _rlt_completed[room.id] = set()
+    _rlt_triggered.discard(room.id)
     _invalidate_room_cache(room.id)
     _invalidate_news_cache(room.id)
 
@@ -261,18 +261,12 @@ def room_dict(room, uid=None):
         'end_time': room.end_time.strftime('%Y-%m-%dT%H:%M:%SZ') if room.end_time else None,
         'member_count': RoomMember.query.filter_by(room_id=room.id).count(),
         'is_host': uid == room.host_id,
-        'minigame_available': room.status == 'active' and (room.id in _ending_soon or (total_s > 0 and remaining <= int(total_s * 0.05))),
+        'minigame_available': room.id in _rlt_triggered,
         'lottery_round_due': _lot_round_due(room, remaining, total_s) if room.status == 'active' else None,
         'lottery_active': (_lots.get(room.id, {}).get('current') or {}).get('state') in ('picking', 'drawing', 'revealed'),
         'lottery_current_round': (_lots.get(room.id, {}).get('current') or {}).get('round'),
         'results_published': _results_published.get(room.id, False),
         'ending_soon': room.id in _ending_soon,
-        'rlt_pending': (
-            sum(1 for m in RoomMember.query.filter_by(room_id=room.id).all()
-                if m.user_id != room.host_id
-                and m.user_id not in _rlt_completed.get(room.id, set()))
-            if room.status == 'ended' and uid == room.host_id else None
-        ),
     }
 
 def find_active_room(uid):
@@ -413,6 +407,27 @@ def get_room(rid):
         if (room.end_time - room.paused_at).total_seconds() <= 0:
             _end_room(room)
             return jsonify(room_dict(room, cur_user().id))
+    # 5초 이하 남았을 때 룰렛 자동 트리거 (게임 일시정지)
+    if room.status == 'active' and room.end_time and rid not in _rlt_triggered:
+        remaining = (room.end_time - now_dt).total_seconds()
+        if remaining <= 5:
+            # 스핀 기회 있는 참가자가 한 명이라도 있으면 일시정지 후 룰렛
+            non_host = [m for m in RoomMember.query.filter_by(room_id=rid).all()
+                        if m.user_id != room.host_id]
+            has_spins = any(
+                RoomTransaction.query.filter_by(room_id=rid, user_id=m.user_id, action='RLT').count() < 3
+                for m in non_host
+            )
+            if has_spins and non_host:
+                _rlt_triggered.add(rid)
+                room.status = 'paused'
+                room.paused_at = now_dt
+                _rlt_active[rid] = {'count': 0, 'auto_paused': True}
+                db.session.commit()
+                _invalidate_room_cache(rid)
+            else:
+                _end_room(room)
+                return jsonify(room_dict(room, cur_user().id))
     prev_status = room.status
     _auto_start_lottery_if_due(room)
     if room.status != prev_status:
@@ -920,13 +935,19 @@ def minigame_close(rid):
         state['count'] = max(0, state['count'] - 1)
         if state['count'] == 0 and state.get('auto_paused'):
             room = Room.query.get(rid)
-            if room and room.status == 'paused' and room.paused_at:
-                room.end_time += (datetime.utcnow() - room.paused_at)
-                room.status = 'active'
-                room.paused_at = None
-                db.session.commit()
-                resumed = True
-                new_end_time = room.end_time.strftime('%Y-%m-%dT%H:%M:%SZ')
+            if room and room.status == 'paused':
+                if rid in _rlt_triggered:
+                    # 5초 트리거 룰렛: 모두 완료 → 게임 종료
+                    _end_room(room)
+                    state['auto_paused'] = False
+                    return jsonify({'ok': True, 'ended': True})
+                elif room.paused_at:
+                    room.end_time += (datetime.utcnow() - room.paused_at)
+                    room.status = 'active'
+                    room.paused_at = None
+                    db.session.commit()
+                    resumed = True
+                    new_end_time = room.end_time.strftime('%Y-%m-%dT%H:%M:%SZ')
             state['auto_paused'] = False
     if resumed:
         _invalidate_room_cache(rid)
@@ -936,12 +957,9 @@ def minigame_close(rid):
 @login_required
 def minigame_spin(rid):
     room = Room.query.get_or_404(rid)
-    if room.status == 'ended':
-        pass  # 게임 종료 후 룰렛 허용
-    else:
-        rlt_paused = _rlt_active.get(rid, {}).get('auto_paused', False)
-        if room.status not in ('active', 'paused') or (room.status == 'paused' and not rlt_paused):
-            return jsonify({'error': '게임이 진행 중이 아닙니다.'}), 400
+    rlt_paused = _rlt_active.get(rid, {}).get('auto_paused', False)
+    if room.status not in ('active', 'paused') or (room.status == 'paused' and not rlt_paused):
+        return jsonify({'error': '게임이 진행 중이 아닙니다.'}), 400
     user = cur_user()
     if room.host_id == user.id:
         return jsonify({'error': '진행자는 참여할 수 없습니다.'}), 403
@@ -1310,17 +1328,6 @@ def host_roulette_config(rid):
     return jsonify({'ok': True, 'multipliers': mults, 'weights': weights})
 
 
-@app.route('/api/rooms/<int:rid>/minigame/done', methods=['POST'])
-@login_required
-def minigame_done(rid):
-    room = Room.query.get_or_404(rid)
-    if room.status != 'ended': return jsonify({'error': '게임이 종료되지 않았습니다.'}), 400
-    user = cur_user()
-    if room.host_id != user.id:
-        _rlt_completed.setdefault(rid, set()).add(user.id)
-    return jsonify({'ok': True})
-
-
 @app.route('/api/rooms/<int:rid>/host/publish-results', methods=['POST'])
 @login_required
 def host_publish_results(rid):
@@ -1328,11 +1335,6 @@ def host_publish_results(rid):
     user = cur_user()
     if room.host_id != user.id: return jsonify({'error': '권한 없음'}), 403
     if room.status != 'ended': return jsonify({'error': '게임이 종료되지 않았습니다.'}), 400
-    completed = _rlt_completed.get(rid, set())
-    members = RoomMember.query.filter_by(room_id=rid).all()
-    pending = [m for m in members if m.user_id != room.host_id and m.user_id not in completed]
-    if pending:
-        return jsonify({'error': f'룰렛 미완료 참가자가 {len(pending)}명 있습니다.'}), 400
     _results_published[rid] = True
     _invalidate_room_cache(rid)
     return jsonify({'ok': True})

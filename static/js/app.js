@@ -546,8 +546,7 @@ async function doEndGame() {
     return;
   }
   stopPolling(); stopTimer();
-  await loadResults();
-  showScreen('screen-results');
+  await loadResults(); showScreen('screen-results');
 }
 
 // ── Participant: Lobby ───────────────────────────────────
@@ -618,10 +617,15 @@ function enterParticipantGame() {
       hidePausedBanner(); hideEndingSoonBanner();
       await showMaturedDepositResult();
       toast('⏰ 게임이 종료되었습니다!', 'info');
-      // 룰렛 먼저 진행 후 결과 화면으로 이동
-      await openPostGameRoulette();
+      if (r.results_published) { await loadResults(); showScreen('screen-results'); }
+      else { showScreen('screen-waiting-results'); startWaitingPoll(); }
     } else {
       S.room = r;
+      // 5초 트리거 룰렛 자동 실행
+      if (r.minigame_available && !S.rouletteOpened) {
+        S.rouletteOpened = true;
+        openRouletteModal();
+      }
       if (r.lottery_active && !_lotPollInterval && _lotResultRound !== r.lottery_current_round) {
         _startLotPolling(S.room.id);
       }
@@ -793,29 +797,10 @@ async function publishResults() {
   const data = await api.post(`/api/rooms/${S.room.id}/host/publish-results`, {});
   if (data.error) { toast(data.error, 'error'); return; }
   S.room.results_published = true;
-  clearInterval(S._resultsRltPoll); S._resultsRltPoll = null;
   document.getElementById('results-publish-wrap').hidden = true;
   toast('결과가 발표되었습니다!', 'success');
 }
 
-function startResultsRltPoll() {
-  if (S._resultsRltPoll) return;
-  S._resultsRltPoll = setInterval(async () => {
-    const r = await api.get(`/api/rooms/${S.room.id}`);
-    S.room = r;
-    const pending = r.rlt_pending ?? 0;
-    const publishBtn = document.querySelector('#results-publish-wrap button');
-    if (!publishBtn) return;
-    if (pending > 0) {
-      publishBtn.disabled = true;
-      publishBtn.textContent = `⏳ 룰렛 대기 중 (${pending}명 미완료)`;
-    } else {
-      publishBtn.disabled = false;
-      publishBtn.textContent = '📢 결과 발표하기';
-      clearInterval(S._resultsRltPoll); S._resultsRltPoll = null;
-    }
-  }, 3000);
-}
 
 function startNewsPolling() {
   S.newsTs = 0;
@@ -1093,51 +1078,20 @@ function resetRltSpin() {
 async function closeRoulette() {
   document.getElementById('roulette-overlay').style.display = 'none';
   const cr = await api.post(`/api/rooms/${S.room.id}/minigame/close`, {}).catch(() => null);
-  if (cr?.resumed && cr.end_time) {
+  if (cr?.ended) {
+    // 5초 트리거 룰렛 종료 → 게임 끝
+    stopPolling(); stopTimer();
+    const r = await api.get(`/api/rooms/${S.room.id}`);
+    S.room = r;
+    hidePausedBanner(); hideEndingSoonBanner();
+    if (r.results_published) { await loadResults(); showScreen('screen-results'); }
+    else { showScreen('screen-waiting-results'); startWaitingPoll(); }
+  } else if (cr?.resumed && cr.end_time) {
     S.room.status = 'active';
     S.room.end_time = cr.end_time;
   }
-  if (S._postGameRoulette) {
-    S._postGameRoulette = false;
-    await api.post(`/api/rooms/${S.room.id}/minigame/done`, {});
-    const r = await api.get(`/api/rooms/${S.room.id}`);
-    S.room = r;
-    if (r.results_published) {
-      await loadResults(); showScreen('screen-results');
-    } else {
-      showScreen('screen-waiting-results'); startWaitingPoll();
-    }
-  }
 }
 
-async function openPostGameRoulette() {
-  const data = await api.get(`/api/rooms/${S.room.id}/minigame`);
-  if (data.error || data.spins_left <= 0) {
-    // 스핀 기회 없으면 바로 결과 화면
-    if (S.room.results_published) {
-      await loadResults(); showScreen('screen-results');
-    } else {
-      showScreen('screen-waiting-results'); startWaitingPoll();
-    }
-    return;
-  }
-  S._postGameRoulette = true;
-  // 게임 종료 상태에서는 open/close로 pause하지 않으므로 직접 오버레이 표시
-  if (data.multipliers) updateRltLegend(data.multipliers, data.weights);
-  _rltCash = data.total_assets ?? data.cash;
-  document.getElementById('rlt-spins').textContent = data.spins_left;
-  document.getElementById('rlt-cash').textContent = krw(_rltCash);
-  document.getElementById('rlt-bet-input').value = '';
-  document.getElementById('rlt-err').textContent = '';
-  document.getElementById('rlt-bet-section').style.display = '';
-  document.getElementById('rlt-result').style.display = 'none';
-  document.getElementById('rlt-again-btn').style.display = 'none';
-  document.getElementById('rlt-close-btn').style.display = 'none';
-  document.getElementById('rlt-spin-btn').disabled = false;
-  const wheel = document.getElementById('roulette-wheel');
-  if (wheel) { wheel.style.transition = 'none'; wheel.style.transform = 'rotate(0deg)'; }
-  document.getElementById('roulette-overlay').style.display = 'flex';
-}
 
 async function doSetQuizSettings() {
   const reward = parseFloat(document.getElementById('quiz-reward-input').value) || 1.0;
@@ -1790,15 +1744,8 @@ async function loadResults() {
     const published = !!S.room?.results_published;
     publishWrap.hidden = !isHost || published;
     if (isHost && !published && publishBtn) {
-      const pending = S.room?.rlt_pending ?? 0;
-      if (pending > 0) {
-        publishBtn.disabled = true;
-        publishBtn.textContent = `⏳ 룰렛 대기 중 (${pending}명 미완료)`;
-        startResultsRltPoll();
-      } else {
-        publishBtn.disabled = false;
-        publishBtn.textContent = '📢 결과 발표하기';
-      }
+      publishBtn.disabled = false;
+      publishBtn.textContent = '📢 결과 발표하기';
     }
   }
 
