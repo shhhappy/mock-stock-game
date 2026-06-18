@@ -856,13 +856,7 @@ def get_minigame(rid):
         return jsonify({'error': '참여자가 아닙니다.'}), 403
     spins_used = RoomTransaction.query.filter_by(room_id=rid, user_id=user.id, action='RLT').count()
     mults, weights = _rlt_cfg(rid)
-    svc = get_room_service(rid)
-    holdings_value = sum(
-        (svc.get_price(h.symbol) or h.avg_price) * h.shares
-        for h in RoomHolding.query.filter_by(room_id=rid, user_id=user.id).all()
-        if h.shares > 0
-    )
-    total_assets = m.cash + holdings_value
+    total_assets = member_total_value(rid, user.id)
     return jsonify({'spins_left': max(0, 3 - spins_used), 'cash': m.cash,
                     'total_assets': total_assets,
                     'multipliers': mults, 'weights': weights})
@@ -945,19 +939,16 @@ def minigame_spin(rid):
         bet = float((request.json or {}).get('bet', 0))
     except (TypeError, ValueError):
         return jsonify({'error': '금액 오류'}), 400
-    # 총자산(현금+보유주식) 기준으로 베팅 한도 계산
+    # 총자산(현금+보유주식+예금) 기준으로 베팅 한도 계산
     svc = get_room_service(rid)
     holdings = RoomHolding.query.filter_by(room_id=rid, user_id=user.id).all()
-    holdings_value = sum(
-        (svc.get_price(h.symbol) or h.avg_price) * h.shares
-        for h in holdings if h.shares > 0
-    )
-    total_assets = m.cash + holdings_value
+    total_assets = member_total_value(rid, user.id)
     if bet <= 0 or bet > total_assets:
         return jsonify({'error': '베팅 금액이 올바르지 않습니다.'}), 400
     # 현금이 부족하면 보유 주식을 청산해 충당
     shortfall = bet - m.cash
     if shortfall > 0:
+        # 1) 보유 주식 청산 (가치 높은 순)
         for h in sorted(holdings, key=lambda h: (svc.get_price(h.symbol) or h.avg_price) * h.shares, reverse=True):
             if shortfall <= 0 or h.shares <= 0:
                 continue
@@ -980,6 +971,17 @@ def minigame_spin(rid):
                 db.session.add(RoomTransaction(room_id=rid, user_id=user.id, symbol=h.symbol,
                     action='SELL', shares=shares_to_sell, price=price, amount=actual_value,
                     note='룰렛 베팅 자금 마련'))
+        # 2) 주식 청산 후에도 부족하면 예금 인출
+        if shortfall > 0:
+            for d in Deposit.query.filter_by(room_id=rid, user_id=user.id, status='active').all():
+                if shortfall <= 0:
+                    break
+                m.cash += d.amount
+                shortfall -= d.amount
+                d.status = 'withdrawn'
+                db.session.add(RoomTransaction(room_id=rid, user_id=user.id, symbol='DEPOSIT',
+                    action='ADJ', shares=0, price=0, amount=d.amount,
+                    note='룰렛 베팅 자금 마련 (예금 인출)'))
     outcomes = _rlt_outcomes(rid)
     outcome = _random.choices(outcomes, weights=[o['weight'] for o in outcomes])[0]
     winnings = round(bet * outcome['multiplier'])
