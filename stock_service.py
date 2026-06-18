@@ -121,7 +121,8 @@ class StockService:
         now = time.time()
         for sym, info in STOCKS.items():
             start = round(info['base'] * random.uniform(0.97, 1.03))
-            self._prices[sym] = (now - self._price_ttl, start)
+            # now를 사용해 게임 시작 직후 thundering herd 방지 (첫 TTL 동안 가격 안정)
+            self._prices[sym] = (now, start)
             self._prev[sym]   = start
 
     def _next_price(self, sym: str, current: float, direction: str = None) -> float:
@@ -213,7 +214,7 @@ class StockService:
             new_price = round(price * (1 + pct / 100))
             base = STOCKS[symbol]['base']
             new_price = max(base * 0.3, min(base * 3.0, new_price))
-            self._prices[symbol] = (ts, new_price)
+            self._prices[symbol] = (time.time(), new_price)
             for key in list(self._history_cache.keys()):
                 if key[0] == symbol:
                     del self._history_cache[key]
@@ -241,7 +242,7 @@ class StockService:
                 new_price = round(price * (1 + pct / 100))
                 base = info['base']
                 new_price = max(base * 0.3, min(base * 3.0, new_price))
-                self._prices[sym] = (ts, new_price)
+                self._prices[sym] = (time.time(), new_price)
                 affected.append(sym)
             if affected:
                 for key in list(self._history_cache.keys()):

@@ -516,6 +516,28 @@
 
 ---
 
+## 2026-06-18 (이전 분석 미수정 현황 점검)
+
+### 여전히 미수정된 고우선순위 항목
+
+- **`force_price()` / `force_sector_event()` ts 재사용** (`stock_service.py:216`, `stock_service.py:244`): 강제 가격 조정이 다음 TTL에 즉시 소멸. `(ts, new_price)` → `(time.time(), new_price)` 한 줄 수정. 06-13, 06-14 (3차), 06-15 (2차), 06-16 (3차)에 걸쳐 반복 지적됐으나 미수정.
+
+- **`api.get/post/del` HTTP 오류 응답 미처리** (`app.js:30-34`): 서버 500 시 `SyntaxError`로 UI가 조용히 멈춤. 06-14, 06-16 (2차), 06-16 (3차)에 걸쳐 반복 지적됐으나 미수정.
+
+- **`lobby_members()` 403 반환으로 참여자 로비 목록 항상 빈칸** (`app.py:465`): 06-12, 06-14 (4차)에 지적됐으나 미수정.
+
+- **`loadParticipantRankings()` 매 호출마다 스피너로 목록 초기화 → 깜빡임** (`app.js:1543`): 06-14 (4차), 06-16 (3차)에 지적됐으나 미수정.
+
+- **`submit_quiz()` room.status 체크 없음** (`app.py:1086`): 게임 종료 후에도 현금 변경 가능. 06-11, 06-15, 06-16 (3차), 06-17에 걸쳐 반복 지적됐으나 미수정.
+
+- **`S.assetHistory`·`S.stocks` 방 전환 시 미초기화** (`app.js:89-100`): 06-16 (2차), 06-16 (3차)에 지적됐으나 미수정.
+
+- **`export_rankings()` 함수 내부 `import openpyxl`** (`app.py:1180`): 06-14 (4차), 06-15 (2차), 06-16 (2차)에 지적됐으나 미수정.
+
+- **`RLT_SEGS` dead code** (`app.js:820-826`): 06-14 (4차), 06-16, 06-16 (3차)에 지적됐으나 미수정.
+
+---
+
 ## 2026-06-18
 
 ### 추가하면 좋을 기능
@@ -542,6 +564,79 @@
 
 - **방치된 `active`/`paused` 방이 교사의 새 방 생성을 영구 차단** (`app.py:250`, `app.py:186-192`): 서버 재시작·비정상 종료 등으로 `status='active'`이지만 실제로 아무도 없는 방이 DB에 남아 있으면, `create_room()` 의 `if Room.query.filter(Room.host_id == user.id, Room.status.in_(...)).first()` 체크에 걸려 교사가 새 방을 만들 수 없음. `end_time + timedelta(hours=2) < datetime.utcnow()` 조건의 방치된 방을 자동 정리하는 로직을 `create_room()` 체크 직전에 추가하거나, 진행자 화면에 "이전 방 강제 종료" 버튼을 노출하면 이 문제를 해소할 수 있음 (`app.py:249` 직전 추가).
 
-- **`RoomTransaction.action` `String(4)` 타입과 복권 당첨 기록에 `'ADJ'` 혼용** (`models.py:71`, `app.py:105`): `action` 컬럼이 `String(4)`로 정의되어 향후 `'BONUS'`·`'FINE'` 등 긴 액션 타입 추가 시 DB truncation 위험. 더불어 복권 당첨금 `_do_reveal()` (`app.py:105`)이 `action='ADJ'`를 사용해 수동 자산 조정과 구분 불가 — `host_member_transactions`에서 복권 당첨과 교사 조정이 같은 "조정" 뱃지로 표시됨. `String(4)` → `String(10)` 확장과 함께 복권 당첨 기록 액션을 `action='LOTTO'`로 변경하면 거래 내역 필터링 및 통계 집계 시 두 유형을 명확히 구분 가능 (`app.py:105`, `app.py:501` 참조).
+- **`RoomTransaction.action` `String(4)` 타입과 복권 당첨 기록에 `'ADJ'` 혼용** (`models.py:71`, `app.py:165`): `action` 컬럼이 `String(4)`로 정의되어 향후 `'BONUS'`·`'FINE'` 등 긴 액션 타입 추가 시 DB truncation 위험. 더불어 복권 당첨금 `_do_reveal()` (`app.py:165`)이 `action='ADJ'`를 사용해 수동 자산 조정과 구분 불가 — `host_member_transactions`에서 복권 당첨과 교사 조정이 같은 "조정" 뱃지로 표시됨. `String(4)` → `String(10)` 확장과 함께 복권 당첨 기록 액션을 `action='LOTTO'`로 변경하면 거래 내역 필터링 및 통계 집계 시 두 유형을 명확히 구분 가능 (`app.py:165`, `app.py:908` 참조).
+
+---
+
+## 2026-06-18 (2차)
+
+### 추가하면 좋을 기능
+
+- **`get_portfolio()` 종료 후 새 StockService 인스턴스로 잘못된 평가액 반환** (`app.py:664`, `stock_service.py:308-311`): 06-18 1차에서 `export_rankings()`의 동일 버그를 지적했으나, `get_portfolio()`도 `get_room_service(rid)`를 호출해 동일한 문제가 발생함. 게임 종료 후 결과 화면에서 참여자가 포트폴리오 탭을 열면 CleanupService 이후 생성된 새 StockService의 무작위 주가로 보유 종목 평가액이 계산되어 결과 화면의 최종 자산과 포트폴리오 상세의 현재 평가액이 불일치함. `_end_room()` 직전에 보유 종목을 현금 전환하는 방식으로 `export_rankings()`와 함께 일괄 해결 가능.
+
+- **`window.onload` 초기화 시 느린 네트워크에서 빈 화면 표시** (`app.js:2138-2158`): `window.addEventListener('load', async () => {...})` 내부에서 `await api.get('/api/auth/me')`를 완료하기 전까지 `showLanding()` 호출 없이 대기함. 학교 인트라넷 환경에서 응답이 2~3초 걸리면 학생이 흰 화면을 보며 앱이 죽었다고 오해할 수 있음. `api.get('/api/auth/me')` 호출 직전에 `showLanding()`을 먼저 호출해 기본 화면을 즉시 표시하고, 세션이 있으면 화면을 교체하는 방식으로 개선하면 체감 로딩 속도 향상.
+
+- **퀴즈 시간 초과 시 자동으로 `answer: false` 제출 — 게임 종료 후에도 동작** (`app.js:781-784`, `app.py:1083-1113`): `_quizTimerTick` 내 `if (_quizTimeSec <= 0) { submitQuiz(null); }`가 게임 종료 이후에도 실행될 수 있음. 퀴즈를 열어 두고 게임이 종료된 후 타이머가 만료되면 `submit_quiz()` 서버에 POST 요청이 전송되고 (게임 종료 후 상태 체크 없어) `RoomMember.cash`가 변경됨. `closeQuiz()`를 `stopPolling()` 또는 `showScreen('screen-results')` 전환 시 함께 호출하면 방지 가능 (`app.js:580-584`에 `closeQuiz()` 한 줄 추가).
+
+- **`create_deposit()` `amount` 음수·NaN·Infinity 미검증** (`app.py:772`): `amount = float((request.json or {}).get('amount', 0))`에서 클라이언트가 `"amount": -1000000` 또는 `"amount": "NaN"`을 보내면 `m.cash < amount` 조건을 통과(`-1000000 < 0` → True면 400, NaN이면 항상 False)하거나 예상치 못한 상태로 예금이 생성될 수 있음. `if not (0 < amount < float('inf')): return jsonify({'error': '금액 오류'}), 400` 한 줄을 `app.py:774` 직후에 추가하면 방어 가능.
+
+- **포트폴리오 탭 섹터별 손익 요약 없음** (`app.js:1325-1435`, `app.py:657-688`): `loadPortfolio()` 응답의 `holdings` 배열을 `sector` 기준으로 그룹화해 섹터별 평가손익 합계를 포트폴리오 탭 상단에 요약 표시하면, 학생이 어떤 섹터에 집중 투자했고 어떤 섹터에서 손실이 발생했는지 즉시 파악 가능. `holdings`를 reduce로 집계하는 약 10줄의 클라이언트 코드만으로 서버 변경 없이 구현 가능하며, 다각화 전략 수업에 활용 효과가 큼.
+
+- **분할 매수 기능 없음** (`app.js:1292-1322`, `index.html:538-541`): 주식 모달의 수량 입력은 정수값만 허용하고 "N주 구매" 방식이지만, 학생이 "50만원어치 매수" 처럼 금액 기준으로 구매하고 싶은 경우 수동 계산이 필요함. `trade-qty` 옆에 금액 입력 모드로 전환하는 "금액으로 매수" 토글 버튼을 추가하고, 입력된 금액을 `Math.floor(amount / S.tradePrice)`로 자동 변환해 수량으로 환산하면 편의성 향상. 서버 API는 변경 없이 클라이언트에서만 20줄 이내로 구현 가능.
+
+---
+
+### 제거/단순화할 것들
+
+- **`_quiz_state`·`_quiz_settings`·`_roulette_config` 게임 종료 후 메모리 무제한 누적** (`app.py:106-130`): `_end_room()` 이 `_lots.pop(room.id, None)`, `_rlt_active.pop(room.id, None)`은 정리하지만 `_quiz_settings.pop(rid, None)`, `_roulette_config.pop(rid, None)`, 그리고 `_quiz_state`의 해당 방 항목(키 `(rid, uid)`)은 그대로 남음. 수업에서 하루에 10개 방을 생성하면 매 방의 참여자 수만큼 `_quiz_state` 항목이 영구 축적됨. `_end_room()` (`app.py:130` 직전)에 세 줄 추가:
+  ```python
+  _quiz_settings.pop(room.id, None)
+  _roulette_config.pop(room.id, None)
+  for k in [k for k in _quiz_state if k[0] == room.id]: del _quiz_state[k]
+  ```
+
+- **`resume_room()` `room.paused_at` None 미체크 → TypeError 크래시 위험** (`app.py:407`): `paused_duration = now - room.paused_at`에서 `room.paused_at`이 None이면 `TypeError: unsupported operand type(s) for -: 'datetime.datetime' and 'NoneType'`으로 500 오류 반환. `if room.status != 'paused': 400` 체크가 위에 있어 정상 흐름에서는 발생하지 않지만, DB 데이터 불일치(status='paused', paused_at=NULL) 상황에서 크래시 가능. `paused_duration = now - (room.paused_at or now)` 로 방어하거나 `if not room.paused_at: room.paused_at = now` 가드를 추가하면 안전.
+
+- **`get_lottery()` 상태 전이(picking→drawing, drawing→revealed)에 Lock 없음** (`app.py:955-961`): 참여자 30명이 3초마다 동시 폴링하면 `cur['state'] == 'picking'` 체크와 `cur['state'] = 'drawing'` 대입 사이에 다수의 요청이 동시에 진입 가능. 특히 `drawing → revealed` 전이 시 `_do_reveal(rid, cur)`가 중복 호출되어 당첨금이 이중으로 지급될 수 있음. `_lottery_lock`이 `lottery_start()`와 `_auto_start_lottery_if_due()`에는 사용되지만 `get_lottery()` 내 전이 로직에는 없음. `app.py:955` 이후 상태 전이 블록을 `with _lottery_lock:` 으로 감싸면 해결 (`app.py:955-961` 4줄 수정).
+
+- **`_do_reveal()` deprecated `Room.query.get(rid)` 사용** (`app.py:174`): `room = Room.query.get(rid)` 패턴이 SQLAlchemy 2.x에서 폐기됨. 06-10에 전체 교체를 권장했으나 이 함수는 누락. `db.session.get(Room, rid)`로 교체 + `if not room: return` None 가드 추가 필요.
+
+- **`get_room()` `paused` 상태 자동 종료 미처리** (`app.py:362-364`): `if room.status == 'active' and room.end_time and datetime.utcnow() >= room.end_time:` 조건이 `paused` 상태를 제외해, 룰렛·복권으로 게임이 paused된 채 end_time이 지나면 자동 종료가 실행되지 않음. 교사가 탭을 닫으면 해당 방이 영구 paused 상태로 고착돼 새 방 생성 불가 (`app.py:310` 체크에 걸림). `room.status == 'active'` → `room.status in ('active', 'paused')` 로 확장하고 `paused` 상태의 남은 시간은 `end_time - paused_at`으로 계산해 종료 판단.
+
+- **`loadParticipantRankings()` 및 `loadResults()` `e.username` XSS 미처리** (`app.js:1549`, `app.js:1614`): `${e.username}`이 innerHTML에 직접 삽입됨. `escHtml()` 함수가 `app.js:815`에 정의되어 있으므로 `${escHtml(e.username)}`으로 교체만 하면 즉시 방지 가능. `app.js` 전체에서 `innerHTML`에 `e.username`, `u.username` 등 사용자 입력이 포함된 변수가 사용되는 곳 일괄 점검 필요 (`host_members` 렌더링, 거래 내역 `t.note` 포함).
+
+---
+
+## 2026-06-18 (3차)
+
+### 추가하면 좋을 기능
+
+- **게임 종료 시 퀴즈·룰렛 오버레이 자동 닫기 없음** (`app.js:579-584`): `stopPolling()` → `showScreen('screen-results')` 전환 시 `quiz-overlay`와 `roulette-overlay`가 `position:fixed`로 결과 화면 위에 계속 떠 있을 수 있음. `app.js:580-583`의 `stopPolling(); stopTimer();` 직후에 `document.getElementById('quiz-overlay').style.display = 'none'; document.getElementById('roulette-overlay').style.display = 'none';` 두 줄을 추가하면 게임 종료 시 깔끔하게 닫힘. 복권 오버레이(`lottery-overlay`)도 동일 처리 필요.
+
+- **진행자 게임 시간 연장 버튼** (`app.py:399-413`, `index.html:170-173`): 현재 `resume_room()` API는 있지만 수동 시간 연장은 없음. 수업이 늦게 시작되거나 마무리 토론이 필요할 때 교사가 원하는 분 수만큼 연장할 수 있는 `POST /api/rooms/<rid>/extend` 엔드포인트와 진행자 화면의 "+5분" 버튼 추가. `room.end_time += timedelta(minutes=ext_min)` 한 줄 + `db.session.commit()`으로 구현 완료. 현재 `pause`·`resume` 패턴을 재사용하므로 서버 10줄, 클라이언트 5줄 이내로 완성 가능.
+
+- **게임 마지막 10초 카운트다운 알림** (`app.js:710-713`): `startTimer()` 의 `tick()` 내에서 `rem === 10`이 처음 감지될 때 `for (let i = 10; i >= 1; i--) setTimeout(() => toast(\`⏰ ${i}초!\`, 'warn'), (10 - i) * 1000)` 패턴으로 카운트다운 토스트를 예약하면 학생이 종료 직전임을 인식하고 마지막 거래를 서두를 수 있음. `navigator.vibrate?.([100])` 매초 진동을 추가하면 화면을 보지 않는 학생에게도 알림 전달. `app.js:712` 한 줄 추가로 구현 완료.
+
+- **포트폴리오 다각화 지수 표시** (`app.js:1325-1435`, `app.py:657-688`): `loadPortfolio()` 응답의 `holdings` 배열에서 고유 섹터 수와 종목 수를 카운트해 "분산도: 3개 섹터 / 5개 종목" 형태의 간단한 지표를 포트폴리오 탭 상단 요약 카드에 추가. 특정 종목·섹터에 전액 집중한 학생에게는 "⚠️ 집중투자" 경고 뱃지를 표시하면 분산투자 개념 교육 효과. 서버 변경 없이 클라이언트 5줄로 구현 가능.
+
+- **진행자 `host_adjust` 전체 학생 일괄 지급/차감** (`app.py:472-488`, `index.html:500-520`): 현재 단일 참여자에게만 적용 가능. `user_id` 필드를 `'all'`로 허용하고, `for m in RoomMember.query.filter_by(room_id=rid)` 루프로 전체 일괄 처리하면 이벤트 보상·벌금을 30명에게 한 번에 적용 가능. 06-12에 처음 제안됐으나 미구현. `app.py:479-488` 내에 `if target_uid == 'all':` 분기를 추가하는 것으로 50줄 내 완성.
+
+- **룰렛 오버레이 `position:fixed` 결과 화면에서 클릭 차단** (`app.js:595-598`, `app.js:579-584`): `S.rouletteOpened = true`로 설정 후 `openRouletteModal()` 호출 시 학생이 즉시 `✕`로 닫으면 `_rltSpinning = false` 상태로 오버레이만 닫히고 `S.rouletteOpened` 플래그는 `true`로 유지됨. 이후 게임이 종료돼 결과 화면으로 이동해도 `roulette-overlay`가 `display:none`이 아니면 결과 화면 전체 클릭이 차단될 수 있음. `closeRoulette()` 내에서 `S.rouletteOpened = false`로 리셋하거나, `stopPolling()` 시 오버레이를 강제 닫는 처리 추가.
+
+---
+
+### 제거/단순화할 것들
+
+- **`_show_lot_participant_picker()` 매 3초 45개 버튼 DOM 재생성** (`app.js:1995-2017`): `picking` 상태 60초 동안 3초 폴링으로 최대 20회 `_renderLotGrid('lottery-picker-grid', ...)` 호출 → 매번 45개 버튼 DOM을 삭제 후 재생성. `overlay.style.display === 'flex'`이고 picker-section이 이미 보이는 상태이면 `_lotCountdown()` 갱신만 하고 조기 반환하는 가드가 `app.js:1997-1999`에 있지만, `d.my_picks` 변경 여부 비교 없이 항상 `_lotParticipantPicks = d.my_picks || []`로 재할당 후 `_renderLotGrid` 호출 (`app.js:2001-2009`). 이미 제출한 경우(`_lotPickerSubmitted === true`)이면 그리드 재렌더 없이 카운트다운만 갱신하도록 `if (_lotPickerSubmitted) { _lotCountdown(...); return; }` 가드를 `app.js:2001` 직전에 추가.
+
+- **`RLT_SEGS` 완전한 dead code** (`app.js:820-826`): 7줄의 상수 선언이 코드 어디서도 참조되지 않음. 06-14 (4차), 06-16, 06-16 (3차)에 걸쳐 반복 지적됐으나 미수정. `const RLT_SEGS = [...]` 7줄 삭제만으로 해결.
+
+- **`openRules()` 탭 상태 미초기화** (`app.js:2128`): `openModal('modal-rules')`만 호출하고 탭 초기화 없어 이전에 열었던 탭이 그대로 남음. `openRules()`에 `document.querySelector('.rules-tab')?.click()` 한 줄 추가. 06-15 (2차)에 지적됐으나 미수정.
+
+- **`startNewsPolling()` interval 8초 고정** (`app.js:736`): 현재 8000ms로 설정되어 있음(이전 3000ms에서 개선됨). 하지만 진행자가 `news_seconds`를 300초로 설정해도 클라이언트는 8초마다 폴링을 계속함. 서버 `get_room()` 최초 응답에 `news_interval_seconds` 필드를 포함시키고, `startNewsPolling()` 호출 시 `S.room.news_interval_seconds || 8`을 인터벌로 사용하면 진행자 설정과 동기화. 폴링 주기를 줄이면 불필요한 요청이 크게 감소.
+
+- **`execTrade()` 성공 후 `ms-holding` 로컬 갱신이 `refreshMyRank()` 재호출과 경쟁 조건** (`app.js:1313-1321`): 거래 성공 시 `S.tradeHolding`을 로컬로 증감(`app.js:1313-1318`)하고 `ms-holding`을 갱신한 뒤 `refreshMyRank()`를 호출. `refreshMyRank()`는 rankings API를 호출하는데 이 응답에는 `holdings`가 없으므로 `ms-holding`을 갱신하지 않음. 그러나 `openStockModal()`을 다시 열면 portfolio API로 실제 보유 수량을 가져와 덮어씌워 결과적으로 올바른 값이 표시됨. 로컬 갱신(`S.tradeHolding`)이 연속 거래 시 누적 오차를 일으킬 수 있으므로 `execTrade()` 성공 시 로컬 갱신 대신 portfolio API를 재호출해 정확한 값으로 동기화하는 것이 더 안전.
+
+- **`loadResults()` 매 호출마다 `renderResultsChart()` 재생성** (`app.js:1624`): `resultsBarChart`가 이미 존재하더라도 `renderResultsChart(data)`가 `S.resultsBarChart?.destroy()`를 호출하고 새로 생성. 결과 화면은 정적이므로 `if (S.resultsBarChart) return;` 가드를 추가해 최초 1회만 렌더링하면 불필요한 Chart.js 재초기화를 방지.
 
 ---

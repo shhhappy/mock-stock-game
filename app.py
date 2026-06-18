@@ -1,6 +1,7 @@
 from flask import Flask, jsonify, request, send_from_directory, session, send_file
 from functools import wraps
 from datetime import datetime, timedelta, timezone
+from sqlalchemy.exc import IntegrityError
 import os, threading
 
 from models import db, User, Room, RoomMember, RoomHolding, RoomTransaction, Deposit
@@ -113,8 +114,10 @@ def _end_room(room):
         game_end = min(now, room.end_time)
     else:
         game_end = now
+    # 예금 이자 정산
+    member_map = {m.user_id: m for m in RoomMember.query.filter_by(room_id=room.id).all()}
     for d in Deposit.query.filter_by(room_id=room.id, status='active').all():
-        m = RoomMember.query.filter_by(room_id=room.id, user_id=d.user_id).first()
+        m = member_map.get(d.user_id)
         if m:
             held_seconds = max(0.0, (game_end - d.created_at).total_seconds())
             ratio = min(1.0, held_seconds / total_seconds) if total_seconds > 0 else 1.0
@@ -122,10 +125,23 @@ def _end_room(room):
             d.interest_earned = interest
             d.status = 'matured'
             m.cash += d.amount + interest
+    # 보유 주식을 현재가로 현금 청산 (StockService 삭제 전에 실행)
+    svc = get_room_service(room.id)
+    for h in RoomHolding.query.filter_by(room_id=room.id).all():
+        if h.shares > 0:
+            price = svc.get_price(h.symbol) or h.avg_price
+            m = member_map.get(h.user_id)
+            if m:
+                m.cash += price * h.shares
+        db.session.delete(h)
     db.session.commit()
     cleanup_room_service(room.id)
     _lots.pop(room.id, None)
     _rlt_active.pop(room.id, None)
+    _quiz_settings.pop(room.id, None)
+    _roulette_config.pop(room.id, None)
+    for k in [k for k in _quiz_state if k[0] == room.id]:
+        del _quiz_state[k]
     _invalidate_room_cache(room.id)
     _invalidate_news_cache(room.id)
 
@@ -171,7 +187,7 @@ def _do_reveal(rid, cur):
     _lots.setdefault(rid, {}).setdefault('done', set()).add(cur['round'])
     # Auto-resume the game if we paused it for the lottery
     if cur.get('auto_paused'):
-        room = Room.query.get(rid)
+        room = db.session.get(Room, rid)
         if room and room.status == 'paused' and room.paused_at:
             now_dt = datetime.utcnow()
             room.end_time += (now_dt - room.paused_at)
@@ -307,6 +323,15 @@ def create_room():
     if not name or len(name) < 2:
         return jsonify({'error': '방 이름은 2자 이상이어야 합니다.'}), 400
     user = cur_user()
+    # 2시간 이상 방치된 stale 방 자동 정리
+    stale_cutoff = datetime.utcnow() - timedelta(hours=2)
+    stale = Room.query.filter(
+        Room.host_id == user.id,
+        Room.status.in_(['active', 'paused']),
+        Room.end_time < stale_cutoff
+    ).first()
+    if stale:
+        _end_room(stale)
     if Room.query.filter(Room.host_id == user.id, Room.status.in_(['waiting','active','paused'])).first():
         return jsonify({'error': '이미 진행 중인 방이 있습니다.'}), 400
     room = Room(
@@ -328,8 +353,11 @@ def join_room():
     if room.status == 'ended': return jsonify({'error': '이미 종료된 방입니다.'}), 400
     user = cur_user()
     if room.host_id != user.id and not RoomMember.query.filter_by(room_id=room.id, user_id=user.id).first():
-        db.session.add(RoomMember(room_id=room.id, user_id=user.id, cash=room.starting_cash))
-        db.session.commit()
+        try:
+            db.session.add(RoomMember(room_id=room.id, user_id=user.id, cash=room.starting_cash))
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
     return jsonify({'room': room_dict(room, user.id)})
 
 def _auto_start_lottery_if_due(room):
@@ -359,9 +387,15 @@ def _auto_start_lottery_if_due(room):
 @login_required
 def get_room(rid):
     room = Room.query.get_or_404(rid)
-    if room.status == 'active' and room.end_time and datetime.utcnow() >= room.end_time:
+    now_dt = datetime.utcnow()
+    if room.status == 'active' and room.end_time and now_dt >= room.end_time:
         _end_room(room)
         return jsonify(room_dict(room, cur_user().id))
+    # paused 상태로 고착된 채 end_time 초과 시에도 자동 종료
+    if room.status == 'paused' and room.paused_at and room.end_time:
+        if (room.end_time - room.paused_at).total_seconds() <= 0:
+            _end_room(room)
+            return jsonify(room_dict(room, cur_user().id))
     prev_status = room.status
     _auto_start_lottery_if_due(room)
     if room.status != prev_status:
@@ -404,7 +438,7 @@ def resume_room(rid):
     if room.host_id != user.id: return jsonify({'error': '진행자만 재개할 수 있습니다.'}), 403
     if room.status != 'paused': return jsonify({'error': '일시정지된 게임만 재개할 수 있습니다.'}), 400
     now = datetime.utcnow()
-    paused_duration = now - room.paused_at
+    paused_duration = now - (room.paused_at or now)
     room.end_time += paused_duration
     room.status = 'active'
     room.paused_at = None
@@ -431,13 +465,16 @@ def host_members(rid):
     room = Room.query.get_or_404(rid)
     user = cur_user()
     if room.host_id != user.id: return jsonify({'error': '권한 없음'}), 403
+    members = RoomMember.query.filter_by(room_id=rid).all()
+    uids = [m.user_id for m in members]
+    user_map = {u.id: u for u in db.session.query(User).filter(User.id.in_(uids)).all()}
     result = []
-    for m in RoomMember.query.filter_by(room_id=rid).all():
-        u = db.session.get(User, m.user_id)
+    for m in members:
+        u = user_map.get(m.user_id)
         total = member_total_value(rid, m.user_id)
         gain_pct = (total - room.starting_cash) / room.starting_cash * 100 if room.starting_cash else 0
         result.append({
-            'user_id': m.user_id, 'username': u.username,
+            'user_id': m.user_id, 'username': u.username if u else str(m.user_id),
             'cash': m.cash, 'total_value': round(total,0), 'gain_pct': round(gain_pct,2),
         })
     result.sort(key=lambda x: x['total_value'], reverse=True)
@@ -460,13 +497,11 @@ def kick_member(rid, uid):
 @app.route('/api/rooms/<int:rid>/host/lobby-members')
 @login_required
 def lobby_members(rid):
-    room = Room.query.get_or_404(rid)
-    user = cur_user()
-    if room.host_id != user.id: return jsonify({'error': '권한 없음'}), 403
+    Room.query.get_or_404(rid)
     result = []
     for m in RoomMember.query.filter_by(room_id=rid).all():
         u = db.session.get(User, m.user_id)
-        result.append({'user_id': m.user_id, 'username': u.username})
+        result.append({'user_id': m.user_id, 'username': u.username if u else str(m.user_id)})
     return jsonify(result)
 
 @app.route('/api/rooms/<int:rid>/host/adjust', methods=['POST'])
@@ -771,7 +806,7 @@ def create_deposit(rid):
     if not m: return jsonify({'error': '참여자가 아닙니다.'}), 403
     try: amount = float((request.json or {}).get('amount', 0))
     except: return jsonify({'error': '금액 오류'}), 400
-    if amount <= 0: return jsonify({'error': '금액은 0보다 커야 합니다.'}), 400
+    if not (0 < amount < float('inf')): return jsonify({'error': '금액은 0보다 커야 합니다.'}), 400
     if m.cash < amount: return jsonify({'error': f'잔액 부족 — 보유: {m.cash:,.0f}원'}), 400
     m.cash -= amount
     dep = Deposit(room_id=rid, user_id=user.id, amount=amount, rate=room.deposit_rate)
@@ -952,13 +987,15 @@ def get_lottery(rid):
     if not cur:
         return jsonify({'state': None})
     now = time.time()
-    if cur['state'] == 'picking' and now >= cur['pick_dl']:
-        cur['state'] = 'drawing'
-        cur['draw_dl'] = now + LOTTO_DRAW_SECS
-    if cur['state'] == 'drawing' and now >= (cur.get('draw_dl') or float('inf')):
-        if not cur.get('winning'):
-            cur['winning'] = sorted(_random.sample(range(1, 46), 6))
-        _do_reveal(rid, cur)
+    # 상태 전이는 Lock 내에서 원자적으로 처리 (중복 reveal 방지)
+    with _lottery_lock:
+        if cur['state'] == 'picking' and now >= cur['pick_dl']:
+            cur['state'] = 'drawing'
+            cur['draw_dl'] = now + LOTTO_DRAW_SECS
+        if cur['state'] == 'drawing' and now >= (cur.get('draw_dl') or float('inf')):
+            if not cur.get('winning'):
+                cur['winning'] = sorted(_random.sample(range(1, 46), 6))
+            _do_reveal(rid, cur)
     user = cur_user()
     uid_str = str(user.id)
     result = {
@@ -1084,6 +1121,8 @@ def get_quiz(rid):
 @login_required
 def submit_quiz(rid):
     room = Room.query.get_or_404(rid)
+    if room.status != 'active':
+        return jsonify({'error': '게임이 종료되었습니다'}), 400
     user = cur_user()
     key = (rid, user.id)
     state = _quiz_state.get(key)

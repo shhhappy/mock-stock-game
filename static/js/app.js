@@ -27,11 +27,21 @@ let _newsPopupTimer = null;
 
 // ── API ──────────────────────────────────────────────────
 const api = {
-  async get(url) { return (await fetch(url)).json(); },
-  async post(url, body) {
-    return (await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)})).json();
+  async get(url) {
+    const r = await fetch(url);
+    if (!r.ok) return {error: `HTTP ${r.status}`};
+    return r.json();
   },
-  async del(url) { return (await fetch(url, {method:'DELETE'})).json(); },
+  async post(url, body) {
+    const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    if (!r.ok) return {error: `HTTP ${r.status}`};
+    return r.json();
+  },
+  async del(url) {
+    const r = await fetch(url, {method:'DELETE'});
+    if (!r.ok) return {error: `HTTP ${r.status}`};
+    return r.json();
+  },
 };
 
 // ── Formatters ───────────────────────────────────────────
@@ -81,6 +91,8 @@ function onLogin(data) {
 
 function showLanding() {
   stopPolling(); stopTimer();
+  S.assetHistory = []; S.stocks = []; S.sectors = []; S.newsTs = 0;
+  S.depositWarningShown = false;
   showScreen('screen-landing');
 }
 
@@ -578,6 +590,10 @@ function enterParticipantGame() {
     const r = await api.get(`/api/rooms/${S.room.id}`);
     if (r.status === 'ended') {
       S.room = r; stopPolling(); stopTimer();
+      // 열려 있는 오버레이 닫기
+      closeQuiz();
+      document.getElementById('roulette-overlay').style.display = 'none';
+      document.getElementById('lottery-overlay').style.display = 'none';
       await showMaturedDepositResult();
       toast('⏰ 게임이 종료되었습니다!', 'info');
       await loadResults();
@@ -817,13 +833,6 @@ function escHtml(s) {
 }
 
 // ── Roulette Mini-game ────────────────────────────────────
-const RLT_SEGS = [
-  {label:'꽝',  seg_start:0,     seg_end:252},
-  {label:'1배', seg_start:252,   seg_end:324},
-  {label:'2배', seg_start:324,   seg_end:349.2},
-  {label:'5배', seg_start:349.2, seg_end:356.4},
-  {label:'25배',seg_start:356.4, seg_end:360},
-];
 let _rltSpinning = false;
 let _rltCash = 0;
 let _rltMults = [0, 1, 2, 5, 25];
@@ -1540,7 +1549,9 @@ async function doWithdraw(id) {
 // ── Rankings ─────────────────────────────────────────────
 async function loadParticipantRankings() {
   const list = document.getElementById('p-rankings-list');
-  list.innerHTML = '<div class="loading-center"><span class="spinner"></span></div>';
+  if (!list.children.length) {
+    list.innerHTML = '<div class="loading-center"><span class="spinner"></span></div>';
+  }
   const data = await api.get(`/api/rooms/${S.room.id}/rankings`);
   if (!data.length) { list.innerHTML = '<div class="empty-state">참여자 없음</div>'; return; }
   list.innerHTML = data.map(e => {
@@ -1548,7 +1559,7 @@ async function loadParticipantRankings() {
     return `
       <div class="rank-row${e.rank<=3?' rank-'+e.rank:''}${e.is_me?' me':''}">
         <div class="rank-num">${medal}</div>
-        <div class="rank-user">${e.username}${e.is_me?'<span class="chip chip-blue" style="font-size:10px;margin-left:6px">나</span>':''}</div>
+        <div class="rank-user">${escHtml(e.username)}${e.is_me?'<span class="chip chip-blue" style="font-size:10px;margin-left:6px">나</span>':''}</div>
         <div style="text-align:right">
           <div style="font-weight:700;font-size:13px">${krw(e.total_value)}</div>
           <div class="${updn(e.gain_pct)}" style="font-size:12px">${pct(e.gain_pct)}</div>
@@ -1596,7 +1607,7 @@ async function loadResults() {
       return `
         <div class="results-runner-card rank-${e.rank}" style="animation-delay:${0.55 + i * 0.1}s">
           <div style="font-size:22px">${medal}</div>
-          <div style="font-weight:700;font-size:14px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${name}</div>
+          <div style="font-weight:700;font-size:14px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(name)}</div>
           <div style="font-size:12px;color:var(--muted);margin-top:2px">${e.rank}위</div>
           <div class="${updn(e.gain_pct)}" style="font-size:12px;margin-top:4px;font-weight:600">${pct(e.gain_pct)}</div>
         </div>`;
@@ -1611,8 +1622,8 @@ async function loadResults() {
       <div class="results-row${e.rank<=3?' rank-'+e.rank:''}" style="animation-delay:${i * 90}ms">
         <div style="font-size:20px;width:36px;text-align:center">${medal}</div>
         <div style="flex:1;min-width:0">
-          <div style="font-weight:700">${name}${e.is_me?'<span class="chip chip-blue" style="font-size:10px;margin-left:4px">나</span>':''}</div>
-          <div style="font-size:11px;color:var(--muted)">${sid}</div>
+          <div style="font-weight:700">${escHtml(name)}${e.is_me?'<span class="chip chip-blue" style="font-size:10px;margin-left:4px">나</span>':''}</div>
+          <div style="font-size:11px;color:var(--muted)">${escHtml(sid)}</div>
         </div>
         <div style="text-align:right">
           <div style="font-weight:700">${krw(e.total_value)}</div>
@@ -2125,7 +2136,10 @@ function closeLotteryResultModal() {
 
 // ── Rules modal ──────────────────────────────────────────
 
-function openRules() { openModal('modal-rules'); }
+function openRules() {
+  openModal('modal-rules');
+  document.querySelector('.rules-tab')?.click();
+}
 
 function switchRulesTab(tab, btn) {
   document.querySelectorAll('.rules-section').forEach(el => el.style.display = 'none');
