@@ -640,3 +640,41 @@
 - **`loadResults()` 매 호출마다 `renderResultsChart()` 재생성** (`app.js:1624`): `resultsBarChart`가 이미 존재하더라도 `renderResultsChart(data)`가 `S.resultsBarChart?.destroy()`를 호출하고 새로 생성. 결과 화면은 정적이므로 `if (S.resultsBarChart) return;` 가드를 추가해 최초 1회만 렌더링하면 불필요한 Chart.js 재초기화를 방지.
 
 ---
+
+## 2026-06-18 (4차)
+
+### 추가하면 좋을 기능
+
+- **게임 종료 후 룰렛 미완료 학생 자동 완료 타임아웃** (`app.py:111`, `app.py:1313-1321`): 학생이 게임 종료 후 앱을 닫거나 브라우저를 새로고침하면 `openPostGameRoulette()`가 실행되지 않아 `minigame/done`이 영원히 호출되지 않음. 진행자는 `rlt_pending > 0`으로 결과를 발표할 수 없게 됨. `_end_room()` 내에서 `threading.Timer(300, lambda: _auto_complete_rlt(room.id)).start()`로 5분 타임아웃을 등록하고, `_auto_complete_rlt()`는 `_rlt_completed[rid]`에 미완료 참가자를 일괄 추가하도록 구현. `minigame_done()` 호출 시 타이머를 취소하는 `_rlt_timers: dict` 딕셔너리도 함께 관리 권장 (`app.py:151` 직후 `_rlt_timers = {}`).
+
+- **결과 대기 화면에서 룰렛 완료 현황 표시** (`app.js:779-789`, `index.html:634-641`): 참가자가 `screen-waiting-results`에서 "⏳ 결과 발표 대기 중" 문구만 보며 기다림. `startWaitingPoll()` 내 3초 폴링 응답의 `r.rlt_pending` 값을 활용해 `rlt_pending > 0`이면 "🎰 X명이 룰렛을 진행 중입니다 (곧 결과가 발표됩니다)" 텍스트를 동적으로 갱신하면 학생들이 대기 이유를 이해할 수 있음. `r.rlt_pending`은 이미 `room_dict()` 응답에 포함되어 있으므로 클라이언트 5줄 추가만으로 구현 완료 (`app.js:783` 참조).
+
+- **진행자 강제 결과 발표 옵션** (`app.py:1324-1338`): 학생이 앱을 닫아 룰렛 완료가 불가능할 경우 교사가 결과를 영원히 발표할 수 없는 문제 발생. `POST /api/rooms/<rid>/host/publish-results` 요청 바디에 `{"force": true}` 파라미터를 추가하고, `app.py:1334`의 `if pending:` 블록 앞에 `force = (request.json or {}).get('force', False); if not force and pending: return 400` 형태로 강제 발표를 허용. 프론트엔드에서도 "강제 발표(confirm 후 실행)" 버튼을 `results-publish-wrap`에 추가하면 수업 마무리 시간 부족 시 탈출구 확보 가능.
+
+- **퀴즈 오답 패널티 청산 종목 상세 토스트 알림** (`app.js:879-907`, `app.py:1230-1266`): `f2044c9` 커밋에서 퀴즈 오답 시 주식·예금까지 강제 청산하는 기능이 추가됐으나, 학생 입장에서는 `toast('❌ 오답! -N원 패널티', 'error')` 외에 어떤 종목이 청산됐는지 알 수 없음. `app.py:1269` 리턴 전에 `liquidated: [{name, shares, amount}]` 배열을 응답에 포함시키고, 클라이언트에서 청산 종목이 있으면 `"⚠ 삼성전자 10주 강제 매도됨"` 토스트를 각 항목별로 표시하면 학생이 패널티의 실체를 즉각 인식해 투자 교육 효과 향상.
+
+- **`ending_soon` 배너에서 남은 시간 실시간 카운트다운** (`app.js:667-680`): `showEndingSoonBanner()`가 "⚡ 1분 후 게임이 종료됩니다!" 고정 텍스트만 표시. 1분 카운트다운이 시작될 때 `S.room.remaining_seconds`가 이미 응답에 포함되므로, 배너 생성 시 `let cnt = S.room.remaining_seconds || 60; const cntId = setInterval(() => { if (--cnt <= 0) clearInterval(cntId); banner.textContent = '⚡ 게임 종료까지 ' + cnt + '초!'; }, 1000)` 패턴으로 초 단위 카운트다운을 표시하면 학생의 긴박감 유도. 배너 삭제 시 `clearInterval(cntId)` 정리 필요 (`app.js:662` 참조).
+
+- **룰렛 베팅 퀵버튼 (총자산 비율 선택)** (`index.html:561`, `app.js:1127`): 룰렛 베팅 입력창(`rlt-bet-input`)에 숫자를 직접 입력해야 함. `_rltCash` 변수가 이미 총자산 기준 값으로 설정되어 있으므로, 입력창 옆에 "10%" / "25%" / "50%" / "전액" 퀵버튼 4개를 추가하고 클릭 시 `document.getElementById('rlt-bet-input').value = Math.floor(_rltCash * pct)` 로 채우면 편의성 향상. 서버 변경 없이 HTML 4줄 + JS 4줄로 구현 완료.
+
+- **게임 종료 직전 보유 종목 스냅샷 저장** (`app.py:134-141`, `models.py:25-38`): `_end_room()`에서 모든 `RoomHolding`을 현금 전환 후 `db.session.delete(h)`로 삭제함. 게임 종료 후 결과 화면·엑셀에서 "학생이 마지막으로 보유했던 종목 목록"을 볼 수 없어 수업 후 투자 전략 분석이 불가능. `Room` 모델에 `final_holdings_json = db.Column(db.Text, nullable=True)` 컬럼을 추가하고, `db.session.delete(h)` 직전에 보유 종목 목록을 JSON 직렬화해 저장하면 종료 후에도 종목별 매수 평균·보유량 복원 가능. 엑셀 내보내기 두 번째 시트 구현(`app.py:1386` 이후 `wb.create_sheet()`)에도 활용 가능.
+
+---
+
+### 제거/단순화할 것들
+
+- **`openPostGameRoulette()` `spins_left <= 0` early return 전 `minigame/done` 미호출 → 결과 발표 영구 차단** (`app.js:1115-1121`): `data.spins_left <= 0` 또는 `data.error` 조건으로 early return 시 `api.post('.../minigame/done', {})`를 호출하지 않아 해당 학생이 `_rlt_completed`에 추가되지 않음. `host_publish_results()`가 `rlt_pending > 0`을 반환해 결과 발표가 영원히 차단됨. 스핀을 3번 모두 소진한 학생이 1명이라도 있으면 즉시 재현 가능. `app.js:1116` early return 직전에 `await api.post(\`/api/rooms/\${S.room.id}/minigame/done\`, {}).catch(()=>{})` 1줄 추가만으로 해결.
+
+- **`_rlt_completed`·`_results_published` 인메모리 → 서버 재시작 시 결과 발표 영구 차단** (`app.py:79-81`, `app.py:1331-1335`): Render 재시작 후 `_rlt_completed[rid]`가 없어 `rlt_pending`이 전체 참가자 수로 반환되고, 진행자는 결과를 발표할 수 없게 됨. `Room` 모델에 `results_published = db.Column(db.Boolean, default=False)` 컬럼 + `RoomMember`에 `rlt_done = db.Column(db.Boolean, default=False)` 컬럼 추가로 DB에 영속화하면 재시작 후 복원 가능. `_end_room()` 내 `_results_published[room.id] = False`(`app.py:149`)는 `room.results_published = False`로 이전하고, `_rlt_completed` 인메모리 관련 코드를 DB 조회로 교체하면 일관성 확보.
+
+- **`minigame_spin()` · `submit_quiz()` 주식 완전 청산 후 `RoomHolding` 레코드 미삭제** (`app.py:979`, `app.py:1246`): 두 함수 모두 `h.shares = 0; h.avg_price = 0`만 수행하고 `db.session.delete(h)`를 호출하지 않음. `trade()` 엔드포인트(`app.py:709`)는 `if holding.shares == 0: db.session.delete(holding)`으로 올바르게 처리하는 것과 불일치. 0주 레코드가 누적되면 `RoomHolding.query.filter_by()` 반환 크기가 비대해지고, 이후 `get_portfolio()`·청산 루프의 `h.shares <= 0: continue` 스킵이 증가. `h.shares = 0; h.avg_price = 0` 두 줄 대신 `db.session.delete(h)` 단일 호출로 교체 권장.
+
+- **`closeRoulette()` `_rltSpinning = true` 중 호출 시 `S._postGameRoulette` 조기 리셋** (`app.js:1093`): 스핀 애니메이션(`await new Promise(r => setTimeout(r, 4300))`) 중 오버레이가 닫히면 `S._postGameRoulette = false`로 리셋됨. 4.3초 후 `doRouletteSpin()` 완료 시 `if (S._postGameRoulette)` 블록이 실행되지 않아 `minigame/done` 미호출 → 결과 발표 차단. 2026-06-14 4차·2026-06-15 2차에 반복 지적됐으나 여전히 미수정. `closeRoulette()` 첫 줄에 `if (_rltSpinning) return;` 1줄 추가만으로 해결.
+
+- **`minigame_spin()` `bet` NaN 미검증 → `RoomMember.cash = NaN` 부패 위험** (`app.py:955-963`): `if bet <= 0 or bet > total_assets:` 검증에서 `float('nan') <= 0` → False, `float('nan') > total_assets` → False이므로 NaN bet이 검증을 통과. `shortfall = bet - m.cash` → NaN → 주식 청산 루프 미진입 → `m.cash = m.cash - bet + winnings` → NaN. `create_deposit()`에는 `if not (0 < amount < float('inf'))` 방어 코드가 있으나(`app.py:836`) `minigame_spin()`에는 누락. `app.py:963` 직전에 `import math; if not math.isfinite(bet): return jsonify({'error': '금액 오류'}), 400` 추가 필요.
+
+- **`end_room()` `paused` 상태에서 1분 카운트다운 없이 즉시 종료 — 복권 미지급 위험** (`app.py:474-483`): `if room.status == 'active' and ... rid not in _ending_soon:` 조건이 `active`만 처리해, `paused` 상태에서 교사가 종료를 누르면 즉시 `_end_room()`이 호출됨. `_lots.pop(room.id, None)`으로 진행 중인 복권의 `_do_reveal()` 완료 전에 상태가 삭제돼 당첨금이 지급되지 않을 수 있음. `paused` 상태에서도 `room.status = 'active'; _ending_soon.add(rid); room.end_time = now + timedelta(seconds=60)` 처리를 추가하거나, `_lots.get(rid, {}).get('current', {}).get('state') in ('picking', 'drawing')`이면 진행 중임을 알리는 경고를 반환 권장.
+
+- **`minigame_close()` deprecated `Room.query.get(rid)` + None 체크 누락** (`app.py:923`): `_rlt_lock` 블록 내에서 `Room.query.get(rid)` (SQLAlchemy 2.x 폐기 API)를 사용. `room`이 None이면 `room.status`, `room.paused_at` 접근 시 `AttributeError`로 500 반환. 다른 라우트가 `db.session.get(Room, rid)` 패턴을 사용하는 것과 불일치. `db.session.get(Room, rid)` + `if not room: return jsonify({'ok': True})` 명시적 None 가드로 교체하면 안전성·일관성 동시 확보.
+
+---
