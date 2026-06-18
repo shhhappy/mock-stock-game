@@ -192,18 +192,28 @@ function enterHostLobby() {
   S.pollInterval = setInterval(loadLobbyMembers, 5000);
 }
 
-function generateLobbyQR() {
-  const el = document.getElementById('lobby-qr');
+function _makeQR(el, size) {
   el.innerHTML = '';
   const joinUrl = `${location.origin}${location.pathname}?code=${S.room.code}`;
   new QRCode(el, {
     text: joinUrl,
-    width: 148,
-    height: 148,
+    width: size,
+    height: size,
     colorDark: '#e6edf3',
     colorLight: '#0d1117',
     correctLevel: QRCode.CorrectLevel.M,
   });
+}
+
+function generateLobbyQR() {
+  _makeQR(document.getElementById('lobby-qr'), 148);
+}
+
+function openGameQR() {
+  const canvas = document.getElementById('modal-game-qr-canvas');
+  _makeQR(canvas, 280);
+  document.getElementById('modal-game-qr-code').textContent = S.room.code;
+  openModal('modal-game-qr');
 }
 
 async function loadLobbyMembers() {
