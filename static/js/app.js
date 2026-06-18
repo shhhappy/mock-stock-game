@@ -793,8 +793,28 @@ async function publishResults() {
   const data = await api.post(`/api/rooms/${S.room.id}/host/publish-results`, {});
   if (data.error) { toast(data.error, 'error'); return; }
   S.room.results_published = true;
+  clearInterval(S._resultsRltPoll); S._resultsRltPoll = null;
   document.getElementById('results-publish-wrap').hidden = true;
   toast('결과가 발표되었습니다!', 'success');
+}
+
+function startResultsRltPoll() {
+  if (S._resultsRltPoll) return;
+  S._resultsRltPoll = setInterval(async () => {
+    const r = await api.get(`/api/rooms/${S.room.id}`);
+    S.room = r;
+    const pending = r.rlt_pending ?? 0;
+    const publishBtn = document.querySelector('#results-publish-wrap button');
+    if (!publishBtn) return;
+    if (pending > 0) {
+      publishBtn.disabled = true;
+      publishBtn.textContent = `⏳ 룰렛 대기 중 (${pending}명 미완료)`;
+    } else {
+      publishBtn.disabled = false;
+      publishBtn.textContent = '📢 결과 발표하기';
+      clearInterval(S._resultsRltPoll); S._resultsRltPoll = null;
+    }
+  }, 3000);
 }
 
 function startNewsPolling() {
@@ -1079,7 +1099,10 @@ async function closeRoulette() {
   }
   if (S._postGameRoulette) {
     S._postGameRoulette = false;
-    if (S.room.results_published) {
+    await api.post(`/api/rooms/${S.room.id}/minigame/done`, {});
+    const r = await api.get(`/api/rooms/${S.room.id}`);
+    S.room = r;
+    if (r.results_published) {
       await loadResults(); showScreen('screen-results');
     } else {
       showScreen('screen-waiting-results'); startWaitingPoll();
@@ -1761,7 +1784,23 @@ async function loadResults() {
   if (exportWrap) exportWrap.hidden = !S.room?.is_host;
 
   const publishWrap = document.getElementById('results-publish-wrap');
-  if (publishWrap) publishWrap.hidden = !S.room?.is_host || !!S.room?.results_published;
+  const publishBtn = publishWrap?.querySelector('button');
+  if (publishWrap) {
+    const isHost = S.room?.is_host;
+    const published = !!S.room?.results_published;
+    publishWrap.hidden = !isHost || published;
+    if (isHost && !published && publishBtn) {
+      const pending = S.room?.rlt_pending ?? 0;
+      if (pending > 0) {
+        publishBtn.disabled = true;
+        publishBtn.textContent = `⏳ 룰렛 대기 중 (${pending}명 미완료)`;
+        startResultsRltPoll();
+      } else {
+        publishBtn.disabled = false;
+        publishBtn.textContent = '📢 결과 발표하기';
+      }
+    }
+  }
 
   if (data.length > 0) setTimeout(startConfetti, 200);
 }
