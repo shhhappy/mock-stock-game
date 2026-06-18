@@ -259,7 +259,7 @@ def room_dict(room, uid=None):
         'end_time': room.end_time.strftime('%Y-%m-%dT%H:%M:%SZ') if room.end_time else None,
         'member_count': RoomMember.query.filter_by(room_id=room.id).count(),
         'is_host': uid == room.host_id,
-        'minigame_available': room.status == 'active' and total_s > 0 and remaining <= int(total_s * 0.05),
+        'minigame_available': room.status == 'active' and (room.id in _ending_soon or (total_s > 0 and remaining <= int(total_s * 0.05))),
         'lottery_round_due': _lot_round_due(room, remaining, total_s) if room.status == 'active' else None,
         'lottery_active': (_lots.get(room.id, {}).get('current') or {}).get('state') in ('picking', 'drawing', 'revealed'),
         'lottery_current_round': (_lots.get(room.id, {}).get('current') or {}).get('round'),
@@ -937,7 +937,7 @@ def minigame_spin(rid):
     else:
         remaining = max(0, (room.end_time - now).total_seconds()) if room.end_time else 0
     total_s = room.duration_minutes * 60
-    if total_s > 0 and remaining > total_s * 0.05:
+    if rid not in _ending_soon and total_s > 0 and remaining > total_s * 0.05:
         return jsonify({'error': '아직 미니게임 시간이 아닙니다.'}), 400
     user = cur_user()
     if room.host_id == user.id:
