@@ -185,6 +185,7 @@ def _do_reveal(rid, cur):
     cur['results'] = results
     cur['state'] = 'revealed'
     _lots.setdefault(rid, {}).setdefault('done', set()).add(cur['round'])
+    get_room_service(rid).unfreeze()
     # Auto-resume the game if we paused it for the lottery
     if cur.get('auto_paused'):
         room = db.session.get(Room, rid)
@@ -381,6 +382,7 @@ def _auto_start_lottery_if_due(room):
             'pick_dl': time.time() + LOTTO_PICK_SECS, 'draw_dl': None,
             'auto_paused': True,
         }
+        get_room_service(room.id).freeze()
     _invalidate_room_cache(room.id)
 
 @app.route('/api/rooms/<int:rid>')
@@ -976,6 +978,7 @@ def lottery_start(rid):
         'pick_dl': time.time() + LOTTO_PICK_SECS, 'draw_dl': None,
         'auto_paused': True,
     }
+    get_room_service(rid).freeze()
     _invalidate_room_cache(rid)
     return jsonify({'ok': True})
 
@@ -1036,6 +1039,17 @@ def lottery_pick(rid):
     if len(nums) != 6:
         return jsonify({'error': '1~45 사이 숫자 6개를 선택하세요.'}), 400
     cur['picks'][str(user.id)] = nums
+
+    # 모든 참가자(호스트 제외)가 번호를 선택했으면 즉시 추첨
+    host_is_member = RoomMember.query.filter_by(room_id=rid, user_id=room.host_id).first() is not None
+    total_members = RoomMember.query.filter_by(room_id=rid).count()
+    eligible = total_members - (1 if host_is_member else 0)
+    if eligible > 0 and len(cur['picks']) >= eligible:
+        with _lottery_lock:
+            if cur['state'] == 'picking':
+                cur['winning'] = sorted(_random.sample(range(1, 46), 6))
+                _do_reveal(rid, cur)
+
     return jsonify({'ok': True, 'picks': nums})
 
 @app.route('/api/rooms/<int:rid>/lottery/draw', methods=['POST'])

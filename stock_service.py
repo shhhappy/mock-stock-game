@@ -115,6 +115,7 @@ class StockService:
         self._price_ttl: float = PRICE_TTL
         self._show_hint: bool = True
         self._history_cache: dict = {}  # (symbol, period) -> {'data': bars, 'ts': float}
+        self._frozen: bool = False
         self._init_prices()
 
     def _init_prices(self):
@@ -162,13 +163,21 @@ class StockService:
             self._generate_news()
             self._last_news_ts = now
 
+    def freeze(self):
+        with self._lock:
+            self._frozen = True
+
+    def unfreeze(self):
+        with self._lock:
+            self._frozen = False
+
     def get_price(self, symbol: str):
         if symbol not in STOCKS:
             return None
         now = time.time()
         with self._lock:
             ts, price = self._prices[symbol]
-            if now - ts < self._price_ttl:
+            if self._frozen or now - ts < self._price_ttl:
                 return price
             self._maybe_generate_news(now)
             direction = self._current_biases.get(symbol)
