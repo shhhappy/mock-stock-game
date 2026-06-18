@@ -272,12 +272,34 @@ def join_room():
         db.session.commit()
     return jsonify({'room': room_dict(room, user.id)})
 
+def _auto_start_lottery_if_due(room):
+    if room.status != 'active' or not room.end_time: return
+    now = datetime.utcnow()
+    remaining = max(0, int((room.end_time - now).total_seconds()))
+    total_s = room.duration_minutes * 60
+    round_due = _lot_round_due(room, remaining, total_s)
+    if not round_due: return
+    lot = _lots.setdefault(room.id, {'done': set()})
+    if (lot.get('current') or {}).get('state') in ('picking', 'drawing', 'revealed'): return
+    default_prize = max(100000, round(room.starting_cash * 0.5))
+    room.status = 'paused'
+    room.paused_at = now
+    db.session.commit()
+    lot['current'] = {
+        'round': round_due, 'state': 'picking', 'prize': default_prize,
+        'picks': {}, 'winning': None, 'results': None,
+        'pick_dl': time.time() + LOTTO_PICK_SECS, 'draw_dl': None,
+        'auto_paused': True,
+    }
+
 @app.route('/api/rooms/<int:rid>')
 @login_required
 def get_room(rid):
     room = Room.query.get_or_404(rid)
     if room.status == 'active' and room.end_time and datetime.utcnow() >= room.end_time:
         _end_room(room)
+    else:
+        _auto_start_lottery_if_due(room)
     return jsonify(room_dict(room, cur_user().id))
 
 @app.route('/api/rooms/<int:rid>/start', methods=['POST'])
