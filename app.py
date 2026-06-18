@@ -1085,15 +1085,16 @@ def lottery_pick(rid):
         return jsonify({'error': '1~45 사이 숫자 6개를 선택하세요.'}), 400
     cur['picks'][str(user.id)] = nums
 
-    # 모든 참가자(호스트 제외)가 번호를 선택했으면 즉시 추첨
+    # 모든 참가자(호스트 제외)가 번호를 선택했으면 즉시 drawing 단계로 전환
+    # (진행자가 당첨번호를 직접 입력하고, draw_dl 내 미입력 시 자동 추첨)
     host_is_member = RoomMember.query.filter_by(room_id=rid, user_id=room.host_id).first() is not None
     total_members = RoomMember.query.filter_by(room_id=rid).count()
     eligible = total_members - (1 if host_is_member else 0)
     if eligible > 0 and len(cur['picks']) >= eligible:
         with _lottery_lock:
             if cur['state'] == 'picking':
-                cur['winning'] = sorted(_random.sample(range(1, 46), 6))
-                _do_reveal(rid, cur)
+                cur['state'] = 'drawing'
+                cur['draw_dl'] = time.time() + LOTTO_DRAW_SECS
 
     return jsonify({'ok': True, 'picks': nums})
 
