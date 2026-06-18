@@ -928,17 +928,12 @@ def minigame_close(rid):
 @login_required
 def minigame_spin(rid):
     room = Room.query.get_or_404(rid)
-    rlt_paused = _rlt_active.get(rid, {}).get('auto_paused', False)
-    if room.status not in ('active', 'paused') or (room.status == 'paused' and not rlt_paused):
-        return jsonify({'error': '게임이 진행 중이 아닙니다.'}), 400
-    now = datetime.utcnow()
-    if room.status == 'paused' and room.paused_at:
-        remaining = max(0, (room.end_time - room.paused_at).total_seconds())
+    if room.status == 'ended':
+        pass  # 게임 종료 후 룰렛 허용
     else:
-        remaining = max(0, (room.end_time - now).total_seconds()) if room.end_time else 0
-    total_s = room.duration_minutes * 60
-    if rid not in _ending_soon and total_s > 0 and remaining > total_s * 0.05:
-        return jsonify({'error': '아직 미니게임 시간이 아닙니다.'}), 400
+        rlt_paused = _rlt_active.get(rid, {}).get('auto_paused', False)
+        if room.status not in ('active', 'paused') or (room.status == 'paused' and not rlt_paused):
+            return jsonify({'error': '게임이 진행 중이 아닙니다.'}), 400
     user = cur_user()
     if room.host_id == user.id:
         return jsonify({'error': '진행자는 참여할 수 없습니다.'}), 403

@@ -613,18 +613,13 @@ function enterParticipantGame() {
     const r = await api.get(`/api/rooms/${S.room.id}`);
     if (r.status === 'ended') {
       S.room = r; stopPolling(); stopTimer();
-      // 열려 있는 오버레이 닫기
       closeQuiz();
-      document.getElementById('roulette-overlay').style.display = 'none';
       document.getElementById('lottery-overlay').style.display = 'none';
       hidePausedBanner(); hideEndingSoonBanner();
       await showMaturedDepositResult();
       toast('⏰ 게임이 종료되었습니다!', 'info');
-      if (r.results_published) {
-        await loadResults(); showScreen('screen-results');
-      } else {
-        showScreen('screen-waiting-results'); startWaitingPoll();
-      }
+      // 룰렛 먼저 진행 후 결과 화면으로 이동
+      await openPostGameRoulette();
     } else {
       S.room = r;
       if (r.lottery_active && !_lotPollInterval && _lotResultRound !== r.lottery_current_round) {
@@ -641,10 +636,6 @@ function enterParticipantGame() {
         hidePausedBanner();
         hideEndingSoonBanner();
         if (r.remaining_seconds <= 60) checkDepositMaturity();
-        if (r.minigame_available && !S.rouletteOpened) {
-          S.rouletteOpened = true;
-          openRouletteModal();
-        }
       }
     }
     refreshMyRank();
@@ -1086,6 +1077,43 @@ async function closeRoulette() {
     S.room.status = 'active';
     S.room.end_time = cr.end_time;
   }
+  if (S._postGameRoulette) {
+    S._postGameRoulette = false;
+    if (S.room.results_published) {
+      await loadResults(); showScreen('screen-results');
+    } else {
+      showScreen('screen-waiting-results'); startWaitingPoll();
+    }
+  }
+}
+
+async function openPostGameRoulette() {
+  const data = await api.get(`/api/rooms/${S.room.id}/minigame`);
+  if (data.error || data.spins_left <= 0) {
+    // 스핀 기회 없으면 바로 결과 화면
+    if (S.room.results_published) {
+      await loadResults(); showScreen('screen-results');
+    } else {
+      showScreen('screen-waiting-results'); startWaitingPoll();
+    }
+    return;
+  }
+  S._postGameRoulette = true;
+  // 게임 종료 상태에서는 open/close로 pause하지 않으므로 직접 오버레이 표시
+  if (data.multipliers) updateRltLegend(data.multipliers, data.weights);
+  _rltCash = data.total_assets ?? data.cash;
+  document.getElementById('rlt-spins').textContent = data.spins_left;
+  document.getElementById('rlt-cash').textContent = krw(_rltCash);
+  document.getElementById('rlt-bet-input').value = '';
+  document.getElementById('rlt-err').textContent = '';
+  document.getElementById('rlt-bet-section').style.display = '';
+  document.getElementById('rlt-result').style.display = 'none';
+  document.getElementById('rlt-again-btn').style.display = 'none';
+  document.getElementById('rlt-close-btn').style.display = 'none';
+  document.getElementById('rlt-spin-btn').disabled = false;
+  const wheel = document.getElementById('roulette-wheel');
+  if (wheel) { wheel.style.transition = 'none'; wheel.style.transform = 'rotate(0deg)'; }
+  document.getElementById('roulette-overlay').style.display = 'flex';
 }
 
 async function doSetQuizSettings() {
