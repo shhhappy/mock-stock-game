@@ -523,7 +523,7 @@
       </div>
       <div id="rlt-bet-section">
         <div style="font-size:12px;color:var(--muted);margin-bottom:6px;text-align:center">
-          보유 현금: <span id="rlt-cash">–</span>
+          총 자산: <span id="rlt-cash">–</span>
         </div>
         <input id="rlt-bet-input" class="form-input" type="number" min="1" placeholder="베팅 금액" style="text-align:center;font-size:18px;font-weight:700">
         <div style="display:flex;gap:5px;margin-top:6px">
@@ -620,7 +620,20 @@
     <div id="results-export-wrap" hidden style="margin-top:12px">
       <button class="btn btn-secondary btn-full" onclick="downloadExcel()">📊 엑셀 순위표 다운로드</button>
     </div>
+    <div id="results-publish-wrap" hidden style="margin-top:12px">
+      <button class="btn btn-primary btn-full" onclick="publishResults()">📢 결과 발표하기</button>
+    </div>
     <button class="btn btn-primary btn-full" onclick="goHome()" style="margin-top:10px">홈으로</button>
+  </div>
+</div>
+
+<!-- ═══════════════ WAITING RESULTS ═══════════════ -->
+<div id="screen-waiting-results" class="fullscreen" hidden>
+  <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;gap:20px;padding:24px;text-align:center">
+    <div style="font-size:56px">⏳</div>
+    <div style="font-size:22px;font-weight:800">결과 발표 대기 중</div>
+    <div style="font-size:14px;color:var(--muted)">진행자가 곧 결과를 발표합니다...</div>
+    <span class="spinner" style="width:32px;height:32px;border-width:3px"></span>
   </div>
 </div>
 

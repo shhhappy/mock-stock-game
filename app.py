@@ -76,6 +76,8 @@ def _invalidate_news_cache(rid):
 _lottery_lock = threading.Lock()
 _rlt_lock = threading.Lock()
 
+_results_published = {}  # room_id -> bool
+
 KST = timezone(timedelta(hours=9))
 
 # ── Helpers ───────────────────────────────────────────────
@@ -142,6 +144,7 @@ def _end_room(room):
     _roulette_config.pop(room.id, None)
     for k in [k for k in _quiz_state if k[0] == room.id]:
         del _quiz_state[k]
+    _results_published[room.id] = False
     _invalidate_room_cache(room.id)
     _invalidate_news_cache(room.id)
 
@@ -258,6 +261,7 @@ def room_dict(room, uid=None):
         'lottery_round_due': _lot_round_due(room, remaining, total_s) if room.status == 'active' else None,
         'lottery_active': (_lots.get(room.id, {}).get('current') or {}).get('state') in ('picking', 'drawing', 'revealed'),
         'lottery_current_round': (_lots.get(room.id, {}).get('current') or {}).get('round'),
+        'results_published': _results_published.get(room.id, False),
     }
 
 def find_active_room(uid):
@@ -852,7 +856,15 @@ def get_minigame(rid):
         return jsonify({'error': '참여자가 아닙니다.'}), 403
     spins_used = RoomTransaction.query.filter_by(room_id=rid, user_id=user.id, action='RLT').count()
     mults, weights = _rlt_cfg(rid)
+    svc = get_room_service(rid)
+    holdings_value = sum(
+        (svc.get_price(h.symbol) or h.avg_price) * h.shares
+        for h in RoomHolding.query.filter_by(room_id=rid, user_id=user.id).all()
+        if h.shares > 0
+    )
+    total_assets = m.cash + holdings_value
     return jsonify({'spins_left': max(0, 3 - spins_used), 'cash': m.cash,
+                    'total_assets': total_assets,
                     'multipliers': mults, 'weights': weights})
 
 @app.route('/api/rooms/<int:rid>/minigame/open', methods=['POST'])
@@ -933,8 +945,41 @@ def minigame_spin(rid):
         bet = float((request.json or {}).get('bet', 0))
     except (TypeError, ValueError):
         return jsonify({'error': '금액 오류'}), 400
-    if bet <= 0 or bet > m.cash:
+    # 총자산(현금+보유주식) 기준으로 베팅 한도 계산
+    svc = get_room_service(rid)
+    holdings = RoomHolding.query.filter_by(room_id=rid, user_id=user.id).all()
+    holdings_value = sum(
+        (svc.get_price(h.symbol) or h.avg_price) * h.shares
+        for h in holdings if h.shares > 0
+    )
+    total_assets = m.cash + holdings_value
+    if bet <= 0 or bet > total_assets:
         return jsonify({'error': '베팅 금액이 올바르지 않습니다.'}), 400
+    # 현금이 부족하면 보유 주식을 청산해 충당
+    shortfall = bet - m.cash
+    if shortfall > 0:
+        for h in sorted(holdings, key=lambda h: (svc.get_price(h.symbol) or h.avg_price) * h.shares, reverse=True):
+            if shortfall <= 0 or h.shares <= 0:
+                continue
+            price = svc.get_price(h.symbol) or h.avg_price
+            sell_value = price * h.shares
+            if sell_value <= shortfall:
+                m.cash += sell_value
+                shortfall -= sell_value
+                db.session.add(RoomTransaction(room_id=rid, user_id=user.id, symbol=h.symbol,
+                    action='SELL', shares=h.shares, price=price, amount=sell_value,
+                    note='룰렛 베팅 자금 마련'))
+                h.shares = 0
+                h.avg_price = 0
+            else:
+                shares_to_sell = max(1, int(shortfall / price))
+                actual_value = price * shares_to_sell
+                m.cash += actual_value
+                shortfall -= actual_value
+                h.shares -= shares_to_sell
+                db.session.add(RoomTransaction(room_id=rid, user_id=user.id, symbol=h.symbol,
+                    action='SELL', shares=shares_to_sell, price=price, amount=actual_value,
+                    note='룰렛 베팅 자금 마련'))
     outcomes = _rlt_outcomes(rid)
     outcome = _random.choices(outcomes, weights=[o['weight'] for o in outcomes])[0]
     winnings = round(bet * outcome['multiplier'])
@@ -1205,6 +1250,18 @@ def host_roulette_config(rid):
         return jsonify({'error': '확률 합계가 0이 될 수 없습니다.'}), 400
     _roulette_config[rid] = {'multipliers': mults, 'weights': weights}
     return jsonify({'ok': True, 'multipliers': mults, 'weights': weights})
+
+
+@app.route('/api/rooms/<int:rid>/host/publish-results', methods=['POST'])
+@login_required
+def host_publish_results(rid):
+    room = Room.query.get_or_404(rid)
+    user = cur_user()
+    if room.host_id != user.id: return jsonify({'error': '권한 없음'}), 403
+    if room.status != 'ended': return jsonify({'error': '게임이 종료되지 않았습니다.'}), 400
+    _results_published[rid] = True
+    _invalidate_room_cache(rid)
+    return jsonify({'ok': True})
 
 
 @app.route('/api/rooms/<int:rid>/host/quiz-settings', methods=['GET', 'POST'])

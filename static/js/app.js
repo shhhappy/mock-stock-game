@@ -158,8 +158,11 @@ async function doJoinRoom() {
   if (S.room.status === 'active' || S.room.status === 'paused') {
     enterParticipantGame();
   } else if (S.room.status === 'ended') {
-    await loadResults();
-    showScreen('screen-results');
+    if (S.room.results_published) {
+      await loadResults(); showScreen('screen-results');
+    } else {
+      showScreen('screen-waiting-results'); startWaitingPoll();
+    }
   } else {
     enterParticipantLobby();
   }
@@ -174,7 +177,8 @@ function resumeRoom() {
   } else {
     if (S.room.status === 'waiting') enterParticipantLobby();
     else if (S.room.status === 'active' || S.room.status === 'paused') enterParticipantGame();
-    else loadResults().then(() => showScreen('screen-results'));
+    else if (S.room.results_published) loadResults().then(() => showScreen('screen-results'));
+    else { showScreen('screen-waiting-results'); startWaitingPoll(); }
   }
 }
 
@@ -546,7 +550,11 @@ function enterParticipantLobby() {
       S.room = r; stopPolling(); enterParticipantGame();
     } else if (r.status === 'ended') {
       S.room = r; stopPolling();
-      await loadResults(); showScreen('screen-results');
+      if (r.results_published) {
+        await loadResults(); showScreen('screen-results');
+      } else {
+        showScreen('screen-waiting-results'); startWaitingPoll();
+      }
     }
   }, 5000);
 }
@@ -596,8 +604,11 @@ function enterParticipantGame() {
       document.getElementById('lottery-overlay').style.display = 'none';
       await showMaturedDepositResult();
       toast('⏰ 게임이 종료되었습니다!', 'info');
-      await loadResults();
-      showScreen('screen-results');
+      if (r.results_published) {
+        await loadResults(); showScreen('screen-results');
+      } else {
+        showScreen('screen-waiting-results'); startWaitingPoll();
+      }
     } else {
       S.room = r;
       if (r.lottery_active && !_lotPollInterval && _lotResultRound !== r.lottery_current_round) {
@@ -735,7 +746,29 @@ function startTimer(elId) {
 function stopTimer()   { clearInterval(S.timerInterval); S.timerInterval = null; }
 function stopPolling() {
   clearInterval(S.pollInterval);  S.pollInterval = null;
+  clearInterval(S._waitingPoll); S._waitingPoll = null;
   stopNewsPolling();
+}
+
+function startWaitingPoll() {
+  clearInterval(S._waitingPoll);
+  S._waitingPoll = setInterval(async () => {
+    const r = await api.get(`/api/rooms/${S.room.id}`);
+    if (r.results_published) {
+      clearInterval(S._waitingPoll); S._waitingPoll = null;
+      S.room = r;
+      await loadResults();
+      showScreen('screen-results');
+    }
+  }, 3000);
+}
+
+async function publishResults() {
+  const data = await api.post(`/api/rooms/${S.room.id}/host/publish-results`, {});
+  if (data.error) { toast(data.error, 'error'); return; }
+  S.room.results_published = true;
+  document.getElementById('results-publish-wrap').hidden = true;
+  toast('결과가 발표되었습니다!', 'success');
 }
 
 function startNewsPolling() {
@@ -907,7 +940,7 @@ async function openRouletteModal() {
   const data = await api.get(`/api/rooms/${S.room.id}/minigame`);
   if (data.error || data.spins_left <= 0) return;
   if (data.multipliers) updateRltLegend(data.multipliers, data.weights);
-  _rltCash = data.cash;
+  _rltCash = data.total_assets ?? data.cash;
   document.getElementById('rlt-spins').textContent = data.spins_left;
   document.getElementById('rlt-cash').textContent = krw(_rltCash);
   document.getElementById('rlt-bet-input').value = '';
@@ -964,8 +997,11 @@ async function doRouletteSpin() {
 
   await new Promise(r => setTimeout(r, 4300));
 
-  // 결과 표시
+  // 결과 표시 (주식 청산 가능성 있으므로 총자산 재조회)
   _rltCash = data.cash;
+  api.get(`/api/rooms/${S.room.id}/minigame`).then(d => {
+    if (d.total_assets != null) { _rltCash = d.total_assets; document.getElementById('rlt-cash').textContent = krw(_rltCash); }
+  });
   document.getElementById('rlt-spins').textContent = data.spins_left;
   document.getElementById('rlt-cash').textContent = krw(_rltCash);
   document.getElementById('rlt-bet-section').style.display = 'none';
@@ -1655,6 +1691,9 @@ async function loadResults() {
 
   const exportWrap = document.getElementById('results-export-wrap');
   if (exportWrap) exportWrap.hidden = !S.room?.is_host;
+
+  const publishWrap = document.getElementById('results-publish-wrap');
+  if (publishWrap) publishWrap.hidden = !S.room?.is_host || !!S.room?.results_published;
 
   if (data.length > 0) setTimeout(startConfetti, 200);
 }
