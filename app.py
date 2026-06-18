@@ -1221,7 +1221,46 @@ def submit_quiz(rid):
             member.cash += reward
         else:
             penalty = max(5000, int(room.starting_cash * penalty_pct / 100))
+            shortfall = penalty - member.cash
             member.cash = max(0, member.cash - penalty)
+            # 현금 부족 시 보유 주식 → 예금 순서로 추가 차감
+            if shortfall > 0:
+                svc = get_room_service(rid)
+                for h in sorted(
+                    RoomHolding.query.filter_by(room_id=rid, user_id=user.id).all(),
+                    key=lambda h: (svc.get_price(h.symbol) or h.avg_price) * h.shares,
+                    reverse=True
+                ):
+                    if shortfall <= 0 or h.shares <= 0:
+                        continue
+                    price = svc.get_price(h.symbol) or h.avg_price
+                    sell_value = price * h.shares
+                    if sell_value <= shortfall:
+                        shortfall -= sell_value
+                        db.session.add(RoomTransaction(room_id=rid, user_id=user.id, symbol=h.symbol,
+                            action='SELL', shares=h.shares, price=price, amount=sell_value,
+                            note='퀴즈 오답 패널티'))
+                        h.shares = 0; h.avg_price = 0
+                    else:
+                        shares_to_sell = max(1, int(shortfall / price))
+                        actual = price * shares_to_sell
+                        shortfall -= actual
+                        h.shares -= shares_to_sell
+                        db.session.add(RoomTransaction(room_id=rid, user_id=user.id, symbol=h.symbol,
+                            action='SELL', shares=shares_to_sell, price=price, amount=actual,
+                            note='퀴즈 오답 패널티'))
+                if shortfall > 0:
+                    for dep in Deposit.query.filter_by(room_id=rid, user_id=user.id, status='active').all():
+                        if shortfall <= 0:
+                            break
+                        take = min(dep.amount, shortfall)
+                        dep.amount -= take
+                        shortfall -= take
+                        if dep.amount <= 0:
+                            dep.status = 'withdrawn'
+                        db.session.add(RoomTransaction(room_id=rid, user_id=user.id, symbol='DEPOSIT',
+                            action='ADJ', shares=0, price=0, amount=-take,
+                            note='퀴즈 오답 패널티 (예금 차감)'))
         db.session.commit()
     _quiz_state[key] = {'qid': None, 'cooldown_until': time.time() + 60}
     return jsonify({'correct': correct, 'reward': reward, 'penalty': penalty, 'explanation': q['ex']})
