@@ -536,10 +536,15 @@ async function loadStudentTxn(reset = false) {
 async function loadMoreStudentTxn() { S.studentTxnPage++; await loadStudentTxn(false); }
 
 async function doEndGame() {
-  if (!confirm('게임을 종료하시겠습니까?')) return;
   const data = await api.post(`/api/rooms/${S.room.id}/end`, {});
   if (data.error) { toast(data.error, 'error'); return; }
   S.room = data.room;
+  if (data.ending_soon) {
+    toast('⏰ 1분 후 게임이 종료됩니다!', 'info');
+    const btn = document.getElementById('end-game-btn');
+    if (btn) { btn.disabled = true; btn.textContent = '⏰ 1분 후 종료'; }
+    return;
+  }
   stopPolling(); stopTimer();
   await loadResults();
   showScreen('screen-results');
@@ -612,6 +617,7 @@ function enterParticipantGame() {
       closeQuiz();
       document.getElementById('roulette-overlay').style.display = 'none';
       document.getElementById('lottery-overlay').style.display = 'none';
+      hidePausedBanner(); hideEndingSoonBanner();
       await showMaturedDepositResult();
       toast('⏰ 게임이 종료되었습니다!', 'info');
       if (r.results_published) {
@@ -626,8 +632,14 @@ function enterParticipantGame() {
       }
       if (r.status === 'paused') {
         showPausedBanner();
+        hideEndingSoonBanner();
+      } else if (r.ending_soon) {
+        hidePausedBanner();
+        showEndingSoonBanner();
+        if (r.remaining_seconds <= 60) checkDepositMaturity();
       } else {
         hidePausedBanner();
+        hideEndingSoonBanner();
         if (r.remaining_seconds <= 60) checkDepositMaturity();
         if (r.minigame_available && !S.rouletteOpened) {
           S.rouletteOpened = true;
@@ -659,6 +671,19 @@ function showPausedBanner() {
 function hidePausedBanner() {
   document.getElementById('paused-banner')?.remove();
   updateTradeButtonState();
+}
+
+function showEndingSoonBanner() {
+  if (document.getElementById('ending-soon-banner')) return;
+  const banner = document.createElement('div');
+  banner.id = 'ending-soon-banner';
+  banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#cf6679;color:#fff;text-align:center;font-weight:700;font-size:13px;padding:6px;z-index:9000;animation:pulse 1.5s infinite';
+  banner.textContent = '⏰ 게임이 곧 종료됩니다 (1분 이내)';
+  document.body.appendChild(banner);
+}
+
+function hideEndingSoonBanner() {
+  document.getElementById('ending-soon-banner')?.remove();
 }
 
 function updateTradeButtonState() {
@@ -1118,6 +1143,11 @@ async function refreshRoomStatus() {
   } else {
     S.room = r;
     updatePauseBtn();
+    // ending_soon 버튼 상태 반영
+    if (r.ending_soon) {
+      const btn = document.getElementById('end-game-btn');
+      if (btn && !btn.disabled) { btn.disabled = true; btn.textContent = '⏰ 1분 후 종료'; }
+    }
     // Lottery: notify bar for host
     if (r.lottery_round_due && r.lottery_round_due !== S.lotteryRoundDue) {
       showLotteryNotifyBar(r.lottery_round_due);

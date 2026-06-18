@@ -77,6 +77,7 @@ _lottery_lock = threading.Lock()
 _rlt_lock = threading.Lock()
 
 _results_published = {}  # room_id -> bool
+_ending_soon = set()    # room_ids whose host pressed end (1-min countdown active)
 
 KST = timezone(timedelta(hours=9))
 
@@ -145,6 +146,7 @@ def _end_room(room):
     for k in [k for k in _quiz_state if k[0] == room.id]:
         del _quiz_state[k]
     _results_published[room.id] = False
+    _ending_soon.discard(room.id)
     _invalidate_room_cache(room.id)
     _invalidate_news_cache(room.id)
 
@@ -262,6 +264,7 @@ def room_dict(room, uid=None):
         'lottery_active': (_lots.get(room.id, {}).get('current') or {}).get('state') in ('picking', 'drawing', 'revealed'),
         'lottery_current_round': (_lots.get(room.id, {}).get('current') or {}).get('round'),
         'results_published': _results_published.get(room.id, False),
+        'ending_soon': room.id in _ending_soon,
     }
 
 def find_active_room(uid):
@@ -459,6 +462,16 @@ def end_room(rid):
     user = cur_user()
     if room.host_id != user.id: return jsonify({'error': '진행자만 종료할 수 있습니다.'}), 403
     if room.status == 'ended': return jsonify({'error': '이미 종료된 방입니다.'}), 400
+    # 게임 진행 중이고 잔여 시간이 60초 초과인 경우 → 1분 카운트다운 후 자동 종료
+    if room.status == 'active' and room.end_time and rid not in _ending_soon:
+        now = datetime.utcnow()
+        remaining = (room.end_time - now).total_seconds()
+        if remaining > 60:
+            room.end_time = now + timedelta(seconds=60)
+            _ending_soon.add(rid)
+            db.session.commit()
+            _invalidate_room_cache(rid)
+            return jsonify({'ending_soon': True, 'room': room_dict(room, user.id)})
     _end_room(room)
     return jsonify({'room': room_dict(room, user.id)})
 
