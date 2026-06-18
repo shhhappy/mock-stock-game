@@ -515,3 +515,33 @@
 - **`S.depositWarningShown` 방 변경 시 미초기화** (`app.js:12`, `app.js:96-100`): `S` 객체 초기화 시 `depositWarningShown: false`로 설정되지만, `goHome()`·`doLogout()`에서 `S.user = null; S.room = null`만 리셋하고 `S.depositWarningShown`은 초기화하지 않음. 학생이 첫 번째 게임에서 예금 만기 경고를 받은 후 홈으로 나갔다가 두 번째 게임에 예금을 하면, `checkDepositMaturity()` 첫 줄의 `if (S.depositWarningShown) return;` 가드(`app.js:638`)에 걸려 만기 임박 팝업이 절대 표시되지 않음. 2026-06-16에 지적한 `S.assetHistory` 미초기화와 동일한 패턴 — `showLanding()`(`app.js:82`) 또는 `stopPolling()` 내에서 `S.depositWarningShown = false;` 1줄 추가로 해결.
 
 ---
+
+## 2026-06-18
+
+### 추가하면 좋을 기능
+
+- **[버그] 게임 종료 후 최종 순위가 새 무작위 주가로 계산됨** (`app.py:48-69`, `app.py:35-46`): `_end_room()`이 `cleanup_room_service(room.id)`로 해당 방의 StockService를 삭제한 후, `GET /api/rooms/<rid>/rankings`나 엑셀 내보내기가 `member_total_value()`를 호출하면 `get_room_service(rid)`가 완전히 새로운 무작위 주가로 초기화된 StockService 인스턴스를 생성함. 결과적으로 **보유 주식 평가액이 게임 종료 시점 주가가 아닌 새 무작위 주가로 계산**되어 최종 순위표와 엑셀 다운로드 결과가 실제 게임 결과와 다를 수 있음. 수정 방법: `app.py:67`의 `cleanup_room_service(room.id)` 호출 직전에 모든 참여자의 `RoomHolding`을 현재 주가로 현금 전환(`m.cash += svc.get_price(h.symbol) * h.shares; h.shares = 0`)하고 `db.session.commit()`하면 종료 이후에도 정확한 자산 집계 가능.
+
+- **복권 결과 진행자 모달에 참여자 이름 미표시** (`app.js:2062-2084`, `app.py:856-878`): `_showLotteryResult()` 호스트 분기의 결과 테이블이 `uid_str`(숫자 문자열)을 행 키로 나열하고 이름 없이 선택 번호와 당첨금만 표시. 교사가 "uid 7번이 3개 일치했다"는 숫자만 보이고 누가 당첨됐는지 알 수 없음. 서버 측 수정: `app.py:870-875`의 `_do_reveal()` 루프에서 `User` 이름을 `results[uid_str]['username']`에 포함. 클라이언트 측 대안: `loadHostMembers()` 응답을 `S.memberNameMap = {uid: username}` 형태로 저장해 두고 (`app.js:383` 직후), 복권 결과 렌더링 시 `S.memberNameMap[uid_str] || uid_str`로 참조하면 서버 변경 없이 해결.
+
+- **퀴즈 창 강제 닫기로 쿨다운/패널티 우회 가능** (`app.py:968-982`, `app.js:810-812`): `closeQuiz()`가 `_quizTimerTick` 인터벌만 초기화하고 서버에 아무 요청을 보내지 않음. `_quiz_state[key]['cooldown_until']`이 0인 채로 유지되므로 학생이 어려운 문제를 보고 닫으면 즉시 다시 `openQuiz()`로 새 문제를 받을 수 있어 패널티 없이 유리한 문제만 선별 가능. `closeQuiz()` 호출 시 `quiz-result`가 아직 표시되지 않은 상태이면 `api.post('/api/rooms/.../quiz', {answer: false})`를 백그라운드에서 호출하거나, 클라이언트 측 `S.quizSkippedUntil = Date.now() + 60_000`을 설정하고 `openQuiz()` 첫 줄에서 잔여 쿨다운을 체크하는 방식으로 방지 (`app.js:812` 수정).
+
+- **진행자가 게임 진행 중 참여자 강퇴 불가** (`app.py:360-367`): `kick_member()` 엔드포인트가 `if room.status != 'waiting': return 400`으로 대기 상태에서만 강퇴를 허용. 실제 수업에서는 게임 시작 후 부정한 방법으로 게임을 방해하거나 집중하지 않는 학생을 중간에 제거해야 하는 경우가 있음. `app.py:362` 조건을 `room.status == 'ended'`으로 변경(종료된 방만 차단)하거나, `active`/`paused` 상태에서는 `RoomMember` 레코드 삭제 대신 `is_active = False` 플래그로 처리하면 진행 중인 게임에서도 강퇴 가능. 강퇴 시 현재 자산을 결과에 포함할지 여부는 진행자가 선택할 수 있게 쿼리 파라미터로 처리 가능.
+
+- **`_lots` 복권 상태 인메모리 저장으로 Render 재시작 시 소실** (`app.py:73`, `app.py:822-939`): `_quiz_state`·`_quiz_settings`·`_rlt_active`와 마찬가지로 `_lots` 딕셔너리도 서버 재시작 시 초기화됨. 복권 `'picking'` 단계(학생 60초 선택 시간)에서 Render dyno가 재시작되면 학생들이 제출한 번호가 전부 소실되고, 게임이 `'paused'` 상태(`auto_paused=True`)로 고착돼 교사가 수동 재개하기 전까지 아무도 거래 불가. 단기 해결책: `Room` 모델에 `lottery_state = db.Column(db.JSON, nullable=True)` 컬럼을 추가하고(`models.py:38` 직후), `_lots` 딕셔너리 변경 시 DB에도 직렬화해 저장하면 재시작 후에도 복권 상태 복원 가능.
+
+---
+
+### 제거/단순화할 것들
+
+- **`join_room()` 동시 입장 시 `UniqueConstraint` → 500 반환** (`app.py:270-272`): 학생이 더블 클릭하거나 네트워크 재시도로 같은 방에 동시에 두 요청을 보내면, 두 요청 모두 `RoomMember.query.filter_by(...)` 조회에서 None을 얻고 두 번째 `db.session.commit()`에서 `UNIQUE constraint failed` → `IntegrityError` → 500 HTML이 반환됨. `api.post()`가 JSON 파싱을 시도해 `SyntaxError`로 이어져 조용히 실패. `db.session.add(m); db.session.commit()` 블록을 `try: ... except IntegrityError: db.session.rollback()` 으로 감싸면 두 번째 요청도 정상 응답 반환 가능 (`app.py:271-272` 수정).
+
+- **`get_room()` 자동 종료가 `paused` 상태를 처리하지 않음** (`app.py:279-281`): `if room.status == 'active' and room.end_time and datetime.utcnow() >= room.end_time:` — 게임이 `'paused'`로 고착된 채 `end_time`을 초과해도 자동 종료가 실행되지 않음. 진행자가 일시정지 후 탭을 닫으면 해당 방이 `ended`가 되지 않아 교사가 새 방을 만들 수도 없는 상태가 됨(`app.py:250` 중복 방 체크에 걸림). `paused` 상태에서는 `end_time - paused_at <= timedelta(0)` 조건(남은 시간이 0 이하)을 추가해 자동 종료하거나, `room.status in ('active', 'paused')` 체크 후 경과 시간을 올바르게 계산해 `_end_room()`을 호출하도록 수정 (`app.py:279` 2줄 수정).
+
+- **`host_members()` 내부 User 레코드 N번 개별 조회** (`app.py:344-346`): 진행자 순위 조회 시 `for m in RoomMember.query...` 루프 내에서 `db.session.get(User, m.user_id)`를 N번 호출. SQLAlchemy identity map 덕에 같은 요청 내 두 번째 조회는 캐시를 사용하지만, 10초 폴링마다 새로운 요청이 들어오면 매번 N번 DB 왕복 발생. `uids = [m.user_id for m in members]; user_map = {u.id: u for u in db.session.query(User).filter(User.id.in_(uids)).all()}` 패턴으로 1번 IN 쿼리로 교체하면 N번 → 1번으로 단축. `lobby_members()` (`app.py:374-378`)와 `host_member_transactions()` (`app.py:409-410`)도 동일 패턴.
+
+- **방치된 `active`/`paused` 방이 교사의 새 방 생성을 영구 차단** (`app.py:250`, `app.py:186-192`): 서버 재시작·비정상 종료 등으로 `status='active'`이지만 실제로 아무도 없는 방이 DB에 남아 있으면, `create_room()` 의 `if Room.query.filter(Room.host_id == user.id, Room.status.in_(...)).first()` 체크에 걸려 교사가 새 방을 만들 수 없음. `end_time + timedelta(hours=2) < datetime.utcnow()` 조건의 방치된 방을 자동 정리하는 로직을 `create_room()` 체크 직전에 추가하거나, 진행자 화면에 "이전 방 강제 종료" 버튼을 노출하면 이 문제를 해소할 수 있음 (`app.py:249` 직전 추가).
+
+- **`RoomTransaction.action` `String(4)` 타입과 복권 당첨 기록에 `'ADJ'` 혼용** (`models.py:71`, `app.py:105`): `action` 컬럼이 `String(4)`로 정의되어 향후 `'BONUS'`·`'FINE'` 등 긴 액션 타입 추가 시 DB truncation 위험. 더불어 복권 당첨금 `_do_reveal()` (`app.py:105`)이 `action='ADJ'`를 사용해 수동 자산 조정과 구분 불가 — `host_member_transactions`에서 복권 당첨과 교사 조정이 같은 "조정" 뱃지로 표시됨. `String(4)` → `String(10)` 확장과 함께 복권 당첨 기록 액션을 `action='LOTTO'`로 변경하면 거래 내역 필터링 및 통계 집계 시 두 유형을 명확히 구분 가능 (`app.py:105`, `app.py:501` 참조).
+
+---
