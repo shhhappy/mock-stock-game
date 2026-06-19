@@ -1998,7 +1998,8 @@ function hideLotteryNotifyBar() {
 
 function openLotteryStartModal() {
   hideLotteryNotifyBar();
-  document.getElementById('lottery-prize-input').value = '';
+  const memberCount = S.room?.member_count ?? 0;
+  document.getElementById('lottery-prize-input').value = memberCount * 30000000 || '';
   document.getElementById('lottery-start-err').textContent = '';
   openModal('modal-lottery-start');
 }

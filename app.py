@@ -381,7 +381,7 @@ def _auto_start_lottery_if_due(room):
         lot = _lots.setdefault(room.id, {'done': set()})
         if (lot.get('current') or {}).get('state') in ('picking', 'drawing', 'revealed'): return
         member_count = RoomMember.query.filter_by(room_id=room.id).count()
-        default_prize = member_count * 100_000_000
+        default_prize = member_count * 30_000_000
         room.status = 'paused'
         room.paused_at = now
         db.session.commit()
@@ -424,6 +424,7 @@ def get_room(rid):
                 room.paused_at = now_dt
                 _rlt_active[rid] = {'count': 0, 'auto_paused': True}
                 db.session.commit()
+                get_room_service(rid).freeze()
                 _invalidate_room_cache(rid)
             else:
                 _end_room(room)
@@ -917,6 +918,7 @@ def minigame_open(rid):
             state['auto_paused'] = True
             paused_now = True
     if paused_now:
+        get_room_service(rid).freeze()
         _invalidate_room_cache(rid)
     remaining = 0
     if room.paused_at and room.end_time:
@@ -936,6 +938,7 @@ def minigame_close(rid):
         if state['count'] == 0 and state.get('auto_paused'):
             room = Room.query.get(rid)
             if room and room.status == 'paused':
+                get_room_service(rid).unfreeze()
                 if rid in _rlt_triggered:
                     # 5초 트리거 룰렛: 모두 완료 → 게임 종료
                     _end_room(room)
