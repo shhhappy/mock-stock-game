@@ -678,3 +678,37 @@
 - **`minigame_close()` deprecated `Room.query.get(rid)` + None 체크 누락** (`app.py:923`): `_rlt_lock` 블록 내에서 `Room.query.get(rid)` (SQLAlchemy 2.x 폐기 API)를 사용. `room`이 None이면 `room.status`, `room.paused_at` 접근 시 `AttributeError`로 500 반환. 다른 라우트가 `db.session.get(Room, rid)` 패턴을 사용하는 것과 불일치. `db.session.get(Room, rid)` + `if not room: return jsonify({'ok': True})` 명시적 None 가드로 교체하면 안전성·일관성 동시 확보.
 
 ---
+
+## 2026-06-19
+
+### 추가하면 좋을 기능
+
+- **`waiting` 상태로 방치된 대기 방 자동 정리 없음** (`app.py:336-345`): `create_room()`의 stale 방 정리가 `status.in_(['active', 'paused'])` AND `end_time < stale_cutoff`인 경우만 처리(`app.py:338-344`). `waiting` 상태로 방치된 방(예: 24시간 이상 시작하지 않은 방)은 정리되지 않아 교사가 새 방을 만들 수 없는 상황이 발생. `stale_cutoff_long = datetime.utcnow() - timedelta(hours=24)` 기준으로 `Room.status == 'waiting'` AND `Room.created_at < stale_cutoff_long` 조건의 정리 분기를 `app.py:337` 이후에 추가하면 해결.
+
+- **`get_history()` 차트 가격 생성 방향 역방향 버그** (`stock_service.py:287-310`): `price = float(current)`로 현재가에서 출발해 `for i in range(n_bars, 0, -1)`로 과거 날짜 순서대로 봉을 생성하므로, bars[0](가장 오래된 날짜)의 `open`이 현재가와 동일하고 bars[-1](가장 최근 날짜)은 무작위 가격이 됨. 학생이 차트를 보면 "30일 전 삼성전자가 현재와 같은 가격이었다"는 잘못된 인상을 받음. 수정 방법: `price = STOCKS[symbol]['base'] * random.uniform(0.85, 1.15)`로 과거 임의 시작가를 설정한 뒤 현재가 방향으로 수렴하도록 전진 생성하거나, 단순히 배열을 역순으로 생성해 bars[-1].close가 `current`에 가깝도록 수정 (`stock_service.py:288` 초기화 변경).
+
+- **퀴즈 FAB 버튼에 쿨다운 표시 없음** (`app.py:1209-1213`, `index.html:465`): 학생이 퀴즈를 풀면 60초 쿨다운이 시작(`app.py:1286`)되는데 FAB 버튼("🧠 퀴즈")에 남은 대기시간이 표시되지 않음. 반복 클릭 시 오버레이가 열렸다 닫히며 `get_quiz()` API를 계속 호출. `openQuiz()` 내에서 `data.cooldown > 0`이면 오버레이를 열지 않고 FAB 텍스트를 "🧠 퀴즈 (N초)"로 변경하는 로컬 카운트다운을 실행하면 불필요한 API 호출과 혼란을 동시에 방지 가능 (서버 변경 불필요, `app.js` 퀴즈 관련 함수에 10줄 추가).
+
+- **`force_price()` 이후 `_next_biases` 미갱신으로 효과 소멸** (`stock_service.py:218-242`): 교사가 개별 종목 강제 조정 시 `self._current_biases`만 갱신되지 않고, `_next_biases`에도 반영이 없음. `_maybe_generate_news()`가 다음 뉴스 사이클에서 `self._current_biases = self._next_biases.copy()`를 실행하면 강제 조정 방향이 덮어씌어져 무작위 방향으로 가격이 재진행됨. `stock_service.py:240` 이후에 `self._next_biases[symbol] = direction` 한 줄을 추가하면 강제 조정의 모멘텀이 다음 뉴스 사이클까지 유지됨. `force_sector_event()`에도 동일하게 `for sym in affected: self._next_biases[sym] = direction` 추가 권장 (`stock_service.py:260`).
+
+- **게임 종료 후 학생별 최종 보유 종목 확인 불가** (`app.py:132-142`, `models.py:44-51`): `_end_room()`에서 `RoomHolding` 레코드를 현금으로 전환 후 전부 삭제(`db.session.delete(h)`, `app.py:140`)하여, 결과 화면이나 엑셀에서 "마지막에 어떤 종목을 보유했나"를 재현할 수 없음. `RoomMember`에 `final_portfolio = db.Column(db.Text, nullable=True)` JSON 컬럼을 추가하고 `delete(h)` 직전에 `{symbol: {shares, avg_price, final_price, gain_pct}}` 딕셔너리를 JSON 직렬화해 저장하면, 결과 화면 "내 거래 내역" 섹션과 엑셀 두 번째 시트에서 종목별 투자 전략 분석이 가능해짐 (`models.py:49` 이후 컬럼 추가, `app.py:134` 루프 내 수집 로직 추가).
+
+- **학생이 브라우저 주소창에서 직접 방 번호를 입력하면 방 정보 노출** (`app.py:397-435`): `GET /api/rooms/<rid>` 엔드포인트가 `@login_required`만 있고 해당 방의 멤버인지 확인하지 않음. 로그인만 되면 방 코드를 모르는 타 교사의 방 이름·남은 시간·멤버 수·룰렛 설정 여부 등이 응답에 포함됨 (`room_dict()`, `app.py:252-270`). `RoomMember.query.filter_by(room_id=rid, user_id=uid).first()` 또는 `room.host_id == uid` 체크를 추가하거나, 미인가 사용자에게는 `code`·`status`·`remaining_seconds`만 포함한 최소 응답을 반환하도록 제한 권장.
+
+---
+
+### 제거/단순화할 것들
+
+- **`room_dict()` 내 `member_count` COUNT 쿼리 캐시 미스 시마다 실행** (`app.py:263`): `'member_count': RoomMember.query.filter_by(room_id=room.id).count()`가 `room_dict()` 내부에서 매번 실행됨. 로비 폴링(5초)과 `get_room()` 폴링(10초)이 맞물리면 초당 여러 건의 COUNT 쿼리가 발생. 단기적으로는 `Room` 모델에 `member_count = db.Column(db.Integer, default=0)` 컬럼을 추가해 `join_room()`·`kick_member()` 시 동기 갱신(`room.member_count += 1`)하거나, `host/lobby-members` 응답 길이를 프론트엔드에서 캐싱해 `room_dict` 호출 횟수 자체를 줄이는 방식으로 개선 가능 (`app.py:263` 한 줄).
+
+- **`RoomHolding`·`Deposit`·`RoomTransaction` 테이블 복합 인덱스 누락** (`models.py:54-62`, `models.py:65-76`, `models.py:79-88`): 세 테이블 모두 `room_id + user_id` 기준 조회가 압도적으로 많지만 인덱스가 없음(`RoomHolding`은 `UniqueConstraint`가 있어 인덱스 자동 생성되지만, `RoomTransaction`과 `Deposit`은 없음). 학생 30명이 30분 게임을 하면 `RoomTransaction`에 수백 건이 쌓이는데, `member_total_value()` 호출 시 전체 테이블 스캔 발생. `models.py:76` 이후에 `__table_args__ = (db.Index('idx_txn_room_user', 'room_id', 'user_id'),)` 추가, `models.py:88` 이후에 `__table_args__ = (db.Index('idx_dep_room_user', 'room_id', 'user_id'),)` 추가로 즉시 해결 가능.
+
+- **`get_quiz()` 쿨다운 체크와 상태 갱신이 원자적이지 않음** (`app.py:1200-1214`): `remaining = state.get('cooldown_until', 0) - time.time()` 체크 후 `_quiz_state[key] = {'qid': ..., 'cooldown_until': 0}` 저장 사이에 쓰레드 전환이 발생하면 두 요청이 동시에 쿨다운 없이 문제를 받을 수 있음. `threading.Lock()` (방별로 `_quiz_locks: dict = {}` 관리)으로 check-then-set을 원자화하거나, 최소한 `_quiz_state[key]`에 갱신 전 임시 마커를 먼저 저장해 중복 진입을 방지하면 공정성 확보. `submit_quiz()`의 쿨다운 설정(`app.py:1286`)도 동일한 락 내에서 처리 필요.
+
+- **`create_room()` 방 이름 길이 검증 하한선만 있고 상한선 없음** (`app.py:333-334`): `if not name or len(name) < 2` 체크만 있어 100자 이상의 방 이름도 허용됨. `Room.name` 컬럼이 `db.String(100)`(`models.py:27`)이므로 실제로는 100자가 최대이지만, 검증 에러 없이 DB 레벨에서 잘릴 수 있음. `if len(name) > 50: return jsonify({'error': '방 이름은 50자 이하'})` 추가 + 프론트엔드 `room-name` 입력에 `maxlength="50"` 속성 추가(`index.html:63`)로 UI·서버 검증 일치 가능.
+
+- **`_lot_round_due()` 에서 `pct >= 2/3` 조건이 게임 마지막 1/3 전체에 걸쳐 복권 트리거 가능** (`app.py:161-170`): `pct >= 2/3 and 2 not in done` 조건은 게임의 67~100% 구간 전체에서 `round=2` 복권을 트리거 가능하게 함. `_auto_start_lottery_if_due()` 가 `get_room()` 폴링마다 호출되므로, 진행자가 룰렛 직전에 `round=2` 복권을 건너뛰면 다음 폴링(10초 후)에서 즉시 재트리거될 수 있음. `lottery_skip()`이 `done` set에 round를 추가하므로 재트리거는 안 되지만, `_lot_round_due()` 로직이 `1/3 ~ 2/3` 구간에서 `round=1`, `2/3 ~ 1` 구간에서 `round=2`만을 정확히 담당한다는 주석이 없어 유지보수자가 의도를 파악하기 어려움. 조건 앞에 `# 1/3 경과 시 1회, 2/3 경과 시 2회` 주석 한 줄 추가 + 반환값 타입 힌트 `-> Optional[int]` 추가 권장 (`app.py:161`).
+
+- **`_end_room()`에서 `db.session.commit()` 이후 인메모리 상태 정리 순서** (`app.py:141-152`): `db.session.commit()` 이후에 `cleanup_room_service()`, `_lots.pop()`, `_rlt_active.pop()` 등이 실행됨. commit 성공 후 예외가 발생해 인메모리 정리가 중단되면 (예: `_quiz_state` 정리 중 `KeyError`), 다음 `get_room()` 호출에서 이미 종료된 방에 대해 잘못된 상태가 반환될 수 있음. `try/finally` 블록으로 인메모리 정리를 보장하거나, `db.session.commit()` 전에 인메모리 상태를 로컬 변수에 미리 수집해 commit 성공 후 일괄 정리하는 방식으로 원자성 향상 가능 (`app.py:141-152` 블록 재구조화).
+
+---
