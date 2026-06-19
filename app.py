@@ -165,8 +165,14 @@ def _lot_round_due(room, remaining, total_s):
     if cur and cur.get('state') in ('picking', 'drawing'): return None
     done = lot.get('done', set())
     pct = 1 - remaining / total_s  # fraction elapsed
-    if pct >= 1/3 and pct < 2/3 and 1 not in done: return 1
-    if pct >= 2/3 and 2 not in done: return 2
+    if total_s > 3600:  # 60분 초과 → 1/5 주기 4회
+        if pct >= 1/5 and pct < 2/5 and 1 not in done: return 1
+        if pct >= 2/5 and pct < 3/5 and 2 not in done: return 2
+        if pct >= 3/5 and pct < 4/5 and 3 not in done: return 3
+        if pct >= 4/5 and 4 not in done: return 4
+    else:               # 60분 이하 → 1/3 · 2/3 주기 2회
+        if pct >= 1/3 and pct < 2/3 and 1 not in done: return 1
+        if pct >= 2/3 and 2 not in done: return 2
     return None
 
 def _do_reveal(rid, cur):
