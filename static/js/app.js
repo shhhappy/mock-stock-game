@@ -984,6 +984,9 @@ async function openRouletteModal() {
   const wheel = document.getElementById('roulette-wheel');
   wheel.style.transition = 'none';
   wheel.style.transform = 'rotate(0deg)';
+  const bnp = document.getElementById('bomb-news-popup');
+  if (bnp) bnp.style.display = 'none';
+  if (_newsPopupTimer) { clearTimeout(_newsPopupTimer); _newsPopupTimer = null; }
   document.getElementById('roulette-overlay').style.display = 'flex';
   const pr = await api.post(`/api/rooms/${S.room.id}/minigame/open`, {}).catch(() => null);
   if (pr?.paused) {
@@ -1112,6 +1115,9 @@ async function doSendNews() {
 }
 
 function showBombNews(items, showHint = true) {
+  // 복권 또는 룰렛 진행 중에는 폭탄뉴스 표시 안 함
+  if (document.getElementById('lottery-overlay')?.style.display === 'flex') return;
+  if (document.getElementById('roulette-overlay')?.style.display === 'flex') return;
   const popup  = document.getElementById('bomb-news-popup');
   const content = document.getElementById('bomb-news-content');
   const bar    = document.getElementById('bomb-news-bar');
@@ -2149,6 +2155,9 @@ async function doSubmitLotteryPick() {
 }
 
 function _showLotParticipantWaiting(d) {
+  const _bnp = document.getElementById('bomb-news-popup');
+  if (_bnp) _bnp.style.display = 'none';
+  if (_newsPopupTimer) { clearTimeout(_newsPopupTimer); _newsPopupTimer = null; }
   document.getElementById('lottery-picker-section').style.display = 'none';
   document.getElementById('lottery-waiting-section').style.display = 'block';
   document.getElementById('lottery-result-section').style.display = 'none';
@@ -2190,6 +2199,9 @@ function _showLotteryResult(d, isHost) {
     }
     openModal('modal-lottery-result');
   } else {
+    const _bnp2 = document.getElementById('bomb-news-popup');
+    if (_bnp2) _bnp2.style.display = 'none';
+    if (_newsPopupTimer) { clearTimeout(_newsPopupTimer); _newsPopupTimer = null; }
     document.getElementById('lottery-picker-section').style.display = 'none';
     document.getElementById('lottery-waiting-section').style.display = 'none';
     const res = document.getElementById('lottery-result-section');
