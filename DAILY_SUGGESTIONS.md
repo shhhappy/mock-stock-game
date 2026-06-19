@@ -712,3 +712,41 @@
 - **`_end_room()`에서 `db.session.commit()` 이후 인메모리 상태 정리 순서** (`app.py:141-152`): `db.session.commit()` 이후에 `cleanup_room_service()`, `_lots.pop()`, `_rlt_active.pop()` 등이 실행됨. commit 성공 후 예외가 발생해 인메모리 정리가 중단되면 (예: `_quiz_state` 정리 중 `KeyError`), 다음 `get_room()` 호출에서 이미 종료된 방에 대해 잘못된 상태가 반환될 수 있음. `try/finally` 블록으로 인메모리 정리를 보장하거나, `db.session.commit()` 전에 인메모리 상태를 로컬 변수에 미리 수집해 commit 성공 후 일괄 정리하는 방식으로 원자성 향상 가능 (`app.py:141-152` 블록 재구조화).
 
 ---
+
+## 2026-06-19 (2차)
+
+### 추가하면 좋을 기능
+
+- **게임 60분 경계에서 복권 스케줄 불일치** (`app.py:168`): 최근 커밋(`d279ce2`)으로 추가된 `if total_s > 3600` 조건에서, 정확히 60분(=3600초) 게임은 2회 스케줄(1/3·2/3 주기)을 사용하고, 60분 1초(3601초) 이상 게임은 4회 스케줄(1/5·2/5·3/5·4/5 주기)을 사용함. 교사가 게임 시간을 "60분"으로 설정하면 직관적으로 4회 스케줄이 적용될 것으로 기대할 수 있어 혼란 유발. `>` 를 `>=` 로 바꾸거나, UI 상 "60분 이상이면 복권 4회" 안내 문구를 방 생성 화면(`index.html:63` 부근 게임 설정 섹션)에 추가하면 해결.
+
+- **복권 번호 선택 화면에 "랜덤 선택" 버튼 없음** (`app.js:2106-2154`): 학생이 1~45 중 6개를 하나씩 클릭해야 해 제한 시간(60초) 내에 번호 선택을 완료하지 못하는 경우 발생. 기존 "제출하기" 버튼 옆에 "랜덤 선택" 버튼을 추가하고, 클릭 시 `Array.from({length:45},(_,i)=>i+1).sort(()=>Math.random()-.5).slice(0,6).sort((a,b)=>a-b)` 로 자동 선택·그리드 표시·counts 갱신하면 10초 이상 걸리는 번호 선택을 1클릭으로 단축 가능. 서버 변경 불필요, `app.js` 25줄 이내 구현.
+
+- **참여자 게임 화면에 방 설정 정보 미표시** (`app.js:587-597`, `index.html` screen-p-game): 학생 게임 화면 상단 바에 타이머(`pg-timer`)만 있고 시작 자금·예금 금리가 전혀 보이지 않음. "예금 금리가 몇 %예요?" 질문이 수업 중 반복됨. 타이머 아래 `<div style="font-size:10px;color:var(--muted)">시작 자금 ${krw(S.room.starting_cash)} · 금리 ${S.room.deposit_rate}%</div>`를 `enterParticipantGame()` 내 `app.js:596`에서 동적으로 주입하면 한 줄로 해결.
+
+- **폴링 실패 시 연결 상태 알림 없음** (`app.js:608-648`): 참여자 poll interval(10초) 내 `api.get()` 응답이 에러 객체이거나 `fetch` 자체가 예외를 던져도 조용히 넘어가 학생이 연결이 끊겼는지 모름. 실패 횟수를 카운트해 3회 연속 실패 시 `toast('⚠️ 서버 연결이 불안정합니다. 새로고침을 시도하세요.', 'error')` 를 표시하고, 다음 성공 응답에서 카운트를 초기화하면 학교 인트라넷 환경에서 학생이 자발적으로 수동 새로고침할 수 있는 시각적 단서 제공. `app.js:610` 이전에 `let _pollFailCount = 0` 선언, poll 콜백에 `try/catch` 래퍼 추가로 구현 가능.
+
+- **결과 화면에서 미니게임(룰렛·복권) 수익 분리 표시 없음** (`app.py:784-793`, `app.js:1724-1741`): `total_value`에 투자 수익과 룰렛·복권 당첨금이 합산되어 "진짜 투자 실력"과 "운"이 구분되지 않음. `get_rankings()` 응답에 `minigame_profit` 필드를 추가(`RoomTransaction.query.filter_by(room_id=rid, user_id=m.user_id, action='RLT')` + `note='복권'` 포함 ADJ 합산)하고, 결과 화면 "내 결과" 카드에 "투자 손익: X원 / 미니게임 손익: Y원" 두 줄을 표시하면 교육적 반성 포인트가 명확해짐 (`app.py:788`에 필드 추가, `app.js:1727`에 렌더링 추가).
+
+- **진행자 게임 이벤트 로그 없음** (`app.py:647-670`, `app.py:1299-1314`): `force_price()`, `market_event()`, 뉴스 수동 트리거 이벤트가 서버에 기록되지 않아 진행자가 "아까 삼성전자를 몇 % 올렸지?" 확인 불가. `_event_log: dict = {}` (방별 리스트)를 선언하고 각 진행자 조작 함수에서 `_event_log.setdefault(rid, []).append({'ts': datetime.now(KST).strftime('%H:%M:%S'), 'action': label})`를 삽입. `GET /api/rooms/<rid>/host/event-log` 엔드포인트로 노출하고 진행자 대시보드 하단에 최근 이벤트 10개 피드를 표시하면 수업 중 이벤트 추적 가능. `_end_room()`에서 해당 로그도 정리.
+
+- **복권 결과 화면에서 참여자별 번호 나열이 학번/이름 없이 uid 문자열로 표시** (`app.js:2190-2197`, `app.py:1103-1107`): `get_lottery()` → `all_results` 딕셔너리의 키가 `str(user.id)` (숫자 문자열)이며, 진행자 결과 모달 테이블의 "번호" 열에 uid가 아닌 학생 이름을 표시하지 않음. 서버 `app.py:1103`에서 `all_results`를 빌드할 때 `{uid_str: {'matched':…, 'prize':…, 'picks':…, 'username': u.username}}` 형태로 `username`을 포함하고, `app.js:2191`의 테이블 렌더링에서 `uid` 대신 `r.username`을 첫 열에 표시하면 진행자가 누가 당첨됐는지 즉시 파악 가능.
+
+---
+
+### 제거/단순화할 것들
+
+- **`get_room()` 룰렛 자동 트리거 시 N+1 쿼리** (`app.py:421-426`): 게임 잔여 5초 이하 룰렛 트리거 체크에서 `non_host` 멤버 전체를 가져온 뒤 각 멤버별로 `RoomTransaction.query.filter_by(room_id=rid, user_id=m.user_id, action='RLT').count()`를 개별 호출함. 30명 게임이라면 30회 COUNT 쿼리가 게임 마지막 10초 구간의 모든 `get_room()` 폴링마다 반복 발생. `db.session.query(db.func.count()).filter(RoomTransaction.room_id==rid, RoomTransaction.action=='RLT').scalar()` 한 번으로 총 RLT 건수를 조회 후 `< len(non_host) * 3` 비교하거나, `any(...)` 생성식 대신 서브쿼리로 단일 쿼리로 대체하면 N → 1 건으로 단순화 가능 (`app.py:423-426`).
+
+- **`minigame_close()` 내 deprecated `Room.query.get(rid)` 사용** (`app.py:945`): `_rlt_lock` 블록 내부에서 `room = Room.query.get(rid)`를 호출함. 이전 항목들에서 `.query.get_or_404()` 교체를 권장했으나, 이 함수의 `.query.get()` (Not Found 시 None 반환 패턴)은 별도로 남아 있음. SQLAlchemy 2.0에서 동일하게 폐기 예정이므로 `db.session.get(Room, rid)` 로 교체 필요. 반환값이 None일 때 `if not room: return jsonify({'ok': True})` 가드도 함께 추가하면 안전 (`app.py:945`).
+
+- **`loadParticipantRankings()` 에러 객체를 "참여자 없음"으로 오인** (`app.js:1642-1643`): `api.get()` 실패 시 `{error: 'HTTP 500'}` 객체가 반환되는데, 다음 줄의 `if (!data.length)` 체크에서 `undefined`(falsy)로 평가되어 "참여자 없음" 빈 화면을 보여줌. 서버 오류와 실제 빈 방이 동일하게 렌더링됨. `if (data.error || !Array.isArray(data)) return;` 가드를 `app.js:1642` 직전에 추가하고, 네트워크 오류일 경우 이전 렌더링을 유지하거나 토스트를 표시하면 혼란 방지.
+
+- **`openStockModal()` 포트폴리오 탭 fallback에서 `change_pct`에 매수 수익률 혼입** (`app.js:1522-1524`): 포트폴리오 탭 보유 종목의 "매수/매도" 버튼 클릭 시 `openStockModal('${h.symbol}', {…, change_pct: ${h.gain_pct}})` 형태로 호출. `h.gain_pct`는 평균 매수가 대비 평가손익률이지만, 모달 `ms-change` 요소에 "▲ +3.45%"처럼 오늘의 가격 변동률인 것처럼 표시됨. `S.stocks.find(s => s.symbol === h.symbol)` 로 현재 시장 데이터를 우선 조회하거나, `openStockModal()` 첫 줄에서 `S.stocks.find()`로 최신 데이터를 덮어쓰는 로직을 추가하면 올바른 일중 변동률 표시 가능 (`app.js:1292-1294`에 overwrite 로직 추가).
+
+- **`startConfetti()` requestAnimationFrame 루프 화면 이탈 후에도 계속 실행** (`app.js:1761-1800`): `requestAnimationFrame(draw)` 재귀 호출로 동작하는 색종이 애니메이션이 `goHome()`·`showScreen()` 호출로 결과 화면을 벗어나도 계속 실행됨. `alpha <= 0` 이 될 때까지 불필요한 GPU·CPU를 소모. `let _confettiRaf = null` 변수에 RAF ID를 저장하고 (`_confettiRaf = requestAnimationFrame(draw)` 로 변경), `showLanding()` 함수(`app.js:92-97`) 내에서 `if (_confettiRaf) { cancelAnimationFrame(_confettiRaf); _confettiRaf = null; }` 를 추가하면 화면 이탈 즉시 루프 중단 가능.
+
+- **`_do_reveal()` 당첨자별 멤버 개별 DB 조회** (`app.py:191-193`): 복권 결과 적용 시 `cur.get('picks', {}).items()` 루프 내에서 매 반복마다 `RoomMember.query.filter_by(room_id=rid, user_id=uid).first()`를 호출. 30명 게임이라면 30건의 SELECT가 발생. 함수 진입부에서 `member_map = {m.user_id: m for m in RoomMember.query.filter_by(room_id=rid).all()}`로 일괄 로드 후 `member_map.get(uid)`로 O(1) 조회하면 30 → 1건으로 단순화 (`app.py:178` 함수 시작 직후 한 줄 추가, `app.py:191` 조회 제거). 이미 `_auto_start_lottery_if_due()`에서 `member_count = RoomMember.query.filter_by().count()`를 호출하므로 해당 결과를 `cur` 딕셔너리에 미리 저장하는 것도 고려.
+
+- **`force_price()` 뉴스 생성 시 `time.time()` 이중 호출** (`stock_service.py:237-240`): `self._news = {'timestamp': time.time(), ...}` 와 `self._last_news_ts = time.time()` 이 두 개의 별도 `time.time()` 호출로 이루어져 있음. 두 값이 미세하게 달라지면 `_maybe_generate_news()` 내 `now - self._last_news_ts >= self._news_ttl` 와 `data.timestamp > S.newsTs` (프론트) 비교가 서로 다른 기준을 사용하게 됨. `now = time.time()`을 한 번 호출해 두 곳에 동일 값을 할당하면 논리적 일관성 보장 (`stock_service.py:235` 에 `now = time.time()` 추가, 237·240번 줄에서 `now` 참조).
+
+---
