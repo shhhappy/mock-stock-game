@@ -782,3 +782,37 @@
 - **`_set_sqlite_pragmas()`가 PostgreSQL 환경에서도 실행됨** (`app.py:18-29`): `db.engine` 전역 `"connect"` 이벤트로 등록된 `_set_sqlite_pragmas()`가 `DATABASE_URL` 환경변수로 PostgreSQL을 사용할 때도 실행됨. psycopg2는 `PRAGMA` 명령을 `ProgrammingError`로 처리할 수 있어 Render에서 PostgreSQL로 전환 시 연결 자체가 실패할 위험. `app.py:29` 이벤트 등록 직전에 `if 'sqlite' in str(db.engine.url):` 조건 가드를 추가하면 SQLite 전용 최적화를 안전하게 분리 가능.
 
 ---
+
+## 2026-06-20 (2차)
+
+### 추가하면 좋을 기능
+
+- **`get_history()` `interval` 파라미터 완전 무시 → 모든 차트 탭에서 일봉만 표시** (`stock_service.py:281`, `stock_service.py:292-306`): `get_history(symbol, period, interval)` 함수가 `interval` 파라미터를 받지만 본체에서 전혀 사용하지 않음. `app.py:684`의 `pm` 딕셔너리는 `'1d'→interval='5m'`, `'1w'→interval='30m'`, `'1y'→interval='1wk'` 등 의미 있는 값을 전달하지만, 내부 `n_bars` 딕셔너리와 `now - i * 86400`(1일 고정 간격)은 이를 완전히 무시. "오늘(1일)" 탭에 오늘의 5분봉 대신 지난 30일치 일봉이 표시되고 "1년" 탭도 30개 일봉에 불과해 차트 탭이 실질적으로 전혀 다르게 보이지 않음. 수정 방법: `step_secs = {'5m':300,'30m':1800,'1d':86400,'1wk':604800}.get(interval,86400)` 변수를 추가하고 `now - i * step_secs` 로 봉 간격 결정, 인트라데이(`step_secs < 86400`)인 경우 `date_str`을 `'%H:%M'` 포맷으로 교체하면 기간별 올바른 차트 표시 가능 (`stock_service.py:296` 한 줄 수정).
+
+- **`host_adjust()` `delta=0` 허용으로 더미 `RoomTransaction` 생성** (`app.py:564-569`): `delta = float(d.get('delta', 0))` 이후 delta 값 검증 없이 바로 `db.session.add(RoomTransaction(... amount=delta ...))` 실행. 교사가 금액을 입력하지 않고 "조정" 버튼을 누르면 `amount=0` 거래 기록이 학생 내역에 영구 기록됨. 클라이언트 `doAdjust()`(`app.js:489`)의 `isNaN(delta)` 체크는 `delta=0`을 통과시킴. `app.py:565` 직후에 `if delta == 0: return jsonify({'error': '조정 금액을 입력하세요'}), 400`, `app.js:493`에도 `if (delta === 0) { err.textContent = '금액을 입력하세요.'; return; }` 추가 권장.
+
+- **`lobby_members` 인가 없음 → 로그인만 되면 모든 방의 멤버 목록 열람 가능** (`app.py:546-554`): `@login_required`만 있고 해당 방의 호스트·멤버 여부 확인이 없음. 로그인한 학생이 `GET /api/rooms/1/host/lobby-members`부터 순차 호출하면 서비스 전체 참가자 이름·user_id를 수집 가능. 2026-06-12에 URL 명칭 혼란은 지적했으나 실제 권한 누락 자체는 미지적. `user = cur_user(); if room.host_id != user.id and not RoomMember.query.filter_by(room_id=rid, user_id=user.id).first(): return jsonify({'error': '권한 없음'}), 403` 체크 추가로 해결.
+
+- **`gen_code()` 10회 실패 시 중복 코드 반환 → `IntegrityError` → 500 오류** (`models.py:8-13`): 10회 시도 후에도 고유 코드를 찾지 못하면 마지막 생성값을 그대로 반환. `Room.code = db.Column(db.String(6), unique=True)`이므로 충돌 시 `create_room()` 커밋이 `IntegrityError` → 500 HTML → 프론트 `api.post()` JSON 파싱 실패(`SyntaxError`) → 조용히 오류 발생. `create_room()`에서 `db.session.commit()` 주위에 `try/except IntegrityError: db.session.rollback(); return jsonify({'error': '방 생성 실패. 재시도하세요.'}), 500` 래퍼 추가, 또는 `gen_code()`를 `for _ in range(20)`으로 재시도 횟수 늘리고 최종 반환 전에도 충돌 체크하도록 강화 가능.
+
+- **`startTimer()` 클라이언트 시계 오차 → 학생마다 다른 카운트다운 표시** (`app.js:767`): `rem = Math.floor((new Date(S.room.end_time) - new Date()) / 1000)` — `new Date()`는 브라우저/OS 로컬 시계를 사용. 학생 기기 시계가 3분 빠르거나 느리면 카운트다운이 앞서거나 뒤처져 "종료 1분 전" 예금 만기 경고와 마지막 거래 기회가 불공평하게 분배됨. 개선 방법: 폴링 응답 `S.room.remaining_seconds`를 기준으로 `let _localRem = S.room.remaining_seconds; let _pollAt = Date.now();`를 저장하고, 매 tick마다 `Math.max(0, _localRem - Math.floor((Date.now() - _pollAt) / 1000))`으로 계산하면 매 폴링마다 서버 기준으로 보정되는 정확한 타이머 구현 가능 (`app.js:757-773` 대상).
+
+- **`trade()` 응답에 업데이트된 보유 수량 미포함 → `S.tradeHolding` 로컬 오차 누적** (`app.py:732-736`, `app.js:1313-1321`): `trade()` 응답 `{message, cash}`에 `shares` 값이 없어 프론트엔드가 `S.tradeHolding += shares`로 로컬 계산에 의존. 퀴즈 오답 자동 청산·룰렛 베팅 강제 매도 등 서버 측 자동 처리가 병행될 경우 `S.tradeHolding`이 실제 DB 보유량과 누적 오차를 가져 모달 "현재 보유" 수량이 틀리게 표시됨. `app.py:731` holding 처리 후 `new_shares = holding.shares if holding else 0`을 저장해 응답에 `'shares': new_shares` 추가, `app.js:1316`에서 `S.tradeHolding = data.shares`로 서버 정확값 직접 사용하면 오차 근본 제거.
+
+---
+
+### 제거/단순화할 것들
+
+- **`get_history()` 이중 락 사이 가격 변경 시 캐시 불일치** (`stock_service.py:285-309`): 첫 `with self._lock:`에서 `current = self._prices[symbol]`을 읽고 락 해제 후, 봉 데이터를 생성하고 두 번째 `with self._lock:`에서 캐시에 저장. 두 락 사이에 `force_price()` 등으로 가격이 바뀌면 구 가격 기반 차트가 `HISTORY_CACHE_TTL=120`초 동안 캐시에 남음. 전체 봉 생성 로직을 첫 번째 락 블록 내로 이동(연산이 짧아 블로킹 허용)하거나, 두 번째 락 진입 시 `if self._prices[symbol][1] != current: pass`(캐시 저장 생략)로 일관성 보장 가능 (`stock_service.py:285-309` 구조 재정리).
+
+- **`loadLobbyMembers()` · `loadPLobbyMembers()` 내 `m.username` XSS 미처리** (`app.js:227`, `app.js:581`): 두 함수 모두 `${m.username}`을 innerHTML에 직접 삽입. `app.js:815`에 `escHtml()` 유틸이 이미 정의돼 있으므로 `escHtml(m.username)`으로 교체하면 즉시 방어. `loadLobbyMembers()`의 `onclick="doKickMember(${m.user_id},'${m.username.replace(/'/g,"\\'")}')"`는 따옴표만 처리해 `"` 또는 `)`가 포함된 이름에서 속성이 깨질 수 있음 — `data-uid`·`data-name` 속성과 이벤트 위임 패턴으로 교체 권장.
+
+- **`loadStudentTxn()` `t.note` HTML 미처리 → XSS 가능** (`app.js:524`): `${t.note ? ' · ' + t.note : ''}` 가 innerHTML에 직접 삽입. `t.note`는 `host_adjust()`에서 교사가 자유 입력하는 텍스트(`d.get('note', '진행자 자산 조정')`)이므로 HTML 입력 시 학생 화면에서 렌더링됨. 2026-06-18 (2차)에서 username XSS를 지적했으나 note 필드는 누락. `escHtml(t.note)`로 교체하거나 `createTextNode`로 분리 삽입하면 즉시 방어 가능. `app.js` 내 innerHTML에 서버 데이터를 삽입하는 모든 지점의 일괄 감사 권장.
+
+- **`doEndGame()` `confirm` 없이 즉시 API 호출 → 오터치 시 즉시 종료 위험** (`app.js:538`): `doStartGame()`은 `if (!confirm('게임을 시작하시겠습니까?')) return;` 가드(`app.js:247`)가 있지만 `doEndGame()`에는 없음. 잔여 시간 < 60초이거나 이미 `_ending_soon` 상태에서 한 번 더 탭하면 즉시 `_end_room()` 실행. 모바일에서 오터치로 게임이 바로 종료되는 시나리오가 실제 수업에서 발생 가능. `doEndGame()` 첫 줄에 `if (!confirm('정말 게임을 종료하시겠습니까?')) return;` 한 줄 추가, 또는 종료 버튼 클릭 후 2초 내 재확인을 요구하는 두 번 클릭 방지 패턴 고려.
+
+- **`RoomMember.cash` · `Deposit.amount` · `RoomTransaction.amount` `Float` 타입 부동소수점 오차 누적** (`models.py:49`, `models.py:84`, `models.py:74`): 원화 정수값을 IEEE 754 `float`에 저장하면 수십·수백 회 거래 후 `10000000.000000002` 같은 미세 오차가 쌓임. `m.cash -= amount`(매수) → `m.cash += amount`(매도) 반복 시 오차가 누적되어 동일 금액을 입출금해도 원점으로 돌아오지 않음. `db.Column(db.Numeric(precision=18, scale=0))`으로 교체하거나, 단기적으로 거래·정산 시 `m.cash = round(m.cash, 0)` 을 일관되게 적용하면 표시 오류 방지. `amount = price * shares` 계산도 `round(price * shares, 0)` 처리 권장 (`app.py:715` 등).
+
+- **`host_adjust()` `target = db.session.get(User, target_uid)` None 체크 없음 → AttributeError 크래시 위험** (`app.py:571-572`): `m = RoomMember.query.filter_by(room_id=rid, user_id=target_uid).first()` 성공 후 `target = db.session.get(User, target_uid)`를 호출하지만, User 레코드가 DB에서 직접 삭제되거나 데이터 불일치가 있을 경우 `target = None` → `target.username` 접근 시 `AttributeError` → 500 반환. `if not target: return jsonify({'message': f'uid {target_uid} 자산 {delta:+,.0f}원 조정', 'new_cash': m.cash})` 폴백 한 줄로 크래시 방지 가능 (`app.py:572`). 동일 패턴이 `get_rankings()` (`app.py:785`)에도 존재해 `u.username` 접근 전 None 체크 추가 권장.
+
+---
