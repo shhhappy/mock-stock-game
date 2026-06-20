@@ -750,3 +750,35 @@
 - **`force_price()` 뉴스 생성 시 `time.time()` 이중 호출** (`stock_service.py:237-240`): `self._news = {'timestamp': time.time(), ...}` 와 `self._last_news_ts = time.time()` 이 두 개의 별도 `time.time()` 호출로 이루어져 있음. 두 값이 미세하게 달라지면 `_maybe_generate_news()` 내 `now - self._last_news_ts >= self._news_ttl` 와 `data.timestamp > S.newsTs` (프론트) 비교가 서로 다른 기준을 사용하게 됨. `now = time.time()`을 한 번 호출해 두 곳에 동일 값을 할당하면 논리적 일관성 보장 (`stock_service.py:235` 에 `now = time.time()` 추가, 237·240번 줄에서 `now` 참조).
 
 ---
+
+## 2026-06-20
+
+### 추가하면 좋을 기능
+
+- **룰렛 모달 강제 종료 없을 시 게임 영구 정지 위험** (`app.py:907-932`, `app.py:934-963`): 참가자가 룰렛 모달(`minigame/open`)을 연 뒤 브라우저를 강제 종료하거나 네트워크가 끊기면 `_rlt_active[rid]['count']`가 감소하지 않아 게임이 영구 일시정지 상태에 빠짐. `_rlt_active[rid]`에 `opened_at: time.time()` 타임스탬프를 기록하고, `get_room()` 처리 중 `count > 0`이 10분 이상 지속될 경우 강제 `unfreeze` 및 카운터 초기화를 삽입하거나, 진행자 대시보드에 "룰렛 강제 종료" 버튼을 추가하면 수업 중 먹통 사태를 예방 가능.
+
+- **`change_pct`가 게임 시작가 기준 누적 수익률로 표시됨** (`stock_service.py:121-128`, `stock_service.py:278-279`): `_prev` 딕셔너리가 `_init_prices()`에서 게임 시작 시 1회만 설정되어 이후 갱신되지 않음. 30분 후반부에 표시되는 `▲ +35%`는 게임 시작 이후 누적 상승률이므로, 학생들이 "방금 급등한 것"으로 오해함. `get_price()` 내 가격 갱신 코드(`stock_service.py:185`) 직전에 `self._prev[symbol] = price`를 추가하면 각 주기별 실제 틱 등락률을 보여줄 수 있음.
+
+- **종료된 게임에 재접속 시 결과 화면 복원 불가** (`app.py:278-284`, `app.js:73-79`): `find_active_room()`이 `status.in_(['waiting','active','paused'])`만 검색하므로, 결과가 발표된 방을 브라우저를 닫은 뒤 재접속해도 결과를 볼 방법이 없음. `find_active_room()` 쿼리에 `status='ended'` + `results_published=True` 조건을 추가하거나, `GET /api/auth/me` 응답에 `last_ended_room` 필드를 포함시켜 결과 화면으로 자동 복원하면 수업 후 토론·복습에 활용 가능.
+
+- **진행자 대시보드에 학급 전체 통계 없음** (`app.py:511-531`, `app.js:406-429`): 진행자 순위 화면은 개별 랭킹만 보여주고 "평균 수익률", "수익자 비율", "최대 손실 학생"과 같은 학급 단위 집계 정보가 없음. `host_members` 응답에 `avg_gain_pct`, `positive_count`, `negative_count`를 추가하고 순위 목록 위에 요약 카드를 표시하면, 교사가 "지금 반에서 몇 명이 수익 중이에요?"라는 즉흥적 질문을 수업에 활용 가능.
+
+- **용어사전 검색이 키 입력마다 API 호출 (디바운스 없음)** (`app.js:1891-1894`): `oninput` 이벤트에 연결된 `searchGlossary()`가 키 입력마다 `GET /api/education/glossary?q=...`를 전송하며 한글 IME 조합 단계에서도 반복 호출됨. `loadGlossary()` 시 `S.glossaryData`에 이미 전체 데이터가 캐싱되어 있으므로(`app.js:1869-1871`), API 재호출 없이 `renderGlossary(S.glossaryData.filter(...))` 클라이언트 필터링으로 전환하면 서버 부하를 완전히 제거 가능.
+
+- **퀴즈가 `paused` 상태에서도 제출 가능** (`app.py:1225-1230`, `app.py:1229`): `submit_quiz()`는 `room.status != 'active'`를 체크해 종료 후 제출을 막지만 `'paused'` 상태는 허용함. 복권 진행 중 게임이 자동 일시정지된 상태에서 퀴즈 오버레이가 열려 있는 학생이 제출하면 패널티가 적용됨. `app.py:1229`의 조건을 `room.status not in ('active', 'paused')` 대신 명시적으로 `room.status == 'active'`만 허용하도록 수정하거나, 일시정지 상태에서는 퀴즈 FAB 버튼 자체를 비활성화(`updateTradeButtonState()` 확장)하는 것이 안전.
+
+---
+
+### 제거/단순화할 것들
+
+- **`export_rankings()` N+1 쿼리** (`app.py:1384-1392`): `member_total_value(rid, m.user_id)`를 참가자 수만큼 루프에서 반복 호출하며 각 호출마다 `RoomHolding`·`Deposit` 추가 쿼리 실행. `get_rankings()` 및 `host_members()`의 N+1 패턴(06-11 지적)과 동일한 문제가 엑셀 내보내기에도 존재. 루프 진입 전 `holdings = {h.user_id: [] for ...}` 일괄 로드 후 딕셔너리 그룹화로 교체하면 쿼리 수 O(N)→O(1)으로 단순화 가능.
+
+- **진행자 룰렛 설정 테이블 색상과 실제 룰렛 색상 불일치** (`index.html:222-249`, `app.js:904`): 진행자 룰렛 설정 UI 테이블의 색상 마커(`#c0392b`, `#e67e22`, `#f1c40f`, `#27ae60`, `#3498db`)와 실제 학생 룰렛 휠·범례의 `_RLT_COLORS` 배열(`#e74c3c`, `#3498db`, `#f39c12`, `#2ecc71`, `#9b59b6`)이 서로 다름. 진행자가 "빨간 칸이 꽝"이라고 안내해도 학생 화면에서는 색상 배치가 달라 혼선 발생. `index.html` 설정 테이블의 인라인 컬러를 `_RLT_COLORS`와 동일하게 맞추거나, CSS 변수로 통일하면 해결.
+
+- **`_lots[rid]['done']` Python `set` 타입 → JSON 직렬화 불가** (`app.py:156`, `app.py:200`): 복권 완료 회차를 추적하는 `_lots[rid]['done']`이 `set` 객체로 저장됨. 지금은 인메모리라 문제없지만, 향후 Redis 저장이나 로그 직렬화 시 `json.dumps()` 실패. `set` → `list` 저장 후 `if round_n not in done_list:` 선형 탐색 또는 별도 `set()` 변환으로 조회하는 방식으로 교체하면 구조가 명확해지고 직렬화 안정성 확보.
+
+- **`refreshMyRank()`와 `loadParticipantRankings()` 같은 폴링 주기에서 중복 API 호출** (`app.js:733-751`, `app.js:645-648`): 참가자 게임 폴링(`app.js:611`)에서 `refreshMyRank()`는 매 10초마다 `GET /rankings`를 호출하고, 순위 탭이 활성화된 경우에는 `loadParticipantRankings()`도 동일 API를 중복 호출함. 같은 폴링 사이클에서 rankings API가 2회 연속 실행. `refreshMyRank()` 응답 데이터를 `S.lastRankings`에 저장해두고, 순위 탭 활성 시에는 재요청 없이 그 캐시로 목록을 렌더링하면 요청 1건 절약.
+
+- **`_set_sqlite_pragmas()`가 PostgreSQL 환경에서도 실행됨** (`app.py:18-29`): `db.engine` 전역 `"connect"` 이벤트로 등록된 `_set_sqlite_pragmas()`가 `DATABASE_URL` 환경변수로 PostgreSQL을 사용할 때도 실행됨. psycopg2는 `PRAGMA` 명령을 `ProgrammingError`로 처리할 수 있어 Render에서 PostgreSQL로 전환 시 연결 자체가 실패할 위험. `app.py:29` 이벤트 등록 직전에 `if 'sqlite' in str(db.engine.url):` 조건 가드를 추가하면 SQLite 전용 최적화를 안전하게 분리 가능.
+
+---
