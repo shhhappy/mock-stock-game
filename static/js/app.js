@@ -967,6 +967,33 @@ async function doSetRltConfig() {
   msg.textContent = `적용됨 · 꽝 ${pcts[0]}% / ${mults[1]}배 ${pcts[1]}% / ${mults[2]}배 ${pcts[2]}% / ${mults[3]}배 ${pcts[3]}% / ${mults[4]}배 ${pcts[4]}%`;
 }
 
+let _rltAutoCloseTimer = null;
+let _rltAutoCloseSec = 60;
+
+function _startRltAutoClose() {
+  if (_rltAutoCloseTimer) clearInterval(_rltAutoCloseTimer);
+  _rltAutoCloseSec = 60;
+  const el = document.getElementById('rlt-auto-timer');
+  if (el) el.textContent = `⏱ ${_rltAutoCloseSec}초 후 자동으로 닫힙니다`;
+  _rltAutoCloseTimer = setInterval(() => {
+    _rltAutoCloseSec--;
+    if (el) el.textContent = _rltAutoCloseSec > 0
+      ? `⏱ ${_rltAutoCloseSec}초 후 자동으로 닫힙니다`
+      : '';
+    if (_rltAutoCloseSec <= 0) {
+      clearInterval(_rltAutoCloseTimer);
+      _rltAutoCloseTimer = null;
+      closeRoulette();
+    }
+  }, 1000);
+}
+
+function _stopRltAutoClose() {
+  if (_rltAutoCloseTimer) { clearInterval(_rltAutoCloseTimer); _rltAutoCloseTimer = null; }
+  const el = document.getElementById('rlt-auto-timer');
+  if (el) el.textContent = '';
+}
+
 async function openRouletteModal() {
   const data = await api.get(`/api/rooms/${S.room.id}/minigame`);
   if (data.error || data.spins_left <= 0) return;
@@ -988,6 +1015,7 @@ async function openRouletteModal() {
   if (bnp) bnp.style.display = 'none';
   if (_newsPopupTimer) { clearTimeout(_newsPopupTimer); _newsPopupTimer = null; }
   document.getElementById('roulette-overlay').style.display = 'flex';
+  _startRltAutoClose();
   const pr = await api.post(`/api/rooms/${S.room.id}/minigame/open`, {}).catch(() => null);
   if (pr?.paused) {
     S.room.status = 'paused';
@@ -1079,6 +1107,7 @@ function resetRltSpin() {
 }
 
 async function closeRoulette() {
+  _stopRltAutoClose();
   document.getElementById('roulette-overlay').style.display = 'none';
   const cr = await api.post(`/api/rooms/${S.room.id}/minigame/close`, {}).catch(() => null);
   if (cr?.ended) {

@@ -36,6 +36,9 @@ class Room(db.Model):
     end_time = db.Column(db.DateTime, nullable=True)
     paused_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    rlt_triggered = db.Column(db.Boolean, default=False)
+    results_published = db.Column(db.Boolean, default=False)
+    lottery_rounds_done = db.Column(db.String(50), default='')
 
     members = db.relationship('RoomMember', backref='room', lazy=True, cascade='all, delete-orphan')
     deposits = db.relationship('Deposit', backref='room', lazy=True, cascade='all, delete-orphan')
