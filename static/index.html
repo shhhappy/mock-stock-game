@@ -210,10 +210,11 @@
   <!-- 설정 탭 -->
   <div id="htab-settings-content" style="padding:16px" hidden>
 
-    <div style="display:flex;gap:10px;margin-bottom:12px">
+    <div style="display:flex;gap:10px;margin-bottom:8px">
       <button class="btn" id="pause-btn" onclick="doPauseGame()" style="flex:1;background:var(--warn);color:#000;font-weight:700">⏸ 일시정지</button>
       <button class="btn btn-danger" id="end-game-btn" onclick="doEndGame()" style="flex:1">⏹ 게임 종료</button>
     </div>
+    <button class="btn btn-secondary btn-full btn-sm" onclick="openManualLotteryModal()" style="margin-bottom:12px">🎟 복권 지금 시작하기</button>
 
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px">
       <div class="section-title" style="margin-bottom:12px">⏱ 주기 설정</div>

@@ -1082,12 +1082,20 @@ def lottery_start(rid):
     if room.host_id != user.id: return jsonify({'error': '진행자만 시작할 수 있습니다.'}), 403
     if room.status != 'active': return jsonify({'error': '게임이 진행 중이 아닙니다.'}), 400
     d = request.json or {}
-    round_n = int(d.get('round', 1))
     prize = float(d.get('prize', 0))
     if prize <= 0: return jsonify({'error': '상금을 입력하세요.'}), 400
     lot = _lots.setdefault(rid, {'done': set()})
     if (lot.get('current') or {}).get('state') in ('picking', 'drawing'):
         return jsonify({'error': '이미 진행 중인 복권이 있습니다.'}), 400
+    raw_round = d.get('round')
+    if raw_round is None:
+        # 수동 시작: done에 없는 번호 자동 배정 (99~)
+        done = lot.get('done', set())
+        round_n = 99
+        while round_n in done:
+            round_n += 1
+    else:
+        round_n = int(raw_round)
     # Auto-pause the game while lottery runs
     room.status = 'paused'
     room.paused_at = datetime.utcnow()

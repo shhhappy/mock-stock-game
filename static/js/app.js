@@ -2041,16 +2041,27 @@ function openLotteryStartModal() {
   openModal('modal-lottery-start');
 }
 
+function openManualLotteryModal() {
+  if (!S.room || S.room.status !== 'active') { toast('게임 진행 중에만 수동 복권을 시작할 수 있습니다.', 'error'); return; }
+  S.lotteryRoundDue = null;  // null = 수동 시작
+  const memberCount = S.room?.member_count ?? 0;
+  document.getElementById('lottery-prize-input').value = memberCount * 30000000 || '';
+  document.getElementById('lottery-start-err').textContent = '';
+  openModal('modal-lottery-start');
+}
+
 async function doStartLottery() {
   const prize = parseFloat(document.getElementById('lottery-prize-input').value);
   if (!prize || prize <= 0) {
     document.getElementById('lottery-start-err').textContent = '상금을 입력하세요.';
     return;
   }
-  const d = await api.post(`/api/rooms/${S.room.id}/lottery/start`, { round: S.lotteryRoundDue, prize });
+  const d = await api.post(`/api/rooms/${S.room.id}/lottery/start`, {
+    round: S.lotteryRoundDue ?? null, prize
+  });
   if (d.error) { document.getElementById('lottery-start-err').textContent = d.error; return; }
   closeModal('modal-lottery-start');
-  toast(`제${S.lotteryRoundDue}회 복권 추첨 시작!`, 'info');
+  toast(S.lotteryRoundDue ? `제${S.lotteryRoundDue}회 복권 추첨 시작!` : '추가 복권 추첨 시작!', 'info');
   S.lotteryHostModalOpen = false;
   _lotHostPicks = [];
   _startLotPolling(S.room.id);
