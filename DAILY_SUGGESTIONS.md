@@ -846,3 +846,37 @@
 - **`_set_sqlite_pragmas()` 이벤트 리스너가 `db.create_all()` 이후 등록** (`app.py:26-29`): `with app.app_context(): db.create_all()` 실행 시 DB 연결이 생성되지만 pragma 이벤트 리스너(`_sa_event.listen(db.engine, "connect", _set_sqlite_pragmas)`)는 그 이후에 등록됨. 스키마 생성 연결은 WAL 모드·busy_timeout 없이 동작. pragma 리스너 등록을 `db.create_all()` 호출 이전으로 이동하거나, 스키마 생성 후 `with db.engine.connect() as conn: conn.execute(text("PRAGMA journal_mode=WAL"))` 명시적 초기화 추가 권장.
 
 ---
+
+## 2026-06-21 (2차)
+
+### 추가하면 좋을 기능
+
+- **URL `?code=` 파라미터 미활용으로 QR 스캔 후에도 코드 수동 입력 필요** (`app.js:197-201`, `index.html:참여 폼`): `_makeQR()`이 `${location.origin}${location.pathname}?code=${S.room.code}` URL을 생성하지만 입장 화면 초기화 시 이 파라미터를 읽어 `join-code` 필드에 자동 채우는 코드가 없음. 학생이 QR을 스캔해 들어와도 6자리 코드를 손으로 다시 입력해야 함. `window.addEventListener('DOMContentLoaded', () => { const c = new URLSearchParams(location.search).get('code'); if (c) { document.getElementById('join-code').value = c; document.getElementById('join-tab-btn')?.click(); } })` 10줄로 해결 가능하며 모바일 수업 시 입장 시간을 크게 단축할 수 있음.
+
+- **복권 picking 단계에서 진행자가 참여 현황을 볼 수 없음** (`app.py:1131-1147`): `get_lottery()`가 진행자에게 `revealed` 단계의 `all_results`는 반환하지만 `picking` 단계에서 몇 명이 이미 번호를 선택했는지 (`len(cur['picks'])`)를 반환하지 않음. 진행자가 "23명 중 몇 명이 선택했나요?" 상황에서 추첨 타이밍을 잡기 어려움. `app.py:1139` `result` 딕셔너리에 `'picking_count': len(cur.get('picks', {}))` 필드를 추가하고 진행자 복권 모달에 "선택 완료: N명" 텍스트를 표시하면 수업 흐름 개선.
+
+- **결과 화면에 클래스 전체 평균 수익률 없음** (`app.js:1702-1720`): `loadResults()`는 개인별 순위를 렌더링하지만 클래스 평균 수익률이나 평균 최종 자산을 별도로 표시하지 않음. `const avgGain = data.reduce((s,e) => s + e.gain_pct, 0) / data.length`로 한 줄 계산 가능하며, 결과 화면 1등 카드 위에 `<div class="summary-card">클래스 평균 수익률: ${pct(avgGain)}</div>`를 추가하면 수업 마무리 토론에서 교사가 즉각 활용 가능. 수업 후 "우리 반 평균은 +3.2%였는데 코스피는 -0.5%였습니다" 같은 맥락 제공 가능.
+
+- **시장 탭 종목 카드에 보유 수량 뱃지 없음** (`app.js:1287-1311`, `app.js:1445-1453`): 학생이 시장 탭을 보면서 이미 보유한 종목인지 파악하려면 모달을 열거나 포트폴리오 탭을 확인해야 함. `execTrade()` 성공 후 `S.tradeHolding`이 갱신되므로 (`app.js:1447-1450`), `S.holdingMap = {}` 상태를 추가해 `openStockModal()` 응답 및 거래 성공 시 갱신, `renderGrid()` 내 `S.holdingMap[st.symbol] > 0`이면 카드 우하단에 `<span class="chip chip-blue">${n}주</span>` 뱃지를 표시하면 서버 추가 요청 없이 구현 가능. 종목이 47개나 되어 보유 여부를 한눈에 파악하기 어려운 학생에게 큰 도움.
+
+- **`loadGuides()`·`loadTips()` 탭 전환 시마다 무조건 재요청** (`app.js:1933, 1956`): `loadGlossary()`는 `if (!S.glossaryData.length)` 가드로 캐시를 활용하지만 (`app.js:1899`), `loadGuides()`와 `loadTips()`는 탭을 전환할 때마다 `/api/education/guides`와 `/api/education/tips`를 재호출함. 교육 콘텐츠는 게임 내내 변하지 않으므로 `S.guidesData`, `S.tipsData` 배열을 State(`app.js:1-24`)에 추가하고 비어 있을 때만 API를 호출하면 학생 30명 × 탭 전환 횟수만큼의 불필요한 요청을 제거할 수 있음.
+
+- **퀴즈 시간 초과 시 패널티 금액을 화면에 표시하지 않음** (`app.js:875-879`, `app.py:1298`): 시간 초과 시 `submitQuiz(null)`가 호출되어 서버에서 `td.penalty`(오답 패널티 금액)를 수신하지만 (`app.py:1298`에서 `penalty`를 반환), 화면에는 "⏰ 시간 초과!" 이모지와 토스트 메시지만 표시하고 결과 카드에 패널티 금액이 표시되지 않음 (`app.js:876-879`). 정답/오답 케이스처럼 `result.innerHTML`에 `<div style="color:var(--down)">-${td.penalty.toLocaleString()}원 차감</div>`를 추가하면 학생이 결과를 명확히 인지 가능.
+
+---
+
+### 제거/단순화할 것들
+
+- **`stopPolling()`에서 복권 폴링 미정리** (`app.js:779-783`): `stopPolling()`은 `clearInterval(S.pollInterval)`, `clearInterval(S._waitingPoll)`, `stopNewsPolling()`을 호출하지만 `_stopLotPolling()`을 호출하지 않음. 결과 화면으로 전환하거나 홈으로 이동해도 `_lotPollInterval`이 살아 남아 5초마다 `/api/rooms/<rid>/lottery` 요청이 계속 발생. `stopPolling()` 함수 본문 마지막에 `_stopLotPolling()` 한 줄을 추가하면 (`app.js:782` 직후) 해결되며, 종료된 방에 대한 불필요한 폴링과 콘솔 에러가 사라짐.
+
+- **`models.py` `datetime.utcnow` Python 3.12 Deprecation** (`models.py:20, 38, 53, 79, 92`): `default=datetime.utcnow`는 Python 3.12에서 `DeprecationWarning: datetime.utcnow() is deprecated and scheduled for removal`를 발생시킴. `default=lambda: datetime.now(timezone.utc)` 패턴으로 일괄 교체 필요. `app.py` 전체에도 `datetime.utcnow()` 직접 호출이 약 15곳 존재 (`app.py:125, 279, 413, 421, 437, 483, 498, 511, 528...`). `from datetime import datetime, timedelta, timezone`은 이미 임포트되어 있으므로 `utcnow()` → `now(timezone.utc)`로 에디터 일괄 치환 가능.
+
+- **`minigame_close()` 내 `Room.query.get(rid)` 폐기 패턴** (`app.py:977`): 이 함수만 `Room.query.get(rid)` (SQLAlchemy Legacy 패턴)을 사용 중이며 나머지 모든 라우트는 `Room.query.get_or_404(rid)`를 씀. SQLAlchemy 2.0으로 마이그레이션 시 해당 행에서만 오류 발생. `db.session.get(Room, rid)`로 교체하면 통일성 확보 및 Legacy API 의존 제거. 이 함수는 Lock 내부에서 호출되므로 세션 상태 주의가 필요하지만 교체 자체는 단순.
+
+- **`_do_reveal()` 내 Room 이중 조회** (`app.py:226, 233`): `_room_lot = db.session.get(Room, rid)` (`app.py:226`)로 조회한 후 `db.session.commit()`, 이후 `room = db.session.get(Room, rid) if _room_lot is None else _room_lot` (`app.py:233`) 로직이 혼란스러움. 226에서 이미 `_room_lot`을 가져왔으므로 `None`이 될 경우는 방이 삭제된 예외 케이스뿐. 226의 조회 결과를 `room`에 직접 할당하고 `if room:` 가드를 쓰면 코드가 명확해지고 DB 왕복 1회 제거 가능.
+
+- **`renderGrid()` 내 인라인 `onclick` 주입 패턴** (`app.js:1293-1310`): `onclick="openStockModal('${st.symbol}')"` 및 `onclick="toggleWatchlist('${st.symbol}',event)"` 형태로 심볼을 HTML 문자열에 직접 삽입. 현재 심볼은 서버에서 정의된 ASCII 문자열이라 안전하지만, 이벤트 핸들러가 카드 수(47개) × 렌더링 횟수만큼 매번 생성됨. `data-symbol` 속성으로 심볼을 저장하고 `stock-grid`에 이벤트 위임 리스너 1개를 등록하면 이벤트 핸들러 생성 오버헤드를 없애고 미래 확장 시 XSS 위험도 차단 가능.
+
+- **`export_rankings()` N+1 쿼리 패턴** (`app.py:1431-1440`): `export_rankings()`도 `member_total_value(rid, m.user_id)` 루프 패턴 (`app.py:1433`)을 그대로 사용해 참여자 수만큼 RoomHolding·Deposit 쿼리를 반복 실행. `host_members()` (`app.py:554`)·`get_rankings()` (`app.py:817`)과 동일한 N+1 문제. 2026-06-11에 `get_rankings()`의 배치 조회 방식을 권고했으나 엑셀 내보내기에는 적용되지 않음. 세 함수에 공통 `batch_total_values(rid)` 헬퍼(단일 쿼리로 전체 보유·예금 합산)를 추출하면 세 곳 동시 해결 가능.
+
+---
