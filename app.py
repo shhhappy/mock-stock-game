@@ -208,6 +208,7 @@ def _do_reveal(rid, cur):
                  else round(cur['prize'] / 25) if matched == 5
                  else round(cur['prize'] / 18) if matched == 4
                  else round(cur['prize'] / 11) if matched == 3
+                 else 100_000 if matched == 2
                  else 0)
         results[uid_str] = {'matched': matched, 'prize': prize, 'picks': picks}
         if prize > 0:
