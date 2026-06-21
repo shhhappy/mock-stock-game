@@ -1194,6 +1194,11 @@ async function refreshRoomStatus() {
     if (r.lottery_round_due && r.lottery_round_due !== S.lotteryRoundDue) {
       showLotteryNotifyBar(r.lottery_round_due);
     }
+    // Hide notify bar when lottery is actually running
+    if (r.lottery_active) {
+      hideLotteryNotifyBar();
+      S.lotteryRoundDue = null;
+    }
     // Lottery: active → start polling for host
     if (r.lottery_active && !_lotPollInterval && _lotResultRound !== r.lottery_current_round) {
       _startLotPolling(S.room.id);
@@ -2023,8 +2028,6 @@ function _lotCountdown(elemId, deadline) {
 
 function showLotteryNotifyBar(round) {
   S.lotteryRoundDue = round;
-  document.getElementById('lottery-notify-round').textContent = round;
-  document.getElementById('lstart-round').textContent = round;
   const bar = document.getElementById('lottery-notify-bar');
   bar.style.display = 'flex';
 }
@@ -2061,7 +2064,7 @@ async function doStartLottery() {
   });
   if (d.error) { document.getElementById('lottery-start-err').textContent = d.error; return; }
   closeModal('modal-lottery-start');
-  toast(S.lotteryRoundDue ? `제${S.lotteryRoundDue}회 복권 추첨 시작!` : '추가 복권 추첨 시작!', 'info');
+  toast('복권 추첨 시작!', 'info');
   S.lotteryHostModalOpen = false;
   _lotHostPicks = [];
   _startLotPolling(S.room.id);
@@ -2153,7 +2156,6 @@ function _showLotParticipantPicker(d) {
   }
   _lotParticipantPicks = d.my_picks || [];
   _lotPickerSubmitted = !!d.my_picks;
-  document.getElementById('lottery-round-label').textContent = `제${d.round}회 복권`;
   document.getElementById('lottery-prize-display').textContent = (d.prize || 0).toLocaleString() + '원';
   document.getElementById('lottery-picks-count').textContent = _lotParticipantPicks.length;
   const submitBtn = document.getElementById('lottery-submit-btn');

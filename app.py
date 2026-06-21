@@ -330,7 +330,7 @@ def enter():
     d = request.json or {}
     u = d.get('username', '').strip()
     if not u or len(u) < 2 or len(u) > 30:
-        return jsonify({'error': '닉네임은 2~20자 사이여야 합니다.'}), 400
+        return jsonify({'error': '닉네임은 2~30자 사이여야 합니다.'}), 400
     user = User.query.filter_by(username=u).first()
     if not user:
         user = User(username=u)
@@ -413,7 +413,7 @@ def _auto_start_lottery_if_due(room):
     if not round_due: return
     with _lottery_lock:
         lot = _lots.setdefault(room.id, {'done': set()})
-        if (lot.get('current') or {}).get('state') in ('picking', 'drawing', 'revealed'): return
+        if (lot.get('current') or {}).get('state') in ('picking', 'drawing'): return
         member_count = RoomMember.query.filter_by(room_id=room.id).count()
         default_prize = member_count * 30_000_000
         room.status = 'paused'
@@ -1336,7 +1336,8 @@ def submit_quiz(rid):
                             action='ADJ', shares=0, price=0, amount=-take,
                             note='퀴즈 오답 패널티 (예금 차감)'))
         db.session.commit()
-    _quiz_state[key] = {'qid': None, 'cooldown_until': time.time() + 60}
+    prev_seen = (_quiz_state.get(key) or {}).get('seen', set())
+    _quiz_state[key] = {'qid': None, 'cooldown_until': time.time() + 60, 'seen': prev_seen}
     return jsonify({'correct': correct, 'reward': reward, 'penalty': penalty, 'explanation': q['ex']})
 
 

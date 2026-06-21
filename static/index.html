@@ -133,8 +133,8 @@
   </div>
 
   <!-- Lottery notification bar -->
-  <div id="lottery-notify-bar" style="display:none;background:var(--warn);color:#000;padding:10px 14px;display:none;align-items:center;justify-content:space-between;gap:8px">
-    <span style="font-weight:700;font-size:13px">🎟 제<span id="lottery-notify-round">1</span>회 복권 추첨 시간!</span>
+  <div id="lottery-notify-bar" style="display:none;background:var(--warn);color:#000;padding:10px 14px;align-items:center;justify-content:space-between;gap:8px">
+    <span style="font-weight:700;font-size:13px">🎟 복권 추첨 시간!</span>
     <div style="display:flex;gap:6px;flex-shrink:0">
       <button class="btn btn-sm" style="background:#000;color:var(--warn);padding:5px 10px" onclick="openLotteryStartModal()">진행하기</button>
       <button class="btn btn-sm" style="background:rgba(0,0,0,0.2);color:#000;padding:5px 10px" onclick="skipLottery()">건너뛰기</button>
@@ -477,7 +477,7 @@
     <div class="lottery-box">
       <div style="text-align:center;margin-bottom:14px">
         <div style="font-size:30px">🎟</div>
-        <div style="font-size:18px;font-weight:800;color:var(--warn);margin-top:4px" id="lottery-round-label">제1회 복권</div>
+        <div style="font-size:18px;font-weight:800;color:var(--warn);margin-top:4px">🎟 복권 추첨</div>
         <div style="font-size:12px;color:var(--muted);margin-top:3px">상금: <span id="lottery-prize-display">–</span></div>
       </div>
       <!-- Picking section -->
@@ -723,7 +723,7 @@
 <div id="modal-lottery-start" class="modal-overlay" onclick="closeModalOutside(event,'modal-lottery-start')">
   <div class="modal-sheet" style="max-height:55vh">
     <div class="modal-handle"></div>
-    <div class="modal-title">🎟 제<span id="lstart-round">1</span>회 복권 추첨</div>
+    <div class="modal-title">🎟 복권 추첨</div>
     <div class="muted" style="font-size:13px;margin-bottom:14px">참가자들이 1~45 중 6개 번호를 선택합니다. 상금을 입력하세요.</div>
     <div class="form-group">
       <label class="form-label">상금 금액 (원)</label>
