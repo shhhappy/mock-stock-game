@@ -816,3 +816,33 @@
 - **`host_adjust()` `target = db.session.get(User, target_uid)` None 체크 없음 → AttributeError 크래시 위험** (`app.py:571-572`): `m = RoomMember.query.filter_by(room_id=rid, user_id=target_uid).first()` 성공 후 `target = db.session.get(User, target_uid)`를 호출하지만, User 레코드가 DB에서 직접 삭제되거나 데이터 불일치가 있을 경우 `target = None` → `target.username` 접근 시 `AttributeError` → 500 반환. `if not target: return jsonify({'message': f'uid {target_uid} 자산 {delta:+,.0f}원 조정', 'new_cash': m.cash})` 폴백 한 줄로 크래시 방지 가능 (`app.py:572`). 동일 패턴이 `get_rankings()` (`app.py:785`)에도 존재해 `u.username` 접근 전 None 체크 추가 권장.
 
 ---
+
+## 2026-06-21
+
+### 추가하면 좋을 기능
+
+- **`enter()` username 길이 검증과 UI maxlength 불일치 → 유효 입력 거부 버그** (`app.py:304`, `index.html:53,59`): `host-student-id` maxlength=15, `host-name` maxlength=20으로 UI상 최대 합산 36자(15+공백+20)가 가능하지만, 서버는 `len(u) > 30` 조건으로 거부하며 오류 메시지는 "닉네임은 2~20자 사이여야 합니다"로 혼란 유발. 학번 14자+이름 17자인 학생은 입력 가능 범위 내에서 값을 입력해도 서버에서 거부됨. 수정: `app.py:305`의 상한을 `len(u) > 50`으로 완화하거나, 오류 메시지를 "학번+이름 합산 30자 이하" 등 정확한 문구로 교체; 근본 해결은 `index.html`의 두 maxlength를 합산 ≤ 29가 되도록 조정(예: 학번 10, 이름 18).
+
+- **`_results_published` 인메모리 → Render 재시작 시 결과 발표 상태 소실** (`app.py:79`, `app.py:1341-1349`): `_results_published: dict = {}` 전역 변수가 메모리에만 존재. 진행자가 "결과 발표하기"를 클릭한 후 서버가 Render 15분 비활성 재시작으로 내려가면 `_results_published[rid]`가 초기화되어 `screen-waiting-results`에서 대기 중인 학생들이 결과 화면을 영원히 볼 수 없음. 수정: `models.py:Room`에 `results_published = db.Column(db.Boolean, default=False)` 컬럼 추가, `host_publish_results()`에서 `room.results_published = True; db.session.commit()`, `room_dict()` 응답에서 `_results_published.get(rid, room.results_published)`로 DB 값을 폴백으로 사용.
+
+- **`_rlt_triggered`/`_rlt_active` 인메모리 → 재시작 시 게임 영구 일시정지** (`app.py:81,223`, `app.py:417-437`): 게임 종료 5초 전 룰렛 자동 트리거 시 `_rlt_triggered.add(rid)`, `room.status='paused'`가 DB에 저장됨. 서버 재시작 시 `_rlt_triggered = set()`, `_rlt_active = {}` 초기화 → 폴링 재개 후 `rid not in _rlt_triggered` 조건 미충족으로 `minigame_available: False` 반환. 학생에게 룰렛이 뜨지 않아 게임이 영구 일시정지 상태로 잠김. `get_room()` 응답 생성 시 `room.status == 'paused' and room.paused_at and rid not in _rlt_triggered`를 감지해 `_rlt_triggered.add(rid)` 자동 복구하거나, 진행자 대시보드에 "룰렛 강제 종료" 버튼 추가 권장.
+
+- **진행자 전체 학생 공지 기능 없음** (`app.py:599-615`, `index.html:185-190`): 교사가 "지금부터 반도체 섹터에 집중하세요"와 같은 자유 형식 텍스트를 전체 학생에게 즉시 전달할 방법이 없음. 뉴스 시스템은 종목 편향에 연동되어 있어 단순 공지로 쓰기엔 부적절. `POST /api/rooms/<rid>/host/announce` 엔드포인트 + `Room`에 `announcement = db.Column(db.Text, nullable=True)` 컬럼 추가, `room_dict()` 응답에 포함, 프론트 폴링에서 새 공지 감지 시 `toast()` 3초 팝업 표시하면 50줄 이내 구현 가능.
+
+- **방별 활성 종목(섹터) 선택 기능 없음** (`stock_service.py:36-99`, `app.py:334-344`): 47개 종목 전체가 항상 표시됨. 반도체 집중 수업에는 해당 섹터만, 입문 수업에는 10개 이하만 허용하는 설정 불가. `Room` 모델에 `allowed_sectors = db.Column(db.Text, nullable=True)` (JSON 배열 문자열) 추가, `get_stocks()` (`app.py:620-640`)에서 `json.loads(room.allowed_sectors)` 파싱 후 해당 섹터만 필터링, 방 생성 화면(`index.html:42-76`)에 섹터 체크박스 UI 추가. 전체 종목 노출로 인한 학생 혼란 방지에 효과적.
+
+- **예금 최소 금액·최대 건수 제한 없음** (`app.py:847-871`): `create_deposit()` 검증이 `0 < amount`뿐이라 0.01원 예금 생성 가능. 건수 제한도 없어 1원 예금 수백 건 생성 시 `_end_room()` 정산 루프가 비례해 증가. `if amount < 10_000: return jsonify({'error': '최소 예금 금액은 1만원입니다.'}), 400`와 `if Deposit.query.filter_by(room_id=rid, user_id=uid, status='active').count() >= 5: return jsonify({'error': '예금은 최대 5건까지 가능합니다.'}), 400` 두 줄 추가로 방어 가능.
+
+### 제거/단순화할 것들
+
+- **`lottery-notify-bar` 인라인 스타일 `display:none` 이중 선언** (`index.html:136`): `style="display:none;background:var(--warn);...;display:none;align-items:center;..."` — 같은 `style` 속성 내에 `display:none`이 두 번 등장하고 `display:flex`는 선언되지 않음. JS가 런타임에 `bar.style.display = 'flex'`로 교체하므로 동작 오류는 없지만 코드가 혼란스러움. `style="display:none"` 단 한 번으로 정리하고 레이아웃 속성(`align-items`, `justify-content`, `gap`)은 CSS 클래스로 분리 권장.
+
+- **`closeLotteryOverlay()`에서 `paused-banner` 무조건 제거** (`app.js:2233-2237`): 복권 오버레이 닫기 시 `document.getElementById('paused-banner')?.remove()`를 항상 실행. 진행자가 수동으로 게임을 일시정지한 상태에서 복권이 진행된 경우, 복권 종료 후에도 일시정지 배너가 유지되어야 하지만 무조건 제거됨. 수정: `_stopLotPolling()` 이후 `refreshRoomStatus()`(또는 단순 `fetch`)로 서버 상태를 재조회해 `S.room.status === 'paused'`이면 배너를 유지하는 조건 추가.
+
+- **`openStockModal()` 매 호출마다 portfolio API 재호출** (`app.js:1308-1315`): 학생이 종목 카드를 탭할 때마다 `GET /api/rooms/${S.room.id}/portfolio`를 호출해 현금·보유 수량을 새로 가져옴. `loadPortfolio()`나 `execTrade()` 성공 직후 이미 `S.tradeCash`·보유 수량이 갱신되어 있으므로, 캐시된 값을 즉시 표시하고 백그라운드에서 검증용 재조회를 수행하면 탭 반응 속도 향상. 동일 종목을 연속 탭하는 흔한 시나리오에서 불필요한 왕복 제거 가능.
+
+- **`minigame_spin()` 청산 후 현금 음수 가능성** (`app.py:993-1032`): `shares_to_sell = max(1, int(shortfall / price))` 정수 내림으로 루프 종료 후 shortfall이 소량 남을 수 있음. 이후 `m.cash = m.cash - bet + winnings`에서 winnings=0(꽝)이면 `m.cash < 0`이 될 수 있음. `bet > total_assets` 사전 체크가 있으나 정수 내림 오차 누적 시 예외 케이스 발생. 청산 루프 종료 직후 `m.cash = max(0.0, m.cash - bet + winnings)` 하한선 보장 한 줄로 방어 (`app.py:1032` 인근).
+
+- **`_set_sqlite_pragmas()` 이벤트 리스너가 `db.create_all()` 이후 등록** (`app.py:26-29`): `with app.app_context(): db.create_all()` 실행 시 DB 연결이 생성되지만 pragma 이벤트 리스너(`_sa_event.listen(db.engine, "connect", _set_sqlite_pragmas)`)는 그 이후에 등록됨. 스키마 생성 연결은 WAL 모드·busy_timeout 없이 동작. pragma 리스너 등록을 `db.create_all()` 호출 이전으로 이동하거나, 스키마 생성 후 `with db.engine.connect() as conn: conn.execute(text("PRAGMA journal_mode=WAL"))` 명시적 초기화 추가 권장.
+
+---
