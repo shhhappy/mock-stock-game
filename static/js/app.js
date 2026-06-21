@@ -268,7 +268,7 @@ function enterHostGame() {
   updatePauseBtn();
   S.pollInterval = setInterval(() => {
     if (S.hostTab === 'rank') loadHostMembers();
-    else loadHostMarket();
+    else if (S.hostTab === 'market') loadHostMarket();
     refreshRoomStatus();
   }, 10000);
 }
@@ -304,8 +304,10 @@ function switchHostTab(tab) {
   S.hostTab = tab;
   document.getElementById('htab-rank').classList.toggle('active', tab === 'rank');
   document.getElementById('htab-market').classList.toggle('active', tab === 'market');
+  document.getElementById('htab-settings').classList.toggle('active', tab === 'settings');
   document.getElementById('htab-rank-content').hidden = tab !== 'rank';
   document.getElementById('htab-market-content').hidden = tab !== 'market';
+  document.getElementById('htab-settings-content').hidden = tab !== 'settings';
   if (tab === 'market') loadHostMarket();
 }
 

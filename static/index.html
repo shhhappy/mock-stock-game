@@ -142,8 +142,9 @@
   </div>
 
   <div class="host-tabs">
-    <button class="host-tab active" id="htab-rank" onclick="switchHostTab('rank')">📊 순위</button>
-    <button class="host-tab" id="htab-market" onclick="switchHostTab('market')">📈 시장</button>
+    <button class="host-tab active" id="htab-rank"   onclick="switchHostTab('rank')">📊 순위</button>
+    <button class="host-tab"        id="htab-market" onclick="switchHostTab('market')">📈 시장</button>
+    <button class="host-tab"        id="htab-settings" onclick="switchHostTab('settings')">⚙️ 설정</button>
   </div>
 
   <!-- 순위 탭 -->
@@ -153,102 +154,7 @@
       <button class="btn btn-secondary btn-sm" onclick="loadHostMembers()">↻ 새로고침</button>
     </div>
     <div id="host-members-list"></div>
-
     <canvas id="host-bar-chart" style="margin-top:16px;max-height:300px"></canvas>
-
-    <div style="margin-top:20px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px">
-      <div class="section-title" style="margin-bottom:12px">⏱ 주기 설정</div>
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-        <span style="font-size:13px;min-width:72px">💣 폭탄뉴스</span>
-        <input id="news-interval-input" class="form-input" type="number" min="5" max="300" value="20"
-          style="width:72px;text-align:center" placeholder="초">
-        <span style="font-size:13px;color:var(--muted)">초</span>
-      </div>
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
-        <span style="font-size:13px;min-width:72px">📈 주가 변동</span>
-        <input id="price-interval-input" class="form-input" type="number" min="5" max="300" value="20"
-          style="width:72px;text-align:center" placeholder="초">
-        <span style="font-size:13px;color:var(--muted)">초</span>
-      </div>
-      <button class="btn btn-secondary btn-full btn-sm" onclick="doSetIntervals()">적용</button>
-      <div id="news-interval-msg" style="font-size:12px;color:var(--muted);margin-top:6px"></div>
-      <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:12px">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-          <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
-            <input type="checkbox" id="news-hint-checkbox" checked style="width:16px;height:16px;cursor:pointer">
-            상승/하락 힌트 포함
-          </label>
-        </div>
-        <button class="btn btn-primary btn-full btn-sm" onclick="doSendNews()">💣 지금 폭탄뉴스 보내기</button>
-      </div>
-    </div>
-
-    <div style="margin-top:12px;display:flex;gap:10px">
-      <button class="btn" id="pause-btn" onclick="doPauseGame()" style="flex:1;background:var(--warn);color:#000;font-weight:700">⏸ 일시정지</button>
-      <button class="btn btn-danger" id="end-game-btn" onclick="doEndGame()" style="flex:1">⏹ 게임 종료</button>
-    </div>
-
-    <div style="margin-top:12px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px">
-      <div class="section-title" style="margin-bottom:12px">🧠 퀴즈 설정</div>
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-        <span style="font-size:13px;min-width:80px">정답 보상</span>
-        <input id="quiz-reward-input" class="form-input" type="number" min="0" max="10" step="0.1" value="1.0"
-          style="width:72px;text-align:center">
-        <span style="font-size:13px;color:var(--muted)">% (초기자금 기준)</span>
-      </div>
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
-        <span style="font-size:13px;min-width:80px">오답 패널티</span>
-        <input id="quiz-penalty-input" class="form-input" type="number" min="0" max="10" step="0.1" value="0.5"
-          style="width:72px;text-align:center">
-        <span style="font-size:13px;color:var(--muted)">% (초기자금 기준)</span>
-      </div>
-      <button class="btn btn-secondary btn-full btn-sm" onclick="doSetQuizSettings()">적용</button>
-      <div id="quiz-settings-msg" style="font-size:12px;color:var(--muted);margin-top:6px"></div>
-    </div>
-
-    <div style="margin-top:12px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px">
-      <div class="section-title" style="margin-bottom:2px">🎰 룰렛 설정</div>
-      <div style="font-size:11px;color:var(--muted);margin-bottom:10px">확률은 비율값으로 입력 · 꽝 배율은 0배 고정</div>
-      <table style="width:100%;font-size:12px;border-collapse:collapse;margin-bottom:12px">
-        <thead>
-          <tr style="color:var(--muted);border-bottom:1px solid var(--border)">
-            <th style="text-align:left;padding:3px 4px 6px 0;font-weight:600">칸</th>
-            <th style="text-align:center;padding:3px 4px 6px;font-weight:600">확률 (비율)</th>
-            <th style="text-align:center;padding:3px 0 6px;font-weight:600">배율</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td style="padding:4px 4px 4px 0"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#c0392b;vertical-align:middle;margin-right:5px"></span>꽝</td>
-            <td style="padding:4px;text-align:center"><input id="rlt-w-0" class="form-input" type="number" min="0" max="9999" step="1" value="70" style="width:60px;text-align:center;padding:3px 4px;font-size:12px;height:28px"></td>
-            <td style="padding:4px 0;text-align:center;color:var(--muted)">0배 고정</td>
-          </tr>
-          <tr>
-            <td style="padding:4px 4px 4px 0"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#e67e22;vertical-align:middle;margin-right:5px"></span>2칸</td>
-            <td style="padding:4px;text-align:center"><input id="rlt-w-1" class="form-input" type="number" min="0" max="9999" step="1" value="20" style="width:60px;text-align:center;padding:3px 4px;font-size:12px;height:28px"></td>
-            <td style="padding:4px 0;text-align:center"><input id="rlt-mult-1" class="form-input" type="number" min="1" max="9999" step="1" value="1" style="width:54px;text-align:center;padding:3px 4px;font-size:12px;height:28px"> 배</td>
-          </tr>
-          <tr>
-            <td style="padding:4px 4px 4px 0"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#f1c40f;vertical-align:middle;margin-right:5px"></span>3칸</td>
-            <td style="padding:4px;text-align:center"><input id="rlt-w-2" class="form-input" type="number" min="0" max="9999" step="1" value="7" style="width:60px;text-align:center;padding:3px 4px;font-size:12px;height:28px"></td>
-            <td style="padding:4px 0;text-align:center"><input id="rlt-mult-2" class="form-input" type="number" min="1" max="9999" step="1" value="2" style="width:54px;text-align:center;padding:3px 4px;font-size:12px;height:28px"> 배</td>
-          </tr>
-          <tr>
-            <td style="padding:4px 4px 4px 0"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#27ae60;vertical-align:middle;margin-right:5px"></span>4칸</td>
-            <td style="padding:4px;text-align:center"><input id="rlt-w-3" class="form-input" type="number" min="0" max="9999" step="1" value="2" style="width:60px;text-align:center;padding:3px 4px;font-size:12px;height:28px"></td>
-            <td style="padding:4px 0;text-align:center"><input id="rlt-mult-3" class="form-input" type="number" min="1" max="9999" step="1" value="5" style="width:54px;text-align:center;padding:3px 4px;font-size:12px;height:28px"> 배</td>
-          </tr>
-          <tr>
-            <td style="padding:4px 4px 4px 0"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#3498db;vertical-align:middle;margin-right:5px"></span>5칸</td>
-            <td style="padding:4px;text-align:center"><input id="rlt-w-4" class="form-input" type="number" min="0" max="9999" step="1" value="1" style="width:60px;text-align:center;padding:3px 4px;font-size:12px;height:28px"></td>
-            <td style="padding:4px 0;text-align:center"><input id="rlt-mult-4" class="form-input" type="number" min="1" max="9999" step="1" value="25" style="width:54px;text-align:center;padding:3px 4px;font-size:12px;height:28px"> 배</td>
-          </tr>
-        </tbody>
-      </table>
-      <button class="btn btn-secondary btn-full btn-sm" onclick="doSetRltConfig()">적용</button>
-      <div id="rlt-config-msg" style="font-size:12px;color:var(--muted);margin-top:6px"></div>
-    </div>
-
   </div>
 
   <!-- 시장 탭 -->
@@ -299,6 +205,104 @@
       <button class="btn btn-secondary btn-sm" onclick="loadHostMarket()">↻ 새로고침</button>
     </div>
     <div id="host-stock-grid" class="stock-grid"></div>
+  </div>
+
+  <!-- 설정 탭 -->
+  <div id="htab-settings-content" style="padding:16px" hidden>
+
+    <div style="display:flex;gap:10px;margin-bottom:12px">
+      <button class="btn" id="pause-btn" onclick="doPauseGame()" style="flex:1;background:var(--warn);color:#000;font-weight:700">⏸ 일시정지</button>
+      <button class="btn btn-danger" id="end-game-btn" onclick="doEndGame()" style="flex:1">⏹ 게임 종료</button>
+    </div>
+
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px">
+      <div class="section-title" style="margin-bottom:12px">⏱ 주기 설정</div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <span style="font-size:13px;min-width:72px">💣 폭탄뉴스</span>
+        <input id="news-interval-input" class="form-input" type="number" min="5" max="300" value="20"
+          style="width:72px;text-align:center" placeholder="초">
+        <span style="font-size:13px;color:var(--muted)">초</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+        <span style="font-size:13px;min-width:72px">📈 주가 변동</span>
+        <input id="price-interval-input" class="form-input" type="number" min="5" max="300" value="20"
+          style="width:72px;text-align:center" placeholder="초">
+        <span style="font-size:13px;color:var(--muted)">초</span>
+      </div>
+      <button class="btn btn-secondary btn-full btn-sm" onclick="doSetIntervals()">적용</button>
+      <div id="news-interval-msg" style="font-size:12px;color:var(--muted);margin-top:6px"></div>
+      <div style="margin-top:12px;border-top:1px solid var(--border);padding-top:12px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer">
+            <input type="checkbox" id="news-hint-checkbox" checked style="width:16px;height:16px;cursor:pointer">
+            상승/하락 힌트 포함
+          </label>
+        </div>
+        <button class="btn btn-primary btn-full btn-sm" onclick="doSendNews()">💣 지금 폭탄뉴스 보내기</button>
+      </div>
+    </div>
+
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px">
+      <div class="section-title" style="margin-bottom:12px">🧠 퀴즈 설정</div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <span style="font-size:13px;min-width:80px">정답 보상</span>
+        <input id="quiz-reward-input" class="form-input" type="number" min="0" max="10" step="0.1" value="1.0"
+          style="width:72px;text-align:center">
+        <span style="font-size:13px;color:var(--muted)">% (초기자금 기준)</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+        <span style="font-size:13px;min-width:80px">오답 패널티</span>
+        <input id="quiz-penalty-input" class="form-input" type="number" min="0" max="10" step="0.1" value="0.5"
+          style="width:72px;text-align:center">
+        <span style="font-size:13px;color:var(--muted)">% (초기자금 기준)</span>
+      </div>
+      <button class="btn btn-secondary btn-full btn-sm" onclick="doSetQuizSettings()">적용</button>
+      <div id="quiz-settings-msg" style="font-size:12px;color:var(--muted);margin-top:6px"></div>
+    </div>
+
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px">
+      <div class="section-title" style="margin-bottom:2px">🎰 룰렛 설정</div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:10px">확률은 비율값으로 입력 · 꽝 배율은 0배 고정</div>
+      <table style="width:100%;font-size:12px;border-collapse:collapse;margin-bottom:12px">
+        <thead>
+          <tr style="color:var(--muted);border-bottom:1px solid var(--border)">
+            <th style="text-align:left;padding:3px 4px 6px 0;font-weight:600">칸</th>
+            <th style="text-align:center;padding:3px 4px 6px;font-weight:600">확률 (비율)</th>
+            <th style="text-align:center;padding:3px 0 6px;font-weight:600">배율</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="padding:4px 4px 4px 0"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#c0392b;vertical-align:middle;margin-right:5px"></span>꽝</td>
+            <td style="padding:4px;text-align:center"><input id="rlt-w-0" class="form-input" type="number" min="0" max="9999" step="1" value="70" style="width:60px;text-align:center;padding:3px 4px;font-size:12px;height:28px"></td>
+            <td style="padding:4px 0;text-align:center;color:var(--muted)">0배 고정</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 4px 4px 0"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#e67e22;vertical-align:middle;margin-right:5px"></span>2칸</td>
+            <td style="padding:4px;text-align:center"><input id="rlt-w-1" class="form-input" type="number" min="0" max="9999" step="1" value="20" style="width:60px;text-align:center;padding:3px 4px;font-size:12px;height:28px"></td>
+            <td style="padding:4px 0;text-align:center"><input id="rlt-mult-1" class="form-input" type="number" min="1" max="9999" step="1" value="1" style="width:54px;text-align:center;padding:3px 4px;font-size:12px;height:28px"> 배</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 4px 4px 0"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#f1c40f;vertical-align:middle;margin-right:5px"></span>3칸</td>
+            <td style="padding:4px;text-align:center"><input id="rlt-w-2" class="form-input" type="number" min="0" max="9999" step="1" value="7" style="width:60px;text-align:center;padding:3px 4px;font-size:12px;height:28px"></td>
+            <td style="padding:4px 0;text-align:center"><input id="rlt-mult-2" class="form-input" type="number" min="1" max="9999" step="1" value="2" style="width:54px;text-align:center;padding:3px 4px;font-size:12px;height:28px"> 배</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 4px 4px 0"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#27ae60;vertical-align:middle;margin-right:5px"></span>4칸</td>
+            <td style="padding:4px;text-align:center"><input id="rlt-w-3" class="form-input" type="number" min="0" max="9999" step="1" value="2" style="width:60px;text-align:center;padding:3px 4px;font-size:12px;height:28px"></td>
+            <td style="padding:4px 0;text-align:center"><input id="rlt-mult-3" class="form-input" type="number" min="1" max="9999" step="1" value="5" style="width:54px;text-align:center;padding:3px 4px;font-size:12px;height:28px"> 배</td>
+          </tr>
+          <tr>
+            <td style="padding:4px 4px 4px 0"><span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:#3498db;vertical-align:middle;margin-right:5px"></span>5칸</td>
+            <td style="padding:4px;text-align:center"><input id="rlt-w-4" class="form-input" type="number" min="0" max="9999" step="1" value="1" style="width:60px;text-align:center;padding:3px 4px;font-size:12px;height:28px"></td>
+            <td style="padding:4px 0;text-align:center"><input id="rlt-mult-4" class="form-input" type="number" min="1" max="9999" step="1" value="25" style="width:54px;text-align:center;padding:3px 4px;font-size:12px;height:28px"> 배</td>
+          </tr>
+        </tbody>
+      </table>
+      <button class="btn btn-secondary btn-full btn-sm" onclick="doSetRltConfig()">적용</button>
+      <div id="rlt-config-msg" style="font-size:12px;color:var(--muted);margin-top:6px"></div>
+    </div>
+
   </div>
 </div>
 
