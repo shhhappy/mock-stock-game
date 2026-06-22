@@ -880,3 +880,33 @@
 - **`export_rankings()` N+1 쿼리 패턴** (`app.py:1431-1440`): `export_rankings()`도 `member_total_value(rid, m.user_id)` 루프 패턴 (`app.py:1433`)을 그대로 사용해 참여자 수만큼 RoomHolding·Deposit 쿼리를 반복 실행. `host_members()` (`app.py:554`)·`get_rankings()` (`app.py:817`)과 동일한 N+1 문제. 2026-06-11에 `get_rankings()`의 배치 조회 방식을 권고했으나 엑셀 내보내기에는 적용되지 않음. 세 함수에 공통 `batch_total_values(rid)` 헬퍼(단일 쿼리로 전체 보유·예금 합산)를 추출하면 세 곳 동시 해결 가능.
 
 ---
+
+## 2026-06-22
+
+### 추가하면 좋을 기능
+
+- **룰렛 전액 베팅 확인 단계 없음** (`app.js:1032`, `doRouletteSpin()`): 슬라이더를 100%로 설정한 후 "룰렛 돌리기" 버튼을 누르면 즉시 전 재산을 베팅한 채 스핀이 실행됨. `setRltPct(100)` 클릭 시 버튼 텍스트를 "⚠️ 전액 베팅 확인" 등으로 바꾸거나, `doRouletteSpin()` 내에서 `rltPct >= 80` 조건이면 `confirm()` 다이얼로그를 띄우는 한 줄 가드(`if (!confirm('전체 자산의 ${rltPct}%를 베팅합니다. 계속하시겠습니까?')) return;`)를 추가하면 학생의 실수 클릭 방지. 특히 모바일에서 슬라이더 오조작이 잦음.
+
+- **진행자가 종료 직전 룰렛 완료 현황 확인 불가** (`app.py:920-936`): 게임이 자동 종료 직전 룰렛 미니게임이 열리는데, 진행자 화면에는 몇 명이 룰렛을 완료했는지 표시되지 않음. `_lots` 딕셔너리와 유사하게 `_rlt_done: dict[int, set] = {}` 를 `app.py:90` 근처에 두고, 참가자가 `/api/rooms/<rid>/minigame/spin` 성공 시 `_rlt_done[rid].add(uid)`로 기록, 진행자용 `/api/rooms/<rid>/status` 또는 `room_dict()` 응답에 `"rlt_done_count"` 필드를 추가하면 "룰렛 완료: 18/24명" 형태로 진행자가 모니터링 가능.
+
+- **상·하한가 종목 시각 표시 없음** (`stock_service.py:139`, `app.js:1287-1311`): `StockService._next_price()`는 `base_price * 0.6` ~ `base_price * 1.4` 범위로 가격을 clamp하므로 상한가·하한가 상태가 실제로 존재함. 그러나 시장 그리드 카드(`renderGrid()`, `app.js:1293`)에는 이를 알리는 표시가 없어 학생이 "왜 더 오르지 않지?"를 이해하기 어려움. `/api/rooms/<rid>/stocks` 응답에 `"at_upper": price >= base*1.39, "at_lower": price <= base*0.61` 플래그를 추가하고 카드에 `<span class="chip chip-red">상한가</span>` / `<span class="chip chip-blue">하한가</span>` 뱃지를 붙이면 교육적 효과가 높아짐.
+
+- **엑셀 내보내기 시 종료 후 재생성된 StockService의 랜덤 가격 반영** (`app.py:1432-1433`, `stock_service.py:317-322`): `_end_room()` (`app.py:120`)은 `cleanup_room_service(rid)`를 호출해 인메모리 StockService를 삭제함. 이후 진행자가 `/api/rooms/<rid>/export`를 호출하면 `member_total_value()` → `get_room_service(rid)` 경로에서 새 StockService가 랜덤 초기 가격으로 생성되어, 실제 종료 시점 가격이 아닌 임의의 가격으로 주식 자산을 계산함. 종료 시점에 심볼별 최종 가격을 `Room` 테이블의 JSON 컬럼(또는 별도 `RoomFinalPrice` 테이블)에 스냅숏으로 저장하고 `export_rankings()`와 `_end_room()` 정산 모두 이 값을 참조하면 정확한 결과 보장.
+
+- **결과 화면에 클래스 전체 활동 통계 없음** (`app.py:1419-1488`): 현재 엑셀 내보내기는 순위·보유 현황만 담음. 학생별 총 거래 횟수, 가장 많이 거래된 종목 Top5, 최대 수익률 종목 등 수업 복기에 유용한 통계가 없음. `RoomTransaction` 테이블 집계(`GROUP BY symbol`, `COUNT(*)`)로 별도 시트를 추가하면 추가 API 없이 엑셀 파일 내에서 수업 마무리 토론 자료가 됨 (`app.py:1460` 이후 `ws2 = wb.add_worksheet(...)` 추가 방식).
+
+- **퀴즈 일시정지 중 접근 가능** (`app.py:1248`, `app.js:832`): 진행자가 게임을 일시정지(`room.status == 'paused'`)해도 퀴즈 FAB 버튼(`index.html:470`)은 계속 보이며 클릭하면 `openQuiz()`가 서버에 `GET /api/rooms/<rid>/quiz`를 요청함. 서버 측 `get_quiz()` (`app.py:1248`)에는 `room.status != 'active'` 가드가 없어 일시정지 중에도 퀴즈가 열림. 서버에서 `if room.status != 'active': return jsonify({'error': 'room not active'}), 400` 한 줄 추가 + 클라이언트에서 FAB를 `room.status === 'active'` 일 때만 표시하면 해결.
+
+### 제거/단순화할 것들
+
+- **`_ending_soon` 인메모리 set → 계산식으로 교체 가능** (`app.py:90`, `app.py:304`): `_ending_soon: set = set()`는 룰렛을 한 번만 트리거하기 위한 플래그인데, Render 재시작 시 초기화되어 재시작 직후 종료 시각이 1분 미만인 방에서 룰렛이 재트리거되는 버그가 있음. `room.rlt_triggered` DB 컬럼이 이미 존재하므로(`models.py:39`) 이 컬럼만으로 중복 방지가 가능. `_ending_soon` set는 제거하고 `room_dict()` (`app.py:304`)의 `ending_soon` 계산식을 `not room.rlt_triggered and room.end_time and (room.end_time - now).total_seconds() <= 60`으로 단순화하면 인메모리 상태 하나 제거.
+
+- **`RoomHolding` 0주 레코드 누적** (`app.py:1037-1040`, `app.py:1318`, `app.py:760`): 룰렛 스핀(`app.py:1037-1040`)과 퀴즈 오답 패널티(`app.py:1304-1326`)에서 보유 주식 강제 처분 시 `h.shares = 0; h.avg_price = 0` 후 `db.session.commit()`만 하고 레코드를 삭제하지 않음. 반면 일반 매도(`app.py:760`)는 `db.session.delete(h)` 후 커밋함. 누적된 0주 레코드는 포트폴리오 조회·랭킹 집계 시 필터링되지 않으면 오답 패널티 이후 종목이 0주로 계속 표시됨. 두 코드 블록 모두 `db.session.delete(h)` 방식으로 통일 필요.
+
+- **`get_room()` 라우트 내 6가지 사이드이펙트 혼재** (`app.py:432-473`): 단일 GET 라우트가 ① 자동 종료 처리, ② 룰렛 트리거, ③ Render 재시작 후 복구, ④ 복권 자동 시작, ⑤ 캐시 무효화, ⑥ 응답 직렬화를 모두 담당. GET 요청에 이런 부작용이 집중되면 폴링 10초마다 의도치 않은 상태 변이가 발생할 수 있음. `_check_and_advance_room(rid)` 헬퍼를 추출해 사이드이펙트를 명시적으로 분리하고, 각 동작에 `if`-early-return 패턴을 적용하면 가독성·테스트 용이성이 높아짐.
+
+- **뉴스 폴링 클라이언트 8초 고정 vs 서버 TTL 불일치** (`app.js:810`, `stock_service.py:167-175`): `startNewsPolling()`은 `setInterval(..., 8000)` 하드코딩, 서버 뉴스 TTL은 `5~300초` 범위에서 종목별로 다름. 서버 응답에 `"next_refresh_in": seconds` 필드를 포함하고 클라이언트가 해당 값을 사용해 다음 폴링 타이머를 설정하면 불필요한 요청을 줄이고 TTL 설정과 실제 동작이 동기화됨. 이는 기존 제안(`2026-06-21(2차)`)의 뉴스 지연 언급보다 구체적인 서버-클라이언트 TTL 동기화 해법.
+
+- **RLT/LOTTO 미니게임 결과가 거래내역에 '조정(ADJ)'으로 표시** (`app.py:839-847`, `app.py:1064-1072`): 룰렛·복권 결과로 현금이 증감할 때 `RoomTransaction` 레코드에 `action='ADJ'`가 기록됨. 이는 진행자 조정(`app.py:839`)과 동일한 액션 타입이어서, 엑셀 내보내기나 거래내역 조회 시 진행자가 직접 조정한 것인지 미니게임 결과인지 구분 불가. `action` 컬럼을 `'RLT'`(룰렛), `'LOT'`(복권)으로 분리하거나 `note` 필드에 출처를 명시하면 감사 추적성 확보. `models.py:74`의 `'BUY / SELL / ADJ'` 주석도 함께 갱신 필요.
+
+---
