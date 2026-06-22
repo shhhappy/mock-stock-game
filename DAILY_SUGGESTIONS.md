@@ -910,3 +910,38 @@
 - **RLT/LOTTO 미니게임 결과가 거래내역에 '조정(ADJ)'으로 표시** (`app.py:839-847`, `app.py:1064-1072`): 룰렛·복권 결과로 현금이 증감할 때 `RoomTransaction` 레코드에 `action='ADJ'`가 기록됨. 이는 진행자 조정(`app.py:839`)과 동일한 액션 타입이어서, 엑셀 내보내기나 거래내역 조회 시 진행자가 직접 조정한 것인지 미니게임 결과인지 구분 불가. `action` 컬럼을 `'RLT'`(룰렛), `'LOT'`(복권)으로 분리하거나 `note` 필드에 출처를 명시하면 감사 추적성 확보. `models.py:74`의 `'BUY / SELL / ADJ'` 주석도 함께 갱신 필요.
 
 ---
+
+## 2026-06-22 (2차)
+
+### 추가하면 좋을 기능
+
+- **`StockService._prev` 주기적 갱신으로 뉴스 사이클별 변동률 표시** (`stock_service.py:127`, `stock_service.py:160-164`, `app.py:661`): `_prev` 딕셔너리는 `_init_prices()` 에서 딱 1회만 설정되고 이후 전혀 갱신되지 않음. 60분 게임에서 가격이 +50% 상승한 상태에서 `-5%` 하락해도 학생 화면의 `change_pct`는 시작가 대비 `+42.5%`로 표시되어 "오늘의 변동률" 개념과 완전히 다름. `_maybe_generate_news()` 내 `self._current_biases = self._next_biases.copy()` 직전에 `for sym, (ts, price) in self._prices.items(): self._prev[sym] = price`를 추가하면 뉴스 주기마다 `_prev`가 갱신되어 직전 뉴스 사이클 종가 대비 등락률을 표시하는 의미 있는 변동률 제공 가능.
+
+- **학생용 개인 거래내역 CSV 내보내기** (`app.py:829-847`, `models.py:68-79`): 현재 엑셀 내보내기(`GET /api/rooms/<rid>/export`)는 진행자 전용. 학생이 자신의 거래 내역을 다운로드해 스프레드시트에서 분석하는 교육 활동 불가능. `GET /api/rooms/<rid>/transactions/export` 엔드포인트를 추가해 `RoomTransaction.query.filter_by(room_id=rid, user_id=user.id)`를 Python 내장 `csv` 모듈로 직렬화해 반환하면 openpyxl 없이 20줄로 구현 가능. 게임 후 교사의 "자신의 거래를 정리해 발표해봅시다" 과제와 즉시 연계됨.
+
+- **진행자 화면에 방 내 인기 종목 실시간 순위 패널** (`app.py:540-562`, `index.html:진행자탭`): 진행자가 어떤 종목에 거래가 집중되는지 볼 방법이 없음. `GET /api/rooms/<rid>/host/hot-stocks` 엔드포인트를 추가해 `db.session.query(RoomTransaction.symbol, db.func.count().label('cnt')).filter_by(room_id=rid).group_by(RoomTransaction.symbol).order_by(db.desc('cnt')).limit(5).all()`로 집계 후 반환. 진행자 탭 순위 패널 하단에 "🔥 인기 종목 Top5" 카드로 표시하면 교사가 "지금 여러분 삼성전자에 집중되어 있네요, 이유가 뭘까요?" 형태의 실시간 수업 개입 포인트 확보.
+
+- **퀴즈 답변 전 보상/패널티 금액 사전 표시** (`app.py:1248-1268`, `app.js:849-870`): 현재 퀴즈 오버레이는 질문만 표시하고 맞히면 얼마, 틀리면 얼마인지 보여주지 않음. `GET /api/rooms/<rid>/quiz` 응답에 `reward_amount: max(10000, int(room.starting_cash * reward_pct / 100))`와 `penalty_amount` 필드를 추가하고, 퀴즈 오버레이 하단에 `💰 정답 +XX만원 / ❌ 오답 -XX만원` 한 줄을 표시하면 학생이 리스크 대비 기대값을 계산하며 전략적으로 답변하는 금융 교육 효과 극대화. 서버 3줄, 클라이언트 2줄 추가로 구현 완료.
+
+- **복권 진행자 수동 시작 시 기본 상금 설정 저장** (`app.py:1078-1112`, `index.html:복권모달`): `lottery_start()` 호출마다 진행자가 상금을 매번 직접 입력해야 함. `_quiz_settings[rid]` 패턴을 차용해 `_lottery_default_prize[rid]` 인메모리 딕셔너리를 추가하고, 진행자 설정 탭에 "기본 복권 상금" 입력란 제공. 복권 모달 열 때 `_lottery_default_prize.get(rid, member_count * 30_000_000)` 으로 초기값을 채우면 반복 수업에서 매번 입력하는 번거로움 제거.
+
+- **룰렛 스핀 결과 로컬 히스토리 표시** (`app.js:doRouletteSpin()`, `app.js:1100-1130`): 학생이 룰렛 오버레이에서 다시 spin을 클릭하면 이전 결과가 사라져 "아까 내가 뭘 받았지?" 확인 불가. `S.rltHistory = []` 배열을 `doRouletteSpin()` 성공 시 `S.rltHistory.push({outcome: data.outcome, net: data.net, bet: data.bet})`로 누적하고, 룰렛 오버레이 최하단에 "내 스핀 기록" 섹션으로 최대 3건 표시. 거래내역(`RLT` 액션)과 연결해 복습 가능. 서버 변경 없이 5줄로 구현.
+
+---
+
+### 제거/단순화할 것들
+
+- **`get_quiz()` 룸 멤버십 검증 누락 → 비참여자 퀴즈 상태 소비 가능** (`app.py:1250-1268`): `get_quiz()`는 `@login_required` + `room.status == 'active'` 만 확인하고 `RoomMember.query.filter_by(room_id=rid, user_id=user.id).first()` 체크가 없음. 방에 가입하지 않은 사용자(또는 강퇴된 학생)가 GET으로 퀴즈를 요청하면 `_quiz_state[(rid, uid)]`가 갱신되어 `seen` 집합과 쿨다운이 설정됨. 이후 `submit_quiz()` POST는 `member`가 없으면 현금 변동 없이 응답하지만 서버 상태를 소비. `get_quiz()` 진입부에 `if not RoomMember.query.filter_by(room_id=rid, user_id=user.id).first(): return jsonify({'error': '참여자가 아닙니다.'}), 403` 한 줄 추가로 방어.
+
+- **`create_room()` 숫자 파싱 예외 미처리 → 500 반환** (`app.py:384-386`): `int(d.get('duration_minutes', 30))`, `float(d.get('starting_cash', ...))`, `float(d.get('deposit_rate', ...))` 세 파싱 모두 try/except 없이 사용. 악의적 클라이언트가 `{"duration_minutes": "삼십분"}` 같은 값을 전송하면 `ValueError: invalid literal` → 500 Internal Server Error 반환. 각 필드를 `try/except (TypeError, ValueError): return jsonify({'error': '잘못된 숫자 입력'}), 400` 으로 감싸거나, `d.get('duration_minutes', 30)` 이후 `isinstance` 타입 체크를 선행하면 방어 가능. 같은 패턴이 `host_adjust()` (`app.py:595`), `lottery_start()` (`app.py:1086`), `lottery_skip()` (`app.py:1216`)에도 존재.
+
+- **`lottery_start()` 상금 상한 없음 → 부동소수점 오버플로 위험** (`app.py:1086-1087`): `prize = float(d.get('prize', 0))`에 최대값 검증이 없음. 진행자가 `1e30` 같은 값을 입력하면 당첨 학생의 `m.cash += prize`가 그대로 실행되고 `round(prize / 25)` 등 연산이 부동소수점 `inf`나 비정상 값을 반환할 수 있음. `member_count = RoomMember.query.filter_by(room_id=rid).count()` 이후 `if prize > room.starting_cash * max(member_count, 1) * 100: return jsonify({'error': '상금이 너무 큽니다.'}), 400` 한 줄 추가. 같은 맥락에서 `prize <= 0` 체크(`app.py:1087`) 외에 `math.isfinite(prize)` 가드도 병행 권장.
+
+- **`showBombNews()` `item.headline` HTML 미이스케이프 → 잠재적 XSS** (`app.js:showBombNews()`, `stock_service.py:152, 235, 266`): `content.innerHTML = items.map(item => \`... ${item.headline} ...\`).join('')` 형태로 headline을 직접 삽입. 현재 headline은 `NEWS_TEMPLATES_*` 서버 측 상수에서만 생성되므로 즉각 위험은 없지만, `force_price()` (`stock_service.py:234-235`)와 `force_sector_event()` (`stock_service.py:263-269`)에서 `STOCKS[sym]['name']`·`STOCKS[sym]['sector']` 를 그대로 headline에 삽입하며 이 값들이 미래에 외부 DB 연동 등으로 변경 가능성이 있는 경우 XSS 경로가 열림. 현재 구현 내 `escHtml()` 유틸(`app.js:899`)로 `escHtml(item.headline)` 교체 및 `<br>` 등 허용 태그만 화이트리스트 처리 권장.
+
+- **`openRouletteModal()` minigame/open API 실패 시 게임 영구 일시정지 위험** (`app.js:1142-1150`): `const pr = await api.post(\`/api/rooms/${S.room.id}/minigame/open\`, {}).catch(() => null)` — API 호출 실패 시 `pr = null`로 처리하고 룰렛 모달은 열리지만, 서버의 `_rlt_active[rid].count`는 증가하지 않음. 이후 `closeRoulette()` → `minigame/close` POST는 `state.count <= 0`을 감지해 `return {'ok': True}`를 즉시 반환하며 game resume이 일어나지 않음. 즉 서버는 `paused` 상태인데 룰렛 활성 count는 0이어서 자동 resume 조건 미달. `if (!pr || pr.error) { closeRoulette(); toast('룰렛 서버 연결 오류', 'error'); return; }` 로 실패 시 모달 닫기 처리 필요.
+
+- **`_prev_close` 기반 `change` 필드가 세션 시작가 고정으로 UI에서 혼란 유발** (`app.py:661-669`, `stock_service.py:278-279`): `get_stocks()` 응답의 `change`, `change_pct`는 `prev = svc.get_prev_close(sym)` 즉 게임 시작 초기 가격 대비로 계산됨. 게임 30분 경과 후 가격이 +35% 상승해 있는 상태에서 최근 뉴스로 -2% 하락해도 카드에는 `+31.9% ▲`로 표시. 학생이 "지금 떨어지고 있는데 왜 초록색이지?" 혼란 유발. `_maybe_generate_news()` 내에서 `self._prev` 를 현재 가격으로 스냅숏하거나, 적어도 `get_stocks()` 응답에 `change_from` 필드로 기준 시점을 명시하면 오해 방지.
+
+- **`RoomHolding.avg_price` 음수/0 저장 가능 → 포트폴리오 손익 왜곡** (`app.py:1037-1040`, `app.py:1318-1319`): 룰렛 베팅·퀴즈 패널티에서 보유 주식을 강제 처분할 때 `h.shares = 0; h.avg_price = 0`을 저장하고 `db.session.delete(h)`를 하지 않음 (2026-06-22 기존 분석에서 누락 지적했으나 avg_price=0 파생 문제는 미언급). 이후 `get_portfolio()` 에서 `h.shares <= 0` 조건으로 필터링하면 숨겨지지만, 추후 같은 종목을 재매수하면 `holding.avg_price * holding.shares + amount) / ns` 계산에서 avg_price=0이 사용됨. 0 * 0 = 0이어서 수식 자체는 맞지만 `h.avg_price = 0` 인 레코드와 다음 매수가 합산될 때 `holding.shares = 0`이므로 분모가 `shares`(=0)로 시작해 ZeroDivisionError 가능. `if holding and holding.shares == 0: db.session.delete(holding); holding = None` 처리 후 새로 `RoomHolding` 생성하면 모호성 제거.
+
