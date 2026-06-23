@@ -2,6 +2,40 @@
 
 ---
 
+## 2026-06-23 (2차)
+
+### 추가하면 좋을 기능
+
+- **복권 번호 자동 선택 버튼** (app.js: 복권 참가자 UI, `_lotParticipantPicks` 관련 로직): 학생들이 60초 타이머 내에 1~45에서 숫자 6개를 직접 입력하다 시간 초과하는 경우가 많음. "자동 선택" 버튼 하나를 추가해 `Array.from({length:45},(_,i)=>i+1).sort(()=>Math.random()-0.5).slice(0,6).sort((a,b)=>a-b)` 로 랜덤 번호 6개를 자동 입력하면 해결. 서버 변경 불필요하며, 버튼 하나와 5줄 JavaScript로 구현 가능. 수업 중 복권 라운드 원활한 진행에 직접 기여.
+
+- **시장 탭 가격 상승·하락 플래시 애니메이션** (`app.js:1287-1330`, `filterStocks()`, `renderGrid()`): `renderGrid(filtered, prevPrices)`에서 이미 `prevPrices`를 받아 가격 변동 방향을 알 수 있음. 가격이 오른 카드에 0.5초짜리 초록 배경, 내린 카드에 빨간 배경 CSS 애니메이션 클래스를 일시 적용하면 학생들이 가격 변동을 즉각 인지. CSS `@keyframes flashUp { from {background:rgba(63,185,80,.25)} to {background:transparent} }` + `renderGrid()` 내 `if (prevPrices[st.symbol] && prevPrices[st.symbol] !== st.price) { setTimeout(() => card.classList.add(flashCls), 0); }` 패턴으로 서버 변경 없이 구현. 학생 몰입도 향상 효과가 큼.
+
+- **결과 화면 인쇄 기능** (`app.js:loadResults()`, `static/css/style.css`): 현재 게임 결과를 공유하려면 엑셀 다운로드만 가능하고 직접 인쇄 방법이 없음. 결과 화면(screen-results)에 `<button onclick="window.print()">인쇄하기</button>` 버튼 한 개와 `@media print { .btn, .nav-bar { display:none } #screen-results { display:block !important } }` CSS를 추가하면 엑셀 미설치 환경(Chromebook 등)에서도 수업 결과물 출력 가능. 구현 시간 10분 미만.
+
+- **학생 간 현금 이체(선물하기) 기능** (`app.py` 신규 엔드포인트 `POST /api/rooms/<rid>/transfer`): 경제 수업에서 "거래", "기부", "증여세" 개념을 실습하기 위해 학생 A가 B에게 현금을 이체하는 기능을 추가. `m_from.cash -= amount`, `m_to.cash += amount`, `RoomTransaction(action='TRF', note=f'{sender} → {receiver}')` 두 건 삽입으로 ~30줄 구현. 수혜자 측에도 `toast('친구에게 선물 받음!')`을 다음 폴링 시 띄우려면 `RoomMember`에 `pending_notice` 컬럼을 추가하거나 트랜잭션 조회로 감지하면 됨. 관련 교육 주제(기회비용, 자원 배분)와 연계 가능.
+
+- **복권 참가자 제출 현황 실시간 표시(진행자)** (`app.py:1114-1147`, `app.js: _startLotPolling` 관련): 진행자가 복권 진행 중 누가 번호를 제출했는지 알 방법이 없음. `get_lottery()` 응답에 `all_picks_status: {uid: bool}` (호스트 전용) 필드를 추가하고, 진행자 복권 모달에 참가자별 체크리스트(✅ 제출 / ⏳ 미제출)를 표시하면 "아직 번호 입력 못 한 학생이 있어요"를 즉시 파악 가능. `cur.get('picks', {})` 에서 제출 여부를 알 수 있으므로, `app.py:1141` 호스트 조건 블록에 `'picks_submitted': list(cur.get('picks',{}).keys())` 필드를 추가하는 것만으로 구현 시작 가능.
+
+- **진행자 멤버 목록에서 학생별 섹터 집중도 표시** (`app.py:542-561`, `app.js:408-431`): 현재 진행자 순위 목록은 이름·수익률·총 자산만 표시. `host_members()` 응답에 `top_sector: str` 필드를 추가해 (`RoomHolding` 조회 + 섹터별 현재가 합산) 가장 비중 높은 섹터를 반환하면, 진행자 화면에서 "삼성전자 60% (반도체)"처럼 간략 표시 가능. 수업 중 "이 학생은 왜 반도체 집중 투자를 했을까요?" 교육 개입 포인트를 실시간으로 제공.
+
+---
+
+### 제거/단순화할 것들
+
+- **`host_force_price()` 후 뉴스 캐시 미무효화** (`app.py:673-687`): `host_force_price()`는 내부적으로 `svc.force_price()`를 호출하고, `force_price()`는 `stock_service.py:234-240`에서 `self._news`를 직접 갱신함. 그러나 `app.py:687` 응답 직전에 `_invalidate_news_cache(rid)` 호출이 없어, 뉴스 캐시 TTL(2초) 이내에 폴링하는 참여자는 이전 캐시 뉴스를 받아 강제 가격 변동 연계 뉴스를 놓침. `host_send_news()`(`app.py:700`)에는 동일 무효화 호출이 있으므로, `app.py:686` `return jsonify(...)` 직전에 `_invalidate_news_cache(rid)` 한 줄만 추가하면 일관성 확보.
+
+- **`lobby_members` 엔드포인트에 방 소속 검증 없음** (`app.py:577-585`): `lobby_members()`는 `@login_required`와 `Room.query.get_or_404(rid)`만 수행하고, 요청자가 해당 방의 호스트이거나 멤버인지 확인하지 않음. 로그인된 사용자라면 임의의 `rid`로 다른 방 참가자 목록을 열람할 수 있는 정보 노출 취약점. `if cur_user().id != room.host_id and not RoomMember.query.filter_by(room_id=rid, user_id=cur_user().id).first(): return jsonify({'error':'권한 없음'}), 403` 를 `app.py:581` 직후에 추가하면 방어 가능.
+
+- **`submit_quiz()` 쿨다운 갱신이 비원자적 — 동시 제출 시 이중 보상 가능** (`app.py:1278-1341`): `state = _quiz_state.get(key)` 확인과 `_quiz_state[key] = {... 'cooldown_until': time.time()+60 ...}` 갱신 사이에 잠금이 없음. 같은 학생이 두 개 탭에서 거의 동시에 POST를 보내면 두 요청 모두 `cooldown_until == 0`을 읽고 각각 보상을 지급받을 수 있음. 단순 해결책: `app.py:1281` 상단에서 state를 읽기 전에 `_quiz_state[key] = {'qid': state.get('qid'), 'cooldown_until': time.time()+60, ...}`을 먼저 갱신(선점)한 뒤 정답 여부를 처리하면, 두 번째 요청이 도달할 때는 이미 쿨다운 상태여서 차단됨.
+
+- **`minigame_close()`가 `Room.query.get(rid)` 사용** (`app.py:976`): `minigame_close()` 내 `room = Room.query.get(rid)`는 `Room.query.get_or_404` 대신 구 SQLAlchemy 1.x 스타일의 `.get()`을 그대로 사용 중. 2026-06-14 항목에서 전체 `.get_or_404()` 교체를 권장했으나 이 한 줄은 `.get()` 형태라 빠진 것으로 보임. `db.session.get(Room, rid)` 또는 `Room.query.get_or_404(rid)`로 교체하고, `None` 반환 시 조기 반환(`if not room: return jsonify({'ok': True})`) 처리 추가 권장 (`app.py:976-977`).
+
+- **`export_rankings()` 게임 종료 후에도 `StockService.get_price()` 호출** (`app.py:1430-1439`): `_end_room()` 실행 시 모든 보유 주식을 현재가로 현금 청산하고 `RoomHolding`을 삭제하며 `cleanup_room_service(room.id)`를 호출함 (`app.py:144-154`). 따라서 게임 종료 후 `export_rankings()`에서 `member_total_value(rid, m.user_id)`를 호출하면, 보유 주식이 없으므로 `RoomHolding` 쿼리 결과가 빈 배열이고 `get_price()`도 불필요. `room.status == 'ended'` 조건에서는 `member_total_value()` 대신 `m.cash`를 직접 사용하도록 분기 추가 시 N+1 쿼리 제거와 함께 `StockService`가 없어도 안전하게 동작.
+
+- **`doRouletteSpin()` 예외 발생 시 `_rltSpinning = true` 고착** (`app.js:1032-1097`): `_rltSpinning = true` 설정 이후 `await new Promise(r => setTimeout(r, 4300))` (스핀 애니메이션 대기) 중에 예외가 발생하거나 연결이 끊어지면 `_rltSpinning`이 `true`로 남아 스핀 버튼이 영구 비활성화됨. 현재 `data.error` 경로에서만 `_rltSpinning = false`가 실행됨 (`app.js:1047`). `_rltSpinning = true` 이후 로직 전체를 `try { ... } finally { _rltSpinning = false; }` 로 감싸면 모든 예외 경로에서 상태가 정리됨. 단, 스핀 성공 시에도 `_rltSpinning = false` 는 명시적으로 필요하므로 (`app.js:1096`에 이미 있음) finally 블록과 충돌하지 않음.
+
+---
+
 ## 2026-06-23
 
 ### 추가하면 좋을 기능
