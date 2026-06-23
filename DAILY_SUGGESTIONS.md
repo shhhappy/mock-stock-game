@@ -2,6 +2,36 @@
 
 ---
 
+## 2026-06-23
+
+### 추가하면 좋을 기능
+
+- **방 코드에서 혼동하기 쉬운 문자 제거** (`models.py:8-13`): `gen_code()`가 `string.ascii_uppercase + string.digits` 전체에서 6자리 코드를 생성해 `0`과 `O`, `1`과 `I`/`L`처럼 구분하기 어려운 문자가 포함될 수 있음. 학생들이 프로젝터에서 코드를 보고 손으로 입력할 때 실수하는 주된 원인. `BCDFGHJKLMNPQRSTVWXYZ23456789` 처럼 혼동 가능 문자를 제외한 집합으로 교체하면 입력 오류를 크게 줄일 수 있음 — `models.py:8`의 문자열 한 줄 변경으로 해결 가능.
+
+- **퀴즈 타임아웃을 오답 패널티 없이 처리** (`app.js:876-877`, `app.py:1282-1342`): `submitQuiz(null)` (시간 초과) 시 클라이언트가 `answer: false`를 서버로 보내 오답과 동일한 패널티를 부과함. 시간 초과는 의도적 오답이 아니므로 교육 맥락에서는 패널티 없이 단순 쿨다운만 적용하는 것이 적절. `submit_quiz()` (`app.py:1270`) 호출 시 `timed_out` 파라미터를 추가하거나, 클라이언트에서 `answer: null`을 전송해 서버에서 `if d.get('answer') is None: penalty = 0`으로 분기 처리 권장.
+
+- **`S.assetHistory` 120포인트 상한으로 장기 게임 차트 잘림** (`app.js:752`): 10초 폴링 기준으로 120포인트 = 최근 20분 분량만 유지됨. 60분 이상 게임에서는 자산 변화 차트가 마지막 20분만 표시되어 전체 추세를 볼 수 없음. `S.room.duration_minutes * 6 + 10`(분당 6포인트 기준)처럼 게임 시간에 비례하는 동적 상한값으로 변경하거나, 포트폴리오 탭 진입 시 전체 이력 중 마지막 N개만 렌더링하는 방식 권장 (`app.js:1506-1539` 차트 렌더링 부분 참조).
+
+- **진행자 생성 화면의 "학번" 필드가 교사에게 부적합** (`index.html:51-60`, `app.js:122`): 진행자 생성 화면에 "학번" 필드가 있어 교사도 학번을 입력해야 함. 교사는 학번이 없으므로 혼란스럽고 빈칸 제출 시 유효성 검사 오류가 남. 레이블을 "번호/교번 (선택)"으로 변경하거나 선택 입력으로 바꾸고, 비어 있으면 이름만으로 username을 구성하도록 `doCreateRoom()` 로직을 수정하면 교사 사용 경험이 개선됨.
+
+- **Render 무료 티어 슬립 후 진행 중인 게임의 주가 초기화** (`stock_service.py:318-322`, `app.py:120-163`): Render 무료 티어는 15분 비활성 후 dyno를 재시작함. 재시작 시 `get_room_service(rid)`가 새 `StockService` 인스턴스를 생성해 `_init_prices()`가 다시 실행되므로 모든 종목 가격이 새 무작위값으로 초기화됨. 게임 도중 교사 탭이 15분 이상 백그라운드에 있다가 돌아오면 주가가 완전히 달라져 있을 수 있음. 단기 해결책으로 `GET /api/ping` 같은 헬스체크 엔드포인트를 추가하고 외부 cron(예: UptimeRobot)으로 10~14분마다 핑하면 슬립을 방지할 수 있음. 중장기적으로는 가격 상태를 DB에 영속화하는 것이 근본 해결책.
+
+---
+
+### 제거/단순화할 것들
+
+- **`RoomMember.cash` 등 금액 컬럼이 `Float` 타입** (`models.py:52`, `models.py:62`, `models.py:77`, `models.py:88`): `RoomMember.cash`, `RoomHolding.avg_price`, `RoomTransaction.price/amount`, `Deposit.amount` 모두 `db.Column(db.Float)`으로 선언되어 있음. 부동소수점 정밀도 문제로 이자 계산·포트폴리오 집계 등에서 오차가 누적될 수 있음. SQLite 환경에서는 당장 체감하기 어렵지만 PostgreSQL 이전 시 두드러짐. `db.Numeric(precision=18, scale=2)` 또는 정수(원 단위)로 변경하고 `round()` 호출에 의존하지 않는 것이 장기적으로 안전.
+
+- **`_room_cache` TTL 1.5초가 폴링 주기 10초보다 훨씬 짧아 캐시 히트 불가** (`app.py:45`): `ROOM_CACHE_TTL = 1.5`초인데 클라이언트 폴링 주기는 10초. 캐시 생성 후 1.5초면 만료되므로 다음 폴링(약 8.5초 후)이 도착할 때는 항상 캐시 미스 상태. 동시에 여러 참여자가 폴링하는 짧은 창에서만 캐시 효과가 있음. TTL을 폴링 주기보다 약간 짧게(예: 8초)로 늘리면 같은 10초 사이클 내 여러 참여자의 중복 DB 조회를 방지하는 효과가 훨씬 커짐.
+
+- **`openpyxl` import가 라우트 함수 내부에 선언됨** (`app.py:1422-1424`): `import openpyxl`과 `from openpyxl.styles import ...`가 `export_rankings()` 함수 안에 있음. 파이썬이 모듈을 캐싱하므로 큰 문제는 아니지만, `openpyxl` 미설치 오류가 서버 시작 시 즉시 드러나지 않고 첫 엑셀 다운로드 요청(수업 종료 직후)까지 숨겨짐. 모듈 최상단(`from flask import ...` 근처)으로 이동하면 패키지 누락이 배포 시작 즉시 감지됨.
+
+- **`_prev` 가격이 게임 시작 이후 갱신되지 않아 `change_pct`가 누적 변동률이 됨** (`stock_service.py:127`): `self._prev[sym] = start`로 초기화 후 `get_price()`가 가격을 업데이트해도 `_prev`는 변하지 않음. `get_prev_close()`가 항상 게임 시작 가격을 반환하므로 `change_pct`는 "직전 대비"가 아닌 "게임 시작 이후 누적 변동률"을 표시함. 30분 게임 후반에는 변동률이 ±30% 이상이 되어 실제 주식 화면과 달리 느껴짐. `get_price()` 내 `self._prices[symbol] = (now, new_price)` 직전에 `self._prev[symbol] = price`를 추가하면(`stock_service.py:185` 근처) 실제 "직전 TTL 대비" 변동률 표시가 가능해짐.
+
+- **참여자 폴링에서 `refreshMyRank()`와 순위 탭 `loadParticipantRankings()`가 rankings API를 중복 호출** (`app.js:647-649`): 10초 폴링 루프 마지막 두 줄이 각각 `refreshMyRank()`(rankings API 호출)와 `if (S.currentPage === 'rankings') loadParticipantRankings()`(또 rankings API)를 실행함. 순위 탭이 열려 있을 때 매 10초마다 동일한 `GET /api/rooms/<rid>/rankings`가 2번 발생. `loadParticipantRankings()` 완료 후 그 응답에서 `data.find(e => e.is_me)`로 헤더 통계를 갱신하도록 통합하거나, 순위 탭이 활성화된 경우 `refreshMyRank()` 별도 호출을 생략하면 API 요청 1건 절약.
+
+---
+
 ## 2026-06-10
 
 ### 추가하면 좋을 기능
