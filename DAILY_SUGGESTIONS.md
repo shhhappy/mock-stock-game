@@ -1043,3 +1043,37 @@
 
 - **`get_room()` 라우트에서 `_auto_start_lottery_if_due()` 호출이 모든 멤버 폴링마다 실행됨** (`app.py:470`, `app.py:408-430`): 참여자 30명이 10초마다 `GET /api/rooms/<rid>` 폴링 → 30개 동시 요청 → `_auto_start_lottery_if_due()` 30번 호출. 내부에 `_lottery_lock`이 있어 중복 실행을 방지하지만, 잠금 획득 전에도 `room.status != 'active'` 체크 이후 `_lot_round_due()` 계산이 매번 수행됨. 복권 자동 시작 조건은 `_room_cache`가 만료될 때(1.5초 TTL) 한 번만 확인하면 충분하므로, `_auto_start_lottery_if_due()` 호출을 캐시 미스 경로에만 두거나, `_lot_round_due()` 결과도 캐시하면 30 × 초당 0.67회 = 초당 20회의 중복 계산을 제거할 수 있음.
 
+---
+
+## 2026-06-24 (2차)
+
+### 추가하면 좋을 기능
+
+- **진행자 "종목 개별 잠금" 기능** (`stock_service.py:174-190`, `app.py:673-687`): 현재 시장 이벤트는 섹터 전체 가격을 한 번에 움직이지만, 특정 종목만 수업 주제로 부각시키기 위해 해당 종목 가격을 일정 시간 고정하는 기능이 없음. `StockService`에 `_locked_until: dict[str, float] = {}` 필드를 추가하고, `tick()` 내 가격 업데이트 시 `if time.time() < self._locked_until.get(sym, 0): continue` 한 줄로 건너뜀. 잠금 해제 POST 엔드포인트(`/api/rooms/<rid>/host/lock-stock`) 하나와 호스트 UI 토글 버튼만 추가하면 완성. 학생들에게 "이 종목은 지금 거래 동결 중" 안내도 가능해짐.
+
+- **학생별 투자 성향 분석 뱃지** (`models.py:68-79`, `app.js:1694`): 게임 종료 후 결과 화면에서 `RoomTransaction` 패턴을 분석해 "단타형(평균 보유 시간 < 5분)", "분산형(3개 이상 종목 보유)", "집중형(한 종목 비중 70% 이상)" 같은 투자 성향 뱃지를 표시함. 서버 측 `/api/rooms/<rid>/my-analysis` 엔드포인트에서 `RoomTransaction.query.filter_by(room_id=rid, user_id=uid)` 조회 후 집계, 또는 `loadResults()` 내에서 이미 있는 `S.txns` 배열로 클라이언트 계산 가능. 추가 DB 쿼리 없이 기존 데이터로 구현 가능하며 수업 마무리 토론 자료로 활용됨.
+
+- **거래 내역에 현재가 대비 수익률 표시** (`app.js:1569-1591`): `loadTxn()`에서 거래 목록을 렌더링할 때 `t.price`(체결가)와 `S.stocks.find(s => s.symbol === t.symbol)?.price`(현재가)를 비교해 `((현재가 - 체결가) / 체결가 * 100).toFixed(1)%` 값을 각 거래 행에 작은 뱃지로 표시함. BUY 거래에는 현재 평가 손익이, SELL 거래에는 매도 후 주가 변동이 보여 "팔고 나서 더 올랐다" 같은 학습 포인트를 즉시 시각화할 수 있음. 이미 `S.stocks`가 폴링으로 최신 상태이므로 추가 API 호출 없이 구현 가능.
+
+- **진행자 시장 탭 종목별 보유 학생 수 표시** (`app.py:651-671`, `models.py:57-65`): `/api/rooms/<rid>/stocks` 응답에 `holder_count` 필드를 추가함. `db.session.query(RoomHolding.symbol, func.count(RoomHolding.user_id)).filter(RoomHolding.room_id == rid, RoomHolding.shares > 0).group_by(RoomHolding.symbol).all()` 단일 쿼리로 전 종목의 보유자 수를 한 번에 조회해 딕셔너리로 변환한 뒤 stocks 리스트에 병합. 진행자 화면 종목 카드에 "N명 보유" 뱃지를 띄우면 "가장 인기 있는 종목" 현황을 실시간으로 파악하고 수업 포인트로 활용 가능.
+
+- **게임 중 목표 수익률 달성 알림** (`app.js:735-753`): `localStorage.setItem('gain-target-' + S.room.id, threshold)` 로 룸별 목표 수익률을 저장하고, `refreshMyRank()` 내 `me.gain_pct`가 임계값을 최초로 넘는 순간 `toast('🎯 목표 달성!')` + `navigator.vibrate?.([200])` 을 호출함. `S._gainTargetNotified` 플래그로 중복 알림 방지. 서버 변경 없이 10줄 이내로 구현 가능하며, 수업 전 교사가 "오늘의 목표: +10%" 같은 미션을 제시할 때 즉각적인 피드백을 제공함.
+
+- **`loadPortfolio()` 도넛 차트 `update()` 패턴으로 교체** (`app.js:1486-1510`): `if (S.portChart) S.portChart.destroy(); S.portChart = new Chart(ctx, {...})` 패턴이 포트폴리오 탭 진입마다 실행됨. `S.portChart`가 이미 존재할 때는 `S.portChart.data.labels = labels; S.portChart.data.datasets[0].data = values; S.portChart.update()` 로 데이터만 교체하면 DOM 재생성 없이 애니메이션과 함께 부드럽게 업데이트됨. `loadChart()` (`app.js:1376`)도 동일한 패턴으로 고쳐야 하며, 두 곳 모두 수정하면 차트 깜빡임과 메모리 누수가 동시에 제거됨.
+
+---
+
+### 제거/단순화할 것들
+
+- **`host_market_event()` 에서 뉴스 캐시 무효화 누락** (`app.py:1345-1360`): `stock_service.force_sector_event()` 내부에서 `self._news`를 업데이트(`stock_service.py:244-276`)하지만, `app.py:1360` 반환 전에 `_invalidate_news_cache(rid)` 호출이 없음. `host_send_news()` (`app.py:700`)는 동일 함수를 호출하는데 반해 누락된 것. 결과적으로 섹터 이벤트 직후 학생 클라이언트는 최대 2초간 구 뉴스를 읽음. `return jsonify({'ok': True})` 바로 위에 `_invalidate_news_cache(rid)` 한 줄 추가로 수정.
+
+- **`lottery_start()` 중복 시작 방지 체크가 `_lottery_lock` 바깥에서 실행됨** (`app.py:1088-1090`): `lot.get('current')` 확인 후 `lot['current'] = {...}` 할당까지의 과정이 `_lottery_lock` 획득 전에 이루어짐. 두 요청이 동시에 None 체크를 통과하면 복권 라운드가 중복 시작됨(네트워크 재시도·이중 클릭 상황). 라인 1088 check와 1094 assignment를 모두 `with _lottery_lock:` 블록 안으로 이동시켜야 함. 현재 lock은 라인 1092에서만 진입하므로, 전체 체크+할당 구간을 하나의 `with` 블록으로 감싸도록 수정 필요.
+
+- **`loadChart()` 기간 탭 클릭마다 Chart.js 인스턴스 파괴 후 재생성** (`app.js:1376`): `if (S.stockChart) S.stockChart.destroy(); S.stockChart = new Chart(ctx, cfg)` 가 1d/5d/1mo/3mo 탭 전환 때마다 실행됨. 이미 `renderHostBarChart()`에 적용된 `chart.data.labels = ...; chart.data.datasets[0].data = ...; chart.update()` 패턴으로 교체하면 탭 전환 시 깜빡임이 없어지고 GC 압력도 줄어듦. 색상(상승·하락 borderColor)만 `chart.data.datasets[0].borderColor = color; chart.data.datasets[0].backgroundColor = color + '33'` 으로 별도 갱신하면 됨.
+
+- **`minigame_spin()` 예금 부분 차감 후 이자 계산 기반 오류** (`app.py:1048-1058`): 현금 부족 시 `dep.amount -= take` 로 원금만 줄이고 `dep.status`는 `'active'`로 유지함. `_end_room()` 에서 이자를 `d.amount * d.rate / 100 * ratio` (`app.py:140`)로 계산하므로 차감된 원금에만 이자가 붙어 학생이 원래 예금한 금액 대비 과소 이자를 받음. 수정 방법: 기존 `Deposit`을 `'withdrawn'`으로 닫고, 남은 금액(`dep.amount - take`)으로 새 `Deposit`을 `created_at=now`로 생성하면 이자 계산 기반이 정확해짐. 또는 부분 차감을 허용하되 `interest_base` 컬럼을 별도 관리하도록 모델 변경 필요.
+
+- **`get_stocks()` 방 소속 검증 없어 타 방 주가 열람 가능** (`app.py:651-654`): `@login_required` 만 적용되어 있어 로그인한 모든 사용자가 임의의 `rid`로 `GET /api/rooms/<rid>/stocks` 를 호출해 해당 방의 실시간 시뮬레이션 주가를 읽을 수 있음. 방마다 독립적으로 가격이 형성(`stock_service.py:80-130`)되므로 정보 비대칭 발생 우려가 있음. `Room.query.get_or_404(rid)` 직후 `if not (room.host_id == cur_user().id or RoomMember.query.filter_by(room_id=rid, user_id=cur_user().id).first()): return jsonify({'error': '권한 없음'}), 403` 조건을 추가해야 함.
+
+- **`RoomTransaction.action` 컬럼 길이가 4자로 제한되어 'LOTTO' 저장 불가** (`models.py:73`): `db.Column(db.String(4))` 로 선언되어 있어 'BUY'·'SELL'·'ADJ'는 저장되지만, 복권 당첨 트랜잭션 종류를 'LOTTO'(5자)로 추가하려면 마이그레이션 필요. 현재는 복권 당첨금을 `action='ADJ'`, `note='복권 당첨'`으로 우회 저장 중(`app.py:1143`)이어서 거래 유형 필터링이 불가능함. `db.String(10)` 으로 늘리고 전용 `action='LOTTO'` 값을 사용하면 거래 내역 조회·엑셀 내보내기 시 복권 수익을 명확히 구분할 수 있음.
+
