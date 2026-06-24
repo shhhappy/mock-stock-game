@@ -1009,3 +1009,37 @@
 
 - **`RoomHolding.avg_price` 음수/0 저장 가능 → 포트폴리오 손익 왜곡** (`app.py:1037-1040`, `app.py:1318-1319`): 룰렛 베팅·퀴즈 패널티에서 보유 주식을 강제 처분할 때 `h.shares = 0; h.avg_price = 0`을 저장하고 `db.session.delete(h)`를 하지 않음 (2026-06-22 기존 분석에서 누락 지적했으나 avg_price=0 파생 문제는 미언급). 이후 `get_portfolio()` 에서 `h.shares <= 0` 조건으로 필터링하면 숨겨지지만, 추후 같은 종목을 재매수하면 `holding.avg_price * holding.shares + amount) / ns` 계산에서 avg_price=0이 사용됨. 0 * 0 = 0이어서 수식 자체는 맞지만 `h.avg_price = 0` 인 레코드와 다음 매수가 합산될 때 `holding.shares = 0`이므로 분모가 `shares`(=0)로 시작해 ZeroDivisionError 가능. `if holding and holding.shares == 0: db.session.delete(holding); holding = None` 처리 후 새로 `RoomHolding` 생성하면 모호성 제거.
 
+---
+
+## 2026-06-24
+
+### 추가하면 좋을 기능
+
+- **QR코드 URL에서 방 코드 자동 채우기** (`app.js:196-205`, `index.html:315-334`): `_makeQR()`이 `${location.origin}${location.pathname}?code=${S.room.code}` URL을 QR에 인코딩하지만, 페이지 로드 시 `?code=` 파라미터를 읽어 `join-code` 입력란에 자동으로 채우는 로직이 없음. 학생이 QR을 스캔해 접속해도 여전히 6자리 코드를 수동 입력해야 해 QR 편의성이 반감됨. `DOMContentLoaded`에서 `const autoCode = new URLSearchParams(location.search).get('code'); if (autoCode) { document.getElementById('join-code').value = autoCode.toUpperCase(); showScreen('screen-join'); }` 10줄 이내 코드로 해결 가능하며, 학생 입장 시간을 단축해 수업 시작을 빠르게 할 수 있음.
+
+- **`api` 래퍼 네트워크 오류 핸들링 없음** (`app.js:29-44`): `api.get/post/del` 세 메서드 모두 `await fetch(url)` 이후 `.ok` 체크만 하고, DNS 실패·타임아웃·연결 거부 등 `fetch()`가 reject될 때는 처리가 없음. Wi-Fi가 불안정한 교실 환경에서 네트워크가 잠깐 끊기면 `Uncaught TypeError: Failed to fetch`가 콘솔에만 출력되고 UI는 아무 피드백 없이 멈춤. `async get(url) { try { const r = await fetch(url); ... } catch(e) { return {error: '네트워크 오류 — 연결을 확인하세요'}; } }` 패턴으로 세 메서드에 try-catch를 추가하면 학생이 오류를 인지하고 재시도할 수 있음.
+
+- **강퇴된 학생의 재입장 방지 없음** (`app.py:564-575`, `app.py:392-406`): `kick_member()`는 `RoomMember` 행만 삭제하고 재입장 금지 처리가 없어, 강퇴당한 학생이 같은 코드로 `join_room()`을 즉시 다시 호출하면 재입장이 허용됨. `Room` 모델에 `kicked_users = db.Column(db.Text, default='')` 컬럼을 추가해 `kick_member()` 시 user_id를 콤마 구분으로 저장하고, `join_room()`에서 `if str(user.id) in (room.kicked_users or '').split(',')` 체크 후 403을 반환하면 됨. 대안으로 `RoomMember`에 `kicked = db.Column(db.Boolean, default=False)` 플래그를 두고 삭제 대신 비활성화하는 방식도 가능.
+
+- **진행자 화면에서 룰렛 진행 상황 알 수 없음** (`app.py:948-963`, `index.html:135-142`): 룰렛 미니게임이 자동 트리거되면 진행자 화면에 "게임 일시정지" 표시 외에 몇 명이 아직 룰렛을 진행 중인지 알 방법이 없음. `_rlt_active[rid]['count']`(현재 미니게임을 열고 있는 학생 수)를 `room_dict()` 에 `rlt_open_count` 필드로 추가하고(`app.py:288-305`), 진행자 게임 화면의 상태바에 "룰렛 진행 중: N명 남음" 텍스트를 표시하면 교사가 모든 학생이 완료할 때까지 기다릴 수 있음. 서버 1줄 + 클라이언트 3줄 이내로 구현 가능.
+
+- **`S.watchlist`가 모든 방/세션에서 공유됨** (`app.js:17`): `new Set(JSON.parse(localStorage.getItem('watchlist') || '[]'))`로 초기화해 학번·방 구분 없이 동일한 관심종목 목록을 사용함. 1학기 게임에서 등록한 종목이 새 학기 새 방에서도 별표가 켜진 채 표시되어 혼란 가능. `S.room`이 확정된 후 `'watchlist-' + S.room.id` 키로 로드/저장하도록 `enterParticipantGame()` 시점에 갱신하면 방별로 독립된 관심종목이 유지됨. `S.watchlist` 초기화는 `app.js:17`에서 일단 비우고(`new Set()`), `enterParticipantGame()` 안에서 `S.watchlist = new Set(JSON.parse(localStorage.getItem('watchlist-' + S.room.id) || '[]'))` 로 갱신하는 패턴 권장.
+
+- **복권·룰렛 결과를 거래 내역 UI에서 식별하기 어려움** (`app.js:522-535`, `index.html:394-403`): 거래 내역 목록에서 `action === 'RLT'`(룰렛) 또는 `symbol === 'LOTTO'`(복권)인 항목은 일반 매수/매도와 같은 스타일로 표시됨. 현재 `txn-badge` 클래스는 `buy`·`sell`·`adj` 세 가지인데 `rlt`와 `lotto` 전용 뱃지(🎰 룰렛, 🎟 복권)를 추가하면 학생이 게임 후 포트폴리오 탭에서 미니게임 수익/손실을 빠르게 파악 가능. CSS 2줄 + 렌더링 조건 분기 1줄로 구현 가능하며, 게임 종료 후 토론에서 "미니게임이 내 순위에 얼마나 영향을 줬나" 교육 토론 자료로 활용 가능.
+
+---
+
+### 제거/단순화할 것들
+
+- **`RoomTransaction` 테이블에 복합 인덱스 없음** (`models.py:68-79`): `RoomTransaction`에 `(room_id, user_id)` 복합 인덱스가 없어, 자주 호출되는 `.filter_by(room_id=rid, user_id=uid)` 패턴(거래 내역 조회, 룰렛 스핀 횟수 카운트 등)이 테이블 전체 스캔을 수행함. 학생 30명이 각 100건 거래하면 3,000행, 복권까지 더하면 더 많아짐. `__table_args__ = (db.Index('ix_txn_room_user', 'room_id', 'user_id'),)` 한 줄을 `RoomTransaction` 클래스에 추가하면 됨. SQLite/PostgreSQL 모두 지원하며 마이그레이션 없이 `db.create_all()`로 생성 가능 (기존 DB에는 `CREATE INDEX IF NOT EXISTS ix_txn_room_user ON room_transactions(room_id, user_id)` 실행 필요).
+
+- **자산 청산 로직이 `minigame_spin()`과 `submit_quiz()`에서 35줄씩 중복** (`app.py:1022-1057`, `app.py:1302-1338`): 현금 부족 시 ① 보유 주식을 가치 높은 순으로 매각 → ② 남은 부족분을 예금 인출로 충당하는 로직이 거의 동일하게 두 곳에 복사되어 있음. `_liquidate_for_amount(rid, uid, member, shortfall, note_prefix)` 헬퍼 함수로 추출하면 코드 70줄이 함수 1개 + 호출 2줄로 압축됨. 향후 세금·벌금·이벤트 같은 차감 기능 추가 시에도 동일 헬퍼를 재사용 가능.
+
+- **`_rlt_active` 딕셔너리가 서버 재시작 후 소실되어 룰렛 미완료 상태 복구 불가** (`app.py:252`, `app.py:466-468`): `_lots`(복권)은 `room.lottery_rounds_done` DB 컬럼으로 완료 회차를 복구하지만(`app.py:174-178`), `_rlt_active`는 별도 복구 로직이 없음. `room.rlt_triggered == True && room.status == 'paused'`인 방은 `app.py:467-468`에서 `_rlt_active[rid]`를 재초기화하지만 `count`가 항상 0으로 복구됨. Render 재시작 후 룰렛 진행 중이던 학생들의 클로즈 요청이 `count == 0`을 감지해 게임을 바로 종료하거나 영구 일시정지 상태에 빠질 수 있음. 단기 해결책: 재시작 복구 시 `count`를 0 대신 `RoomMember` 수로 초기화하고, 각 `minigame/close` 호출에서 count를 감소시키도록 현재 로직을 유지.
+
+- **QR코드 색상 반전으로 구형 스캐너에서 인식 실패 가능** (`app.js:200-205`): `colorDark: '#e6edf3'` (밝음), `colorLight: '#0d1117'` (어두움)으로 설정되어 표준 QR코드의 흑백 배치가 뒤집혀 있음. QR코드 표준(ISO/IEC 18004)은 어두운 모듈이 밝은 배경 위에 있어야 함을 권장하며, 구형 Android 카메라 앱이나 일부 교실 태블릿에서 반전 QR 인식 실패 사례가 있음. `colorDark: '#000000'`, `colorLight: '#FFFFFF'`로 변경하고 QR 컨테이너에 `padding: 8px; background: #fff; border-radius: 8px` 인라인 스타일을 추가하면 호환성 문제 없이 다크 테마에서도 자연스럽게 표시됨 (`app.js:200-205`, `index.html:93`, `index.html:657`).
+
+- **`_get_room_cached()` 캐시 히트 시 불필요한 딕셔너리 전체 복사** (`app.py:51-64`): `d = dict(entry['data'])`로 캐시 데이터 전체를 복사한 뒤 `d['is_host'] = uid == room.host_id` 한 줄을 추가함. `is_host`는 `room.host_id == uid` 비교이므로 캐시에 `host_id`를 저장하고, 조회 시 `data = dict(entry['data']); data['is_host'] = (uid == data['host_id'])` 로 변경하면 코드 의도가 더 명확해짐. 더 나아가 참조 공유로 인한 캐시 오염을 방지하려면 `copy.copy()` 대신 필요한 필드만 새 딕셔너리로 조립하는 방식이 안전함 (`app.py:55-59`).
+
+- **`get_room()` 라우트에서 `_auto_start_lottery_if_due()` 호출이 모든 멤버 폴링마다 실행됨** (`app.py:470`, `app.py:408-430`): 참여자 30명이 10초마다 `GET /api/rooms/<rid>` 폴링 → 30개 동시 요청 → `_auto_start_lottery_if_due()` 30번 호출. 내부에 `_lottery_lock`이 있어 중복 실행을 방지하지만, 잠금 획득 전에도 `room.status != 'active'` 체크 이후 `_lot_round_due()` 계산이 매번 수행됨. 복권 자동 시작 조건은 `_room_cache`가 만료될 때(1.5초 TTL) 한 번만 확인하면 충분하므로, `_auto_start_lottery_if_due()` 호출을 캐시 미스 경로에만 두거나, `_lot_round_due()` 결과도 캐시하면 30 × 초당 0.67회 = 초당 20회의 중복 계산을 제거할 수 있음.
+
