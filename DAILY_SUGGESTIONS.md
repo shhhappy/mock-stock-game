@@ -1105,3 +1105,35 @@
 
 - **`refreshMyRank()` 가 전체 순위 배열을 받아 자기 항목만 추출** (`app.js:735-753`): 30명 방에서 `/api/rooms/<rid>/rankings` 전체를 10초마다 받아 `find()`로 내 항목만 꺼냄. 참가자가 순위 탭을 보지 않아도 폴링됨. 백엔드에 `GET /api/rooms/<rid>/my_rank` 엔드포인트를 추가해 본인 순위·자산만 반환하거나, 순위 탭이 열려 있을 때만 전체 순위를 요청하는 조건을 추가하면 불필요한 DB 쿼리를 줄일 수 있음.
 
+---
+
+## 2026-06-25 (2차)
+
+### 추가하면 좋을 기능
+
+- **시장 탭 상단 가로 스크롤 주가 티커 마퀴** (`app.js:1229-1270`, `static/css/style.css`): `loadMarket()` 이후 이미 `S.stocks` 배열에 모든 종목 현재가·등락률이 담겨 있음. 이 데이터를 활용해 상승/하락 상위 10개 종목을 CSS `@keyframes marquee` + `overflow: hidden` 컨테이너로 횡스크롤 표시하면 서버 변경 없이 실시간 주가 흐름을 한눈에 볼 수 있음. `renderGrid()` 호출 직후 `updateTicker(S.stocks)` 를 추가하고 10줄 이내의 JS + CSS로 구현 가능.
+
+- **게임 중 진행자 예금 금리 실시간 변경 이벤트** (`app.py:878-903`, `models.py:82-92`): 현재 `deposit_rate`는 방 생성 시 설정되면 변경 방법이 없음. `Deposit.rate`는 가입 시점에 복사 저장되므로(`models.py:88`) 기존 예금에는 영향이 없고 새 예금에만 신규 금리가 적용됨. `POST /api/rooms/<rid>/host/deposit-rate` 엔드포인트를 추가해 `room.deposit_rate`를 갱신하고, 진행자 UI에 슬라이더를 노출하면 중앙은행 기준금리 결정 수업 시나리오를 실제 게임 안에서 구현할 수 있음.
+
+- **게임 결과 화면 투자 스타일 자동 라벨링** (`app.py:808-824`, `app.py:1417-1488`): 게임 종료 후 `RoomTransaction` 기록을 분석해 거래 횟수·섹터 집중도·평균 보유 기간 지표를 산출하고 학생마다 "단타형 🔥"(50회 이상 거래), "장기보유형 💎"(평균 보유 5분 이상), "분산투자형 🌈"(5개 섹터 이상), "예금형 🏦"(현금 80% 이상)과 같은 레이블을 붙이면 됨. `get_rankings()` 응답에 `style_label` 필드를 추가하고 결과 화면 및 Excel 내보내기에 반영.
+
+- **포트폴리오 탭 섹터별 비중 도넛 차트 토글** (`app.js:1456-1510`): 현재 포트폴리오 도넛 차트는 종목 단위로만 표시됨. 보유 종목의 `sector` 필드(`stock_service.py`의 `STOCKS` 딕셔너리에 있음)를 그룹화해 섹터별 비중으로 전환하는 "섹터별 보기" 버튼을 추가하면 됨. 서버 변경 없이 Chart.js `data.labels`와 `data.datasets[0].data`만 교체하는 10줄 수정으로 구현 가능하며, 포트폴리오 분산도를 직관적으로 파악할 수 있음.
+
+- **진행자 특정 종목 서킷브레이커(거래 정지)** (`stock_service.py`, `app.py`): `StockService`에 `_halted: set` 속성을 추가하고 `freeze_symbol(rid, sym)` / `unfreeze_symbol(rid, sym)` 메서드를 구현. `app.py`의 `trade()` 엔드포인트에서 해당 심볼이 정지 목록에 있으면 `{'error': '거래 정지 종목입니다'}, 403` 반환. `get_stocks()` 응답에 `trading_halted: bool` 필드 포함. 진행자 호스트 시장 탭에서 종목별 정지 토글 버튼 노출. 주식시장 서킷브레이커 개념을 실습할 수 있음.
+
+- **종목 카드 롱프레스 1주 즉시 매수** (`app.js:1287-1324`): `renderGrid()` 에서 생성되는 종목 카드에 `touchstart` 이벤트 핸들러를 등록해 500ms 이상 유지 시 모달 없이 `execTrade('BUY', symbol, 1)`을 직접 호출하는 기능. `localStorage`에 `quickBuyEnabled` 플래그를 두어 선택적으로 활성화. 수업 중 빠르게 1주씩 모아가는 장기투자 시나리오에서 모달 클릭 반복 없이 편리하게 매수할 수 있음.
+
+### 제거/단순화할 것들
+
+- **`create_room()` `starting_cash` 상한값 누락** (`app.py:384-385`): `starting_cash = max(100000, float(d.get('starting_cash', 10_000_000)))` 로 하한(10만)은 있지만 상한이 없음. 진행자가 1조 원을 입력하면 순위 표·Excel 컬럼 너비가 깨지고 소수점 float 정밀도 문제가 증폭됨. `min(starting_cash, 1_000_000_000)` 을 추가하고 HTML `<input max="1000000000">` 속성도 함께 설정할 것.
+
+- **`lobby_members()` 유저 조회 N+1 쿼리** (`app.py:577-585`): `for m in members: db.session.get(User, m.user_id)` 를 멤버 수만큼 반복 실행함. 같은 파일의 `host_members()` (`app.py:550`)는 이미 `user_map = {u.id: u for u in db.session.query(User).filter(User.id.in_(uids)).all()}` 패턴으로 배치 조회함. `lobby_members()`도 동일 패턴으로 교체하면 30명 방 기준 DB 왕복 29회를 절감.
+
+- **`doRouletteSpin()` 결과 수신 후 `_rltCash` 경쟁 조건** (`app.js:1064-1068`): 스핀 성공 시 `_rltCash = data.cash` (현금만)로 즉시 갱신한 뒤, 비동기로 `api.get(minigame)` 를 불러 `_rltCash = data.total_assets` 로 재갱신함. 이 짧은 사이에 `setRltPct(pct)` (`app.js:1028`)가 호출되면 보유 주식 평가액이 제외된 값으로 베팅 금액을 계산해 실제보다 낮은 금액이 입력됨. 베팅 컨트롤 재활성화를 minigame 재조회 완료 후로 미루거나 `await` 체인으로 순서를 보장해야 함.
+
+- **`get_history()` `interval` 파라미터가 실제로 무시됨** (`stock_service.py:296-297`): `step = 86400` 이 고정값으로 사용되어 `interval='5m'`이든 `'1wk'`이든 항상 1일 간격으로 캔들이 생성됨. 프론트엔드가 "1일·1달·1년" 탭을 제공하지만 모든 탭의 차트가 동일하게 보임. `step_secs = {'5m': 300, '30m': 1800, '1d': 86400, '1wk': 604800}.get(interval, 86400)` 로 매핑한 뒤 `now - i * step_secs` 로 교체하면 탭별 다른 시간 해상도를 제공할 수 있음.
+
+- **`startTimer()` 클라이언트 시계 의존으로 드리프트 발생** (`app.js:756-776`): `rem = Math.floor((new Date(S.room.end_time) - new Date()) / 1000)` 는 학생 기기의 시스템 시계를 그대로 사용함. 기기 시계가 ±1~2분 오차가 있으면 게임 내내 타이머가 다르게 표시됨. 서버가 이미 `room_dict()`에서 `remaining_seconds`를 계산해 반환하므로(`app.py` 내 `room_dict` 함수), 폴링 응답의 `remaining_seconds`와 클라이언트 측 경과 시간을 합산하는 `S.serverTimeOffset` 보정값을 도입하면 시계 오차를 제거할 수 있음.
+
+- **호스트 폴링에서 `loadHostMembers()`와 `refreshRoomStatus()` 동시 실행으로 `S.room` 갱신 경쟁** (`app.js:269-273`, `app.js:1180-1207`): 호스트 `setInterval` 콜백이 두 함수를 `await` 없이 연속 호출해 둘 다 비동기로 실행됨. 응답 순서에 따라 먼저 도착한 `refreshRoomStatus()` 결과가 더 늦게 도착한 `loadHostMembers()` 의 부수 갱신을 덮어쓸 수 있음. 두 호출을 `await loadHostMembers(); await refreshRoomStatus();` 로 직렬화하거나 단일 엔드포인트로 통합해야 함.
+
