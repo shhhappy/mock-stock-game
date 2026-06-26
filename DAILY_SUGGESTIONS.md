@@ -1167,3 +1167,37 @@
 
 - **서버 재시작 시 복권 `active` 상태 유실로 방 고착 가능** (`app.py:165-166`, `app.py:409-430`): `_lots` 딕셔너리가 in-memory에만 존재해 서버 재시작(Render 슬립→웨이크업 포함) 시 초기화됨. 복권 진행 중 서버가 재시작되면 `_lots` 키가 없어 `GET /api/rooms/<rid>/lottery` 가 빈 응답을 반환하고, 참가자 화면은 폴링으로 `status: null`을 받아 복권 오버레이가 닫히지 않는 상태가 될 수 있음. 단기 해결책으로 `Room.lottery_rounds_done` 필드처럼 `_lots` 상태를 DB 컬럼(`Room.lottery_state TEXT`)에 JSON 직렬화해 재시작 후 복원하거나, 서버 재시작 감지 시 진행 중 복권을 자동 종료(skip)하는 로직을 추가해야 함.
 
+---
+
+## 2026-06-26 (2차)
+
+### 추가하면 좋을 기능
+
+- **API 401 응답 전역 처리 없어 세션 만료 시 화면 고착** (`app.js:29-45`): `api.get/post` 함수가 HTTP 401을 받으면 `{error: 'HTTP 401'}`을 반환하지만 이를 전역에서 처리해 랜딩 페이지로 복귀하는 코드가 없음. 서버 재시작·쿠키 삭제 등으로 세션이 만료되면 10초 폴링이 계속 401을 받으면서도 학생 화면은 게임 중 상태로 고착되고 오류 메시지 없이 데이터만 사라짐. `api.get/post` 안에 `if (r.status === 401) { showLanding(); toast('세션이 만료되었습니다. 다시 입장해주세요.', 'warn'); return {error: 'session'}; }` 처리를 추가하면 5줄로 해결 가능하며, 서버 재시작이 잦은 Render 무료 티어 환경에서 특히 중요.
+
+- **보유 종목 주식 차트 모달에 매수 평균가 수평선 미표시** (`app.js:1344-1398`): `openStockModal()`에서 포트폴리오 API를 호출해 `S.tradeHolding`과 `avg_price`를 이미 알고 있지만, `loadChart()`가 생성하는 Chart.js 라인 차트에 매수 평균가 수평선이 없어 학생이 차트 상에서 수익/손실 여부를 바로 파악하기 어려움. `datasets`에 `{data: Array(labels.length).fill(port.avg_price), borderColor: '#e3b341', borderDash: [4,4], pointRadius: 0, label: '평균매수가'}` 두 번째 데이터셋을 추가하면 서버 변경 없이 Chart.js 기본 기능만으로 구현 가능. 주식을 보유하지 않은 경우에는 데이터셋을 추가하지 않도록 분기 처리.
+
+- **`doJoinRoom()` `is_host` 체크 없어 진행자가 자신의 방에 학생으로 오입장** (`app.js:143-169`): 진행자가 실수로 자신의 방 코드를 '방 참가' 경로로 입력하면 서버는 `is_host: true`인 `room_dict`를 반환하지만, `doJoinRoom()` 내 `if (S.room.status === 'active') { enterParticipantGame(); }` 분기가 `is_host` 체크 없이 학생 화면으로 진입시킴. 진행자가 학생 화면에 갇혀 순위 조정·강제 시세·게임 종료 등 모든 호스트 기능을 잃음. `doJoinRoom()` 반환 직전 `if (S.room.is_host) { resumeRoom(); return; }` 두 줄만 추가하면 올바른 진행자 화면으로 리디렉트됨.
+
+- **`doEndGame()` confirm 다이얼로그 누락** (`app.js:540-552`): `doStartGame()` (`app.js:247`)에는 `if (!confirm('게임을 시작하시겠습니까?')) return;` 가드가 있지만, `doEndGame()`은 confirm 없이 즉시 API를 호출함. 진행자가 실수로 종료 버튼을 클릭하면 1분 카운트다운이 바로 시작되고 취소할 수 없음. `doEndGame()` 첫 줄에 `if (!confirm('게임을 종료하시겠습니까? 1분 카운트다운이 시작됩니다.')) return;` 한 줄 추가 권장.
+
+- **게임 종료 후 진행자 화면에 전체 통계 요약 패널 없음** (`app.py:808-824`, `app.py:829-847`): 결과 화면에는 순위표만 있고 "총 거래 건수", "가장 많이 거래된 종목", "전체 평균 수익률", "가장 활발한 학생"과 같은 수업 마무리 통계가 없음. `GET /api/rooms/<rid>/summary` 엔드포인트를 추가해 `RoomTransaction`과 `RoomMember` 테이블 집계 결과 `{total_trades, top_symbol, avg_gain_pct, most_active_username}`를 반환하면 됨. 기존 `export_rankings()` · `get_rankings()` 와 거의 동일한 쿼리 패턴으로 ~40줄 구현 가능하며, 수업 종료 토론에서 즉시 활용 가능.
+
+- **복권 결과 닫기 후 `_lotResultRound` 미갱신으로 동일 회차 재폴링 가능** (`app.js:588-650`): 참가자 폴링 루프에서 `r.lottery_active && !_lotPollInterval && _lotResultRound !== r.lottery_current_round` 조건으로 복권 폴링을 시작함. `_startLotPolling()` 완료 또는 결과 확인 시 `_lotResultRound`가 설정되지만, 오버레이 강제 닫기·네트워크 오류 등으로 `_stopLotPolling()` 없이 오버레이만 닫히면 `_lotResultRound`가 갱신되지 않아 다음 10초 폴링에서 같은 회차에 대한 복권 오버레이가 다시 열릴 수 있음. `closeLotteryOverlay()` 함수 안에서 `_lotResultRound = S.room.lottery_current_round` 를 명시적으로 설정하는 방어 코드를 추가 권장.
+
+---
+
+### 제거/단순화할 것들
+
+- **`loadPortfolio()`·`loadChart()` 매번 Chart.js destroy/recreate** (`app.js:1375`, `app.js:1486`, `app.js:1509`): `S.portChart.destroy()`, `S.assetLineChart.destroy()`, `S.stockChart.destroy()` 가 포트폴리오 탭 진입·주식 모달 열기·기간 탭 전환 시마다 반복됨. `S.hostBarChart` (`app.js:440-447`)는 이미 `.data.labels`, `.data.datasets[0].data` 교체 후 `.update()` 를 호출하는 패턴으로 깜빡임 없이 갱신됨. 세 차트도 동일 패턴으로 교체하면 매번 발생하는 DOM 생성·소멸 비용이 사라지고 차트 전환 시 부드러운 애니메이션을 얻을 수 있음.
+
+- **`showBombNews()` innerHTML에 서버 헤드라인 직접 삽입** (`app.js:1157-1163`): `content.innerHTML = items.map(item => ... item.headline ...).join('')` 로 서버에서 온 뉴스 헤드라인을 sanitize 없이 innerHTML에 삽입함. 현재는 서버 생성 템플릿이라 안전하지만, 향후 진행자 커스텀 뉴스 입력 기능이 추가되면 XSS 취약점이 됨. `escHtml()` 함수가 `app.js:897-899`에 이미 정의되어 있으므로 `item.headline` → `escHtml(item.headline)` 교체 3곳으로 방어 가능하며 선제적으로 적용하는 것이 바람직함.
+
+- **`withdraw_deposit()` RoomMember None 체크 없음** (`app.py:910-915`): `m = RoomMember.query.filter_by(room_id=rid, user_id=user.id).first()` 이후 None 여부를 확인하지 않고 `m.cash += dep.amount`를 실행함. 해당 사용자가 방 멤버가 아닌 상황(데이터 불일치, 게임 강제 종료 후 잔여 예금 등)에서 `DELETE /api/rooms/<rid>/deposits/<did>` 요청이 오면 `AttributeError` → HTTP 500 발생. `app.py:912` 직후에 `if not m: return jsonify({'error': '참여자 정보를 찾을 수 없습니다.'}), 404` 가드 한 줄 추가로 해결됨.
+
+- **`create_deposit()` amount 상한값이 사실상 무한대** (`app.py:887-890`): `if not (0 < amount < float('inf'))` 검증의 상한이 사실상 무한대이므로 `amount = 9e300` 같은 극단적 float이 통과해 `m.cash -= amount` 로 현금이 -9e300이 될 수 있음. `m.cash < amount` 체크가 바로 뒤에 있어(`app.py:890`) 실제로는 차단되지만, float 정밀도 경계값에서 의도치 않은 동작이 가능. 검증을 `if not (1 <= amount <= m.cash)` 하나로 통합하거나 `if amount > room.starting_cash * 10: return jsonify({'error': '금액이 너무 큽니다'}), 400` 절대 상한을 추가해 명시적 상한을 두는 것이 안전.
+
+- **`_lot_round_due()` Lock 없이 공유 `_lots` 딕셔너리 접근** (`app.py:181`): `_lot_round_due()` 내 `lot = _lots.get(rid)`, `cur = lot.get('current')`, `cur.get('state')` 가 `_lottery_lock` 없이 실행됨. `get_lottery()` (`app.py:1123`)는 `with _lottery_lock:` 블록 안에서 상태 전이를 처리하지만, `room_dict()` → `_lot_round_due()` 호출 경로는 Lock을 보유하지 않음. 다른 스레드가 Lock 안에서 `lot['current']`를 새 dict로 교체하는 동안 `cur` 변수가 stale 객체를 참조하는 TOCTOU 경합 가능. `_lot_round_due()` 내부에서 `with _lottery_lock:` 블록으로 `_lots` 조회를 보호하거나, Lock 없이 안전한 `lot.get('current', {}).get('state')` 패턴으로 교체 권장.
+
+- **`loadStudentTxn()` 전역 `S.studentTxnUid`에 의존해 모달 연속 열기 시 경합 가능** (`app.js:503-538`): `openStudentTxn(uid)` 이 전역 `S.studentTxnUid = uid`를 설정한 뒤 `loadStudentTxn(true)` 를 호출함. 진행자가 학생 A 클릭 직후 학생 B를 연속 클릭하면 `S.studentTxnUid`가 B로 덮어써져, A의 API 응답이 나중에 도착해도 B의 거래 내역 모달에 A의 내역이 표시되는 경합 발생 가능. `loadStudentTxn()` 호출 시 `uid`를 클로저 변수로 캡처하고, API 응답 수신 시 `if (uid !== S.studentTxnUid) return;` 가드를 추가하면 경합을 방어할 수 있음.
+
