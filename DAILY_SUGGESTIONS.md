@@ -1137,3 +1137,33 @@
 
 - **호스트 폴링에서 `loadHostMembers()`와 `refreshRoomStatus()` 동시 실행으로 `S.room` 갱신 경쟁** (`app.js:269-273`, `app.js:1180-1207`): 호스트 `setInterval` 콜백이 두 함수를 `await` 없이 연속 호출해 둘 다 비동기로 실행됨. 응답 순서에 따라 먼저 도착한 `refreshRoomStatus()` 결과가 더 늦게 도착한 `loadHostMembers()` 의 부수 갱신을 덮어쓸 수 있음. 두 호출을 `await loadHostMembers(); await refreshRoomStatus();` 로 직렬화하거나 단일 엔드포인트로 통합해야 함.
 
+---
+
+## 2026-06-26
+
+### 추가하면 좋을 기능
+
+- **복권 오버레이 picking/waiting 상태에서 닫기 버튼 없음** (`index.html:476-509`, `app.js closeLotteryOverlay()`): `lottery-overlay`의 `lot-section-result`에만 닫기 버튼이 있고 `lot-section-picking`·`lot-section-waiting` 섹션에는 없음. 복권 도중 서버 에러나 네트워크 단절이 발생하면 참가자 화면이 오버레이에 고착됨. 각 섹션에 `closeLotteryOverlay()`를 호출하는 "닫기" 버튼(또는 ESC 키 핸들러)을 추가하고, 복권 진행 중에는 버튼을 비활성화(disabled)하되 5초 이상 응답이 없을 때 활성화하는 타임아웃 로직을 함께 추가하면 됨.
+
+- **결과 화면에 "새 게임 만들기" 바로가기 버튼 누락** (`index.html:596-637`): 게임 종료 후 `screen-results`에는 "홈으로" 버튼(`id="btn-results-home"`)만 있어 교사가 연속 수업 시 홈 → 방 만들기 2단계를 거쳐야 함. `btn-results-home` 옆에 `doCreateRoom()` 또는 `showScreen('screen-host-create')`를 직접 호출하는 "새 게임 만들기" 버튼을 추가하면 1단계로 단축됨. 서버 변경 없이 HTML과 app.js 10줄 이내 수정으로 구현 가능.
+
+- **`enterHostGame()` 에서 퀴즈 설정 미로드** (`app.js:258-274`): `enterHostGame()`은 `loadRltConfig()`를 호출해 룰렛 설정을 복원하지만 `GET /api/rooms/<rid>/host/quiz-settings`(`app.py:1399`)에 대응하는 `loadQuizSettings()` 호출은 없음. 호스트가 새로고침 또는 재접속하면 이전에 저장한 퀴즈 문제·보기가 기본값으로 초기화되어 표시됨. `loadRltConfig()` 패턴과 동일하게 `loadQuizSettings()` 함수를 추가하고 `enterHostGame()` 초기화 시퀀스에 포함시키면 됨.
+
+- **진행자 로비 화면 뒤로가기/취소 버튼 없음** (`index.html:81`): `screen-host-lobby`의 상단 좌측 `<span></span>`이 비어 있어 진행자가 방을 잘못 만들었을 때 취소 방법이 없음. 참가자 화면의 "← 나가기" 패턴과 동일하게 방 코드를 무효화(`DELETE /api/rooms/<rid>`) 또는 단순히 랜딩 화면으로 복귀하는 버튼을 추가해야 함. 단, 참가자가 이미 입장한 경우에는 경고 확인 다이얼로그를 표시하도록 구현해야 함.
+
+- **종목 그리드 정렬 옵션 없음** (`app.js:1257-1270`): `renderGrid()`는 서버에서 반환된 순서(`STOCKS` 딕셔너리 선언 순서)를 그대로 표시함. 변동률 높은 종목·낮은 종목·가격순·섹터별 정렬이 없어 학생이 수동으로 스캔해야 함. 헤더 영역에 정렬 드롭다운(`변동률 ↑↓ / 가격 ↑↓ / 이름순`)을 추가하고 `S.stocks` 배열을 `sort()` 후 `renderGrid()`를 재호출하는 방식으로 서버 변경 없이 구현 가능.
+
+- **참가자가 일시정지 상태인 방에 입장 시 paused 배너 최대 10초 지연** (`app.js:589-651`): `enterParticipantGame()` 함수가 반환된 직후 `S.room.status === 'paused'`를 확인해 `showPausedBanner()`를 즉시 호출하는 코드가 없음. 일시정지 중인 방에 늦게 입장한 학생에게 첫 폴링 사이클(최대 10초)이 완료될 때까지 배너가 보이지 않음. `enterParticipantGame()` 마지막에 `if (S.room.status === 'paused') showPausedBanner();` 한 줄 추가로 해결됨.
+
+### 제거/단순화할 것들
+
+- **`host_force_price()` 0% 입력 검증 누락** (`app.py:682`): `host_market_event()`(`app.py:1355`)는 `if pct == 0: return error` 체크가 있지만, `host_force_price()`의 `abs(pct) > 50` 체크는 `pct == 0`을 통과시킴. 0%로 가격을 강제 설정하면 `force_price()`가 현재가 × 1.0을 저장해 변화는 없지만 불필요한 뉴스 항목이 생성되고 DB 쓰기가 발생함. `if pct == 0: return jsonify({'error': '0%는 입력할 수 없습니다'}), 400` 을 `abs(pct) > 50` 검사 앞에 추가해야 함.
+
+- **`host_adjust()` delta=0 허용으로 빈 트랜잭션 생성** (`app.py:596-603`): `delta = float(d.get('delta', 0))` 이후 0 검증 없이 `amount = delta`, `RoomTransaction(..., amount=0)` 이 기록됨. 0원 조정은 현금도 변하지 않고 거래 내역에 혼란만 유발함. `if delta == 0: return jsonify({'error': '조정 금액을 입력하세요'}), 400` 을 추가해 의미 없는 트랜잭션 생성을 막아야 함.
+
+- **`Apple` 종목 심볼 오타 `APPL` → `AAPL`** (`stock_service.py:78`): `STOCKS` 딕셔너리에서 Apple의 키가 `'APPL'`로 선언되어 있음. 실제 나스닥 티커는 `AAPL`이며, 학생들이 실제 증시와 비교 학습 시 혼란을 유발함. 단순 키 이름 변경이지만 이미 저장된 `RoomHolding.symbol` 값과 불일치가 생길 수 있으므로, DB 마이그레이션(`UPDATE room_holdings SET symbol='AAPL' WHERE symbol='APPL'`) 또는 `STOCKS`에 `'APPL'` 별칭 유지 후 신규 방부터만 `AAPL` 사용하는 방법 중 선택해야 함.
+
+- **`setDepPct()` 소액 현금 시 전 버튼 0원 반환** (`app.js:1596-1601`): `Math.floor(cash * pct / 100 / 10000) * 10000` 계산으로 현금이 10,000원 미만이면 25%·50%·75%·100% 모두 0을 반환함. 입금 버튼을 눌러도 아무 일도 없어 학생이 버튼이 고장난 것으로 오해함. `Math.max(1, Math.round(cash * pct / 100))` 으로 교체하거나, 가용 현금이 10,000원 미만일 때 버튼에 "잔액 부족" 툴팁을 노출하는 방식으로 UX를 개선해야 함.
+
+- **서버 재시작 시 복권 `active` 상태 유실로 방 고착 가능** (`app.py:165-166`, `app.py:409-430`): `_lots` 딕셔너리가 in-memory에만 존재해 서버 재시작(Render 슬립→웨이크업 포함) 시 초기화됨. 복권 진행 중 서버가 재시작되면 `_lots` 키가 없어 `GET /api/rooms/<rid>/lottery` 가 빈 응답을 반환하고, 참가자 화면은 폴링으로 `status: null`을 받아 복권 오버레이가 닫히지 않는 상태가 될 수 있음. 단기 해결책으로 `Room.lottery_rounds_done` 필드처럼 `_lots` 상태를 DB 컬럼(`Room.lottery_state TEXT`)에 JSON 직렬화해 재시작 후 복원하거나, 서버 재시작 감지 시 진행 중 복권을 자동 종료(skip)하는 로직을 추가해야 함.
+
