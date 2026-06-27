@@ -1201,3 +1201,29 @@
 
 - **`loadStudentTxn()` 전역 `S.studentTxnUid`에 의존해 모달 연속 열기 시 경합 가능** (`app.js:503-538`): `openStudentTxn(uid)` 이 전역 `S.studentTxnUid = uid`를 설정한 뒤 `loadStudentTxn(true)` 를 호출함. 진행자가 학생 A 클릭 직후 학생 B를 연속 클릭하면 `S.studentTxnUid`가 B로 덮어써져, A의 API 응답이 나중에 도착해도 B의 거래 내역 모달에 A의 내역이 표시되는 경합 발생 가능. `loadStudentTxn()` 호출 시 `uid`를 클로저 변수로 캡처하고, API 응답 수신 시 `if (uid !== S.studentTxnUid) return;` 가드를 추가하면 경합을 방어할 수 있음.
 
+
+---
+
+## 2026-06-27
+
+### 추가하면 좋을 기능
+
+- **`confirmLeaveGame()` → `goHome()` 가 로그아웃 실행 — "나가기" 버튼이 세션을 완전 삭제** (`app.js:108-118`, `app.js:114`): `goHome()` 내부에서 `api.post('/api/auth/logout')`을 호출해 Flask 세션 쿠키를 삭제함. 참가자가 "나가기"를 실수로 탭하면 재입장 시 학번+이름을 처음부터 다시 입력해야 하며, 수업 중 30명이 동시에 혼란에 빠질 수 있는 고위험 UX. 최소 수정안: `confirmLeaveGame()` (app.js:114)의 `confirm()` 메시지에 "로그아웃됩니다" 문구를 추가해 의도적 행동임을 명시. 권장 수정안: `goHome()` 에서 로그아웃 API 호출을 제거하고 `S.user`·`S.room`만 초기화하거나, 확인 팝업에 "게임만 나가기(세션 유지)" / "완전 로그아웃" 두 옵션을 구분해 제공.
+
+- **룰렛 자동닫힘 타이머가 스핀 애니메이션 도중에도 계속 카운트다운 — 결과 미표시 가능** (`app.js:975-997`, `app.js:1062-1097`): `doRouletteSpin()` 은 `await new Promise(r => setTimeout(r, 4300))`으로 4.3초 애니메이션을 대기하는데, `_startRltAutoClose()` 의 60초 카운트다운은 그 동안 멈추지 않음. 마지막 스핀을 60초 종료 4초 전에 눌렀다면 `closeRoulette()`가 애니메이션 도중 호출되어 오버레이가 사라짐. 서버에서는 스핀 결과가 정상 처리되어 현금이 변동되지만 학생은 결과를 전혀 볼 수 없음. 수정: `doRouletteSpin()` 진입 시 `_stopRltAutoClose()`로 타이머를 중단하고 결과 표시 완료 후 재시작하거나, `_rltSpinning === true` 이면 auto-close를 3~5초 연장하는 방어 로직 추가.
+
+- **참가자 강퇴 기능이 `waiting` 상태에서만 동작 — 게임 중 잘못 입장한 학생 제거 불가** (`app.py:564-575`): `kick_member()` 의 `if room.status != 'waiting': return 400` 체크로 인해 게임 진행 중 뒤늦게 합류한 학생을 진행자가 제거할 수 없음. 최소 구현: `active/paused` 상태에서는 `RoomMember.cash = 0` 처리 후 `db.session.delete(m)` 을 수행하는 분기를 추가. 대안: `RoomMember` 모델에 `is_kicked = db.Column(db.Boolean, default=False)` 컬럼을 추가해 trade/portfolio API에서 강퇴 플래그를 확인해 거래를 차단하는 소프트-강퇴 방식.
+
+- **예금 건수 제한 없어 소액 다중 예금 시 순위 계산 N+1 부하 가능** (`app.py:107-118`, `app.py:878-902`): `create_deposit()`에 건당 최소 금액이나 최대 건수 제한이 없어 학생이 1원짜리 예금을 수백 건 생성할 수 있음. `member_total_value()` 는 `Deposit.query.filter_by(room_id=rid, user_id=uid, status='active').all()`로 전 건을 조회하므로 30명×100건 = 3000행을 매 랭킹 조회마다 읽게 됨. `create_deposit()` 상단에 `active_count = Deposit.query.filter_by(room_id=rid, user_id=user.id, status='active').count(); if active_count >= 5: return jsonify({'error': '예금은 최대 5건까지 가능합니다.'}), 400` 한 줄 추가로 해결 권장.
+
+---
+
+### 제거/단순화할 것들
+
+- **`loadLobbyMembers()` 에서 username HTML 이스케이프 누락 — XSS 취약점** (`app.js:224-231`): `lobby-members-list` 에 멤버를 렌더링할 때 `` `${m.username}` `` 을 템플릿 리터럴에 직접 삽입. `enter()` 엔드포인트(app.py:331-342)는 username 길이만 검증하고 HTML을 이스케이프하지 않으므로, 학생이 `<img src=x onerror="alert(1)">` 같은 문자열을 이름으로 입력하면 진행자·다른 참가자 화면에서 스크립트가 실행됨. `escHtml()` 함수가 `app.js:897-899` 에 이미 정의되어 있으므로 `m.username` → `escHtml(m.username)` 교체를 `loadLobbyMembers()`, `loadPLobbyMembers()` (app.js:582), `loadHostMembers()` (app.js:413-428) 등 username 을 innerHTML 에 넣는 모든 위치에 적용 필요.
+
+- **`dep-amount` 입력에 `step` 속성 없어 소수점 원 입력 가능** (`index.html:424`, `app.py:887-888`): `<input id="dep-amount" type="number">` 에 `step` 속성이 없어 학생이 `1234567.89` 같은 값을 입력할 수 있음. 서버 `create_deposit()` 에서 `amount = float(...)` 후 별도 반올림 없이 `Deposit(amount=amount)` 로 저장됨. `index.html:424` 에 `step="10000" min="10000"` 을 추가하고, `app.py:888` 에서 `amount = int(amount // 10000) * 10000` 으로 만 원 단위를 서버에서도 강제하면 프론트·백 양쪽에서 일관성 확보.
+
+- **`_lot_round_due()` 동일 요청에서 이중 호출** (`app.py:300`, `app.py:409-430`, `app.py:470-473`): `GET /api/rooms/<rid>` 처리 시 `_auto_start_lottery_if_due(room)` (line 470) 과 `_get_room_cached()` → `room_dict()` → `_lot_round_due()` (line 300) 가 순서대로 각각 호출됨. `_lot_round_due()` 는 `_lots[rid]` 초기화·상태 조회·percentage 계산을 포함하므로 불필요한 중복 실행. `_auto_start_lottery_if_due()` 에서 계산 결과를 반환하고 `room_dict()` 가 이를 재사용하도록 리팩터링하거나, `_lot_round_due()` 를 경량화해 중복 호출 비용을 최소화할 것.
+
+- **`closeLotteryOverlay()` 가 paused-banner 를 실제 게임 상태와 무관하게 무조건 삭제** (`app.js:2277-2281`): 마지막 줄 `document.getElementById('paused-banner')?.remove()` 가 게임이 여전히 `paused` 상태인 경우에도 배너를 제거함. 복권 결과를 확인하고 닫은 뒤 진행자가 별도로 일시정지한 게임에서 참가자가 "거래 가능" 상태로 착각할 수 있음. `if (S.room?.status !== 'paused') document.getElementById('paused-banner')?.remove();` 로 조건부 삭제하거나, 오버레이 닫기 후 룸 상태를 재확인해 배너 표시 여부를 결정하도록 개선 필요.
