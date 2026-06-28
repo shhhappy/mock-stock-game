@@ -1292,3 +1292,41 @@
 
 - **`loadPLobbyMembers()` 오류 발생 시 빈 화면으로 조용히 실패** (`app.js:578-586`): `await api.get(...).catch(() => [])` 패턴으로 API 실패를 빈 배열로 대체해 학생이 연결 오류를 인지하지 못함. 모바일 wifi 전환이나 Render 콜드 스타트 시 대기 화면이 그냥 멈춘 것처럼 보임. `.catch(err => { toast('연결 상태를 확인해 주세요', 'error'); return []; })` 로 바꾸면 학생이 능동적으로 새로고침 가능.
 
+---
+
+## 2026-06-28 (2차)
+
+### 추가하면 좋을 기능
+
+- **게임 시간 연장 버튼** (`app.py:503-517`, `app.js:doPauseGame` 근처): 현재 pause/resume은 있지만 진행자가 게임 종료 시각을 직접 늘릴 방법이 없음. 수업이 예상보다 일찍 끝날 것 같을 때 또는 학생 참여가 부족할 때 즉석 대응 불가. `POST /api/rooms/<rid>/extend` 엔드포인트를 추가해 `delta_minutes` 파라미터(1~30)를 받아 `room.end_time += timedelta(minutes=delta_minutes)` 처리하는 10줄짜리 엔드포인트로 구현 가능. 진행자 설정 탭에 [+5분] [+10분] 버튼 2개로 충분.
+
+- **학생별 거래 쿨다운(최소 간격) 설정** (`app.py:724-767`): 현재 거래 횟수 제한이 없어 학생이 초 단위로 수십 번 buy/sell 반복 가능. 패닉 셀링·알고리즘 트레이딩 흉내를 방지하고 "실제 거래에는 결제 T+2일이 걸린다"는 개념을 체험시키려면 최소 간격이 필요. `_trade_cooldown: dict = {}` (room_id, user_id → 마지막 거래 시각)를 `app.py` 모듈에 추가하고, `trade()`(app.py:724) 첫 줄에 `if time.time() - _trade_cooldown.get((rid, user.id), 0) < TRADE_COOLDOWN_SECS: return 400` 한 줄로 방어 가능. 진행자 설정 탭에서 0~60초 슬라이더로 조절.
+
+- **일시정지 중 진행자 공지 메시지** (`app.py:490-501`, `app.js:showPausedBanner`): 게임을 일시정지할 때 진행자가 메시지(예: "5분 뒤 재개합니다", "다음 섹터를 보세요")를 입력하면 참가자 ⏸ 배너 아래에 표시되는 기능. 서버에 `_pause_messages: dict = {}` (room_id → str)를 추가하고, `pause_room()`(app.py:490)에서 `_pause_messages[rid] = d.get('message', '')`, `room_dict()`(app.py:278)에서 `'pause_message': _pause_messages.get(room.id, '')`를 포함하면 됨. 클라이언트 `showPausedBanner()`(app.js:653)에서 `S.room.pause_message`를 배너 텍스트에 추가하는 2줄 수정.
+
+- **배당금 지급 이벤트** (`app.py:host_market_event` 아래, `app.py:1345-1360`): 진행자 설정 탭에 "배당금" 버튼을 추가해 특정 종목 보유자에게 보유 수량×주당 배당금을 현금으로 지급. 장기투자의 배당 수익 개념을 체험시킬 수 있음. `POST /api/rooms/<rid>/host/dividend` 엔드포인트에서 `symbol`·`amount_per_share`를 받아 `RoomHolding.query.filter_by(room_id=rid, symbol=symbol).all()`로 보유자를 찾고 `m.cash += h.shares * amount_per_share` + `RoomTransaction(action='ADJ', note='배당금')` 처리. 서버 약 20줄, 클라이언트 UI 약 15줄.
+
+- **대기실에서 방 설정 수정 기능** (`app.py:363-390`, `app.js:doCreateRoom`): 방 생성 후 게임 시작 전(`waiting` 상태)에도 시작 자금·게임 시간·예금 금리를 변경할 수 없음. 학생 수 확인 후 실수한 값을 고치려면 방을 지우고 다시 만들어야 함. `PATCH /api/rooms/<rid>` 엔드포인트를 추가해 `room.status == 'waiting'`일 때만 `duration_minutes`, `starting_cash`, `deposit_rate` 수정을 허용하고, 진행자 로비 화면에 연필 아이콘 버튼을 제공하면 됨.
+
+- **보유 종목의 게임 시작 대비 수익률 표시** (`app.py:780-803`, `app.js:loadPortfolio`): 포트폴리오 화면에서 현재 수익은 `avg_price` 대비 `current_price`(매수 단가 기준)만 보여줌. 학생이 게임 시작 시점 기준으로 해당 종목이 얼마나 올랐는지 비교하면 "싸게 샀는가"가 아닌 "시장 흐름을 읽었는가"를 평가하는 교육 포인트가 생김. `StockService._init_prices()`(stock_service.py:121-127)에서 초기 가격을 `_initial_prices: dict`로 별도 저장하고, `/api/rooms/<rid>/stocks` 응답에 `initial_price` 필드를 추가하면 프론트엔드에서 "게임 시작 이후 +X%" 컬럼 추가 가능.
+
+---
+
+### 제거/단순화할 것들
+
+- **`RoomHolding` 0주 고스트 행 DB 방치** (`app.py:1318`, `app.py:1037`): 퀴즈 오답 패널티(app.py:1318)와 룰렛 베팅 자금 조달(app.py:1037) 시 보유 주식을 전량 청산할 때 `h.shares = 0; h.avg_price = 0`만 하고 `db.session.delete(h)`를 호출하지 않음. 정상 SELL 경로(app.py:762)에서는 `db.session.delete(holding)`을 올바르게 호출하는 것과 불일치. 결과적으로 0주짜리 `RoomHolding` 행이 DB에 누적되어 `get_portfolio()`(app.py:781)에서 `if h.shares <= 0: continue`로 필터링해야 하는 부담이 생김. 두 곳 모두 `h.shares = 0` 직후 `if h.shares <= 0: db.session.delete(h)` 한 줄 추가로 해결 가능.
+
+- **`Room.query.get_or_404()` 전체 코드베이스 20+ 곳에서 deprecated 패턴 사용** (`app.py:435`, `app.py:478`, `app.py:490`, `app.py:503`, `app.py:519`, `app.py:544`, `app.py:567`, `app.py:587` 등): SQLAlchemy 2.0에서 `Query.get()` 계열은 deprecated. 이미 `cur_user()`(app.py:104)와 `lobby_members()`(app.py:580)에서는 `db.session.get()` 패턴을 올바르게 사용 중. 일괄적으로 `Room.query.get_or_404(rid)` → `db.get_or_404(Room, rid)` 로 sed 치환 한 번으로 해결 가능하며, 경고 로그가 없어져 Render 콘솔 노이즈도 감소.
+
+- **`minigame_close()`에서 `Room.query.get(rid)` 사용** (`app.py:977`): `room = Room.query.get(rid)` — 같은 파일에서 이미 deprecated로 전환 중인 패턴. `db.session.get(Room, rid)`로 한 줄 교체 필요. 결과가 None일 때 처리도 `if room and room.status == 'paused':` 로 이미 있어 로직 변경 불필요.
+
+- **`withdraw_deposit()`에서 `RoomMember` None 체크 없음** (`app.py:912-914`): `m = RoomMember.query.filter_by(room_id=rid, user_id=user.id).first()` 이후 바로 `m.cash += dep.amount` 를 호출하는데, `if not m:` 가드가 없음. 참여자가 강퇴됐거나 데이터 불일치 발생 시 `AttributeError: 'NoneType' object has no attribute 'cash'`로 500 에러. `if not m: return jsonify({'error': '참여자를 찾을 수 없습니다.'}), 404` 한 줄 삽입으로 방어 가능. `host_adjust()`(app.py:597), `trade()`(app.py:734)에서는 동일 패턴에 이미 체크가 있어 일관성도 맞지 않음.
+
+- **`assetLineChart` 포트폴리오 탭 전환마다 destroy/recreate** (`app.js:1509-1540`): `loadPortfolio()` 호출 시마다 `if (S.assetLineChart) S.assetLineChart.destroy(); S.assetLineChart = new Chart(...)` 패턴으로 차트를 완전히 재생성. `S.assetHistory` 배열은 공유 참조이므로 `S.assetLineChart.data.labels = ...; S.assetLineChart.data.datasets[0].data = ...; S.assetLineChart.update()` 패턴으로 교체하면 탭 전환 시 캔버스 깜빡임과 불필요한 Chart.js 메모리 할당을 제거 가능. 호스트 바 차트(`renderHostBarChart()`, app.js:433-477)는 이미 이 패턴을 올바르게 사용 중이므로 일관성도 맞지 않음.
+
+- **`gen_code()` 10번 시도 모두 충돌 시 마지막 반환에 uniqueness 검사 없음** (`models.py:8-13`): `for _ in range(10):`  루프에서 매 반복 중복 확인 후 고유하면 즉시 return하지만, 10번 모두 충돌하면 루프 밖 `return ''.join(random.choices(...))` (line 13)이 유니크 검사 없이 실행돼 중복 코드를 DB에 저장. 이후 `db.session.add(room)` 시 `IntegrityError` 발생하며 방 생성이 500 에러로 실패. 루프 마지막 반복에서도 return하도록 `for _ in range(20):` 으로 시도 횟수를 늘리거나, 루프 외부의 fallback `return` 을 제거하고 `raise RuntimeError('방 코드 생성에 실패했습니다')` 처리 후 호출부에서 catch하는 것이 안전.
+
+- **`updateDepPreview()`에서 `S.room.remaining_seconds`가 최대 10초 stale** (`app.js:1607-1608`): 예금 이자 미리보기에서 `S.room.remaining_seconds`를 사용하지만, 이 값은 마지막 폴링 시점(최대 10초 전)에 서버가 반환한 값. 예금 탭을 열고 금액을 수정할 때 잔여 시간이 이미 달라진 상태로 이자 예상치가 계산됨. `S.room.end_time`이 있으면 `Math.max(0, Math.floor((new Date(S.room.end_time) - new Date()) / 1000))`으로 클라이언트 측 실시간 계산으로 교체하면 항상 정확한 이자 미리보기 제공 가능. `startTimer()`(app.js:756-776)에서 이미 동일 패턴 사용 중이므로 일관성도 확보.
+
+- **`lobby_members()` 엔드포인트가 `/host/` 경로임에도 호스트 권한 체크 없음** (`app.py:577-585`): URL이 `/api/rooms/<rid>/host/lobby-members`이지만 `@login_required`만 있고 `if room.host_id != user.id` 체크가 없음. 모든 로그인 사용자가 직접 호출해 방 참여자 목록을 조회 가능. 클라이언트에서 참가자 로비(`app.js:578`)도 이 API를 사용하므로 완전 차단은 불가하지만, 엔드포인트를 `/api/rooms/<rid>/members`로 리네임하고 `lobby_members()`를 공개 API로 명시적으로 분리하면 `/host/` 경로의 의미가 일관되어(호스트 전용 명령=권한 체크 있음) 유지보수 시 혼란을 줄일 수 있음.
+
