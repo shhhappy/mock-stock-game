@@ -1261,3 +1261,34 @@
 - **`force_sector_event()` 후 `_current_biases` 미갱신 — 섹터 이벤트가 다음 TTL에 역전** (`stock_service.py:244-276`): `force_price()` 의 동일 문제는 2026-06-11 항목에 문서화됐으나 `force_sector_event()` 는 포함되지 않음. 이 함수는 섹터 내 모든 종목 가격을 강제 이동시키지만 `self._current_biases` 를 갱신하지 않아, 다음 `_price_ttl` 사이클(기본 20초)에서 기존 bias 방향으로 가격이 역전될 수 있음. `for sym in affected:` 루프 내 (`stock_service.py:252` 직후)에 `self._current_biases[sym] = 'up' if pct > 0 else 'down'` 한 줄 추가로 섹터 이벤트 모멘텀이 다음 사이클에도 유지됨.
 
 - **`_next_price()` 자연 변동 상한 `base * 1.4` vs. `force_price()` 상한 `base * 3.0` 불일치** (`stock_service.py:139`, `stock_service.py:225`): 자연 가격 변동은 `max(base * 0.6, min(base * 1.4, new_price))` 로 제한되지만, 진행자 강제 조정은 `max(base * 0.3, min(base * 3.0, new_price))` 까지 허용함. 강제로 `base * 2.0` 으로 올린 뒤 다음 TTL에 자연 변동이 발생하면 `_next_price()` 가 `current`(=`base*2.0`)를 기준으로 새 가격을 계산하는 게 아니라 내부적으로 여전히 `base * 1.4` 캡을 적용하므로 강제 조정 효과가 1 TTL(20초) 만에 사라짐. 해결책: `_next_price()` 캡을 현재가 기준 상대 범위(`current * [0.7, 1.3]`)로 변경하거나, `force_price()` 직후 `_price_ttl` 동안 해당 종목의 자연 변동을 스킵하는 `_force_protected: set` 플래그를 추가해야 함 (`stock_service.py:174` 의 `get_price()` 캐시 체크 로직 참조).
+
+---
+
+## 2026-06-28
+
+### 추가하면 좋을 기능
+
+- **게임 진행 중 진행자 강퇴 기능 허용** (`app.py:566-575`): `kick_member()`에서 `room.status != 'waiting'` 조건(app.py:570)으로 게임 시작 후에는 강퇴가 불가. 수업 중 부정행위 학생이나 연결 문제 학생을 즉시 제거하려 해도 방법이 없음. `_end_room()` (app.py:144-153) 내 보유 주식 현금 청산 로직을 `_liquidate_member(rid, uid, svc)` 함수로 분리하고, `kick_member()`에서 게임 진행 중일 때도 해당 함수를 호출한 뒤 `RoomMember` 삭제를 허용하면 구현 가능. 서버 30줄, 클라이언트 0줄 수정.
+
+- **큰 금액 거래 시 확인 다이얼로그** (`app.js:execTrade()` 부근, `index.html:713-716`): 고등학생이 "전량 매수" 버튼이나 수량 입력 실수로 총자산의 50% 이상을 한 번에 거래하는 사고가 잦음. 매수·매도 버튼 핸들러에서 `amount > S.room.starting_cash * 0.5` 조건일 때 `confirm('총자산의 XX%를 한 번에 거래합니다. 계속할까요?')`를 표시하면 실수를 줄일 수 있음. 서버 변경 불필요, JS 5줄 추가.
+
+- **뉴스 클라이언트 폴링 주기를 서버 설정에 동기화** (`app.js:807-819`, `app.py:631-646`): `startNewsPolling()`이 8초 고정 간격으로 `/news`를 요청하지만, 진행자가 `news_seconds`를 60초로 늘려도 클라이언트는 8초마다 동일 캐시를 수신. Render 무료 플랜에서 불필요한 요청 부담. `doSetIntervals()` (app.js:391) 응답 수신 후 `clearInterval(S.newsInterval); S.newsInterval = setInterval(..., Math.max(8000, data.news_seconds * 1000))` 패턴으로 간격을 갱신하면 트래픽 대폭 절감.
+
+- **포트폴리오 도넛 차트에 섹터 집계 토글** (`app.js:portChart` 초기화, `index.html:388-391`): 현재 도넛 차트는 종목별 비중만 표시. 토글 버튼 하나로 종목별 ↔ 섹터별 보기를 전환하면 `STOCKS[sym]['sector']`를 이용해 "반도체 45% / IT 30% / 금융 25%"처럼 렌더링 가능. 분산투자·집중투자 개념을 시각적으로 토론할 수 있는 교육 포인트 제공. 서버 변경 불필요.
+
+- **결과 화면 및 Excel에 학생별 거래 요약(최다 거래 종목·섹터) 추가** (`app.py:1419-1488`, `app.js:loadResults()`): 현재 Excel `최종 순위` 시트는 순위·이름·학번·자산·수익률만 포함. `RoomTransaction` 조회로 종목별 거래 횟수를 집계하고, Excel에 "거래 요약" 시트를 추가(`wb.create_sheet('거래 요약')`)하면 교사의 사후 수업 평가 자료가 풍부해짐. `export_rankings()` (app.py:1419)에 `openpyxl` 시트 추가 20줄로 구현 가능.
+
+---
+
+### 제거/단순화할 것들
+
+- **`force_price()` 클램프 범위(±200%)와 `_next_price()` 클램프 범위(±40%) 불일치** (`stock_service.py:139`, `stock_service.py:225`): `force_price()`는 `base * 0.3` ~ `base * 3.0`까지 허용하지만, 자연 가격 갱신 `_next_price()`는 `base * 0.6` ~ `base * 1.4`로 제한. 진행자가 종목을 3배로 강제 조정한 뒤 다음 자연 갱신 틱에서 `current * (1 + drift)`가 여전히 ~3x이지만 클램프에 막혀 즉시 -53% 하락하는 시각적 충격이 학생들에게 혼란을 줌. `_next_price()` (stock_service.py:139)의 클램프를 `max(base * 0.3, min(base * 3.0, new_price))`로 통일하거나, 현재가 기반 ±30% 클램프로 교체 권장.
+
+- **`refreshMyRank()`가 전체 랭킹 API를 10초마다 호출** (`app.js:735-752`, `app.py:808-824`): `refreshMyRank()`는 자신의 순위 한 줄만 필요하지만 `/rankings` 엔드포인트에서 30명 전체 데이터를 수신. 30명 학급에서는 10초마다 31개 요청이 모두 전체 목록을 가져옴. `get_portfolio()` (app.py:772-803) 응답에 `rank: int` 필드 하나를 추가하면 `refreshMyRank()`를 포트폴리오 API로 대체 가능하며, 랭킹 페이지 진입 시에만 전체 목록을 조회하는 패턴으로 전환할 수 있음.
+
+- **`_end_room()` 내 인메모리 상태 정리가 6개 딕셔너리에 분산** (`app.py:155-163`): `_lots`, `_rlt_active`, `_quiz_settings`, `_roulette_config`, `_quiz_state`, `_ending_soon` 를 개별적으로 pop/discard로 정리. 향후 인메모리 상태가 추가될 때 이 블록을 빠뜨리면 방 종료 후 메모리 누수 발생. `_ROOM_DICTS = [_lots, _rlt_active, _quiz_settings, _roulette_config]` 리스트를 모듈 상단에 선언하고 `for d in _ROOM_DICTS: d.pop(room.id, None)` 한 줄로 교체하면 유지보수성이 높아짐.
+
+- **로비 멤버 목록 폴링이 진행자·참가자 각각 5초마다 개별 실행** (`app.js:192`, `app.js:562`): 진행자 로비 `setInterval(loadLobbyMembers, 5000)`와 참가자 로비 `setInterval(... loadPLobbyMembers ..., 5000)` 이 모두 `lobby-members` 엔드포인트(app.py:577-585)를 5초마다 호출. 30명 학급에서 초당 약 6회 요청이 로비 단계에만 집중됨. 서버 측 `lobby_members()`에 간단한 1-2초 캐시를 추가하거나, 폴링 주기를 10-15초로 늘리는 것만으로도 Render 무료 플랜의 응답 속도 개선 가능.
+
+- **`loadPLobbyMembers()` 오류 발생 시 빈 화면으로 조용히 실패** (`app.js:578-586`): `await api.get(...).catch(() => [])` 패턴으로 API 실패를 빈 배열로 대체해 학생이 연결 오류를 인지하지 못함. 모바일 wifi 전환이나 Render 콜드 스타트 시 대기 화면이 그냥 멈춘 것처럼 보임. `.catch(err => { toast('연결 상태를 확인해 주세요', 'error'); return []; })` 로 바꾸면 학생이 능동적으로 새로고침 가능.
+
