@@ -1330,3 +1330,33 @@
 
 - **`lobby_members()` 엔드포인트가 `/host/` 경로임에도 호스트 권한 체크 없음** (`app.py:577-585`): URL이 `/api/rooms/<rid>/host/lobby-members`이지만 `@login_required`만 있고 `if room.host_id != user.id` 체크가 없음. 모든 로그인 사용자가 직접 호출해 방 참여자 목록을 조회 가능. 클라이언트에서 참가자 로비(`app.js:578`)도 이 API를 사용하므로 완전 차단은 불가하지만, 엔드포인트를 `/api/rooms/<rid>/members`로 리네임하고 `lobby_members()`를 공개 API로 명시적으로 분리하면 `/host/` 경로의 의미가 일관되어(호스트 전용 명령=권한 체크 있음) 유지보수 시 혼란을 줄일 수 있음.
 
+
+---
+
+## 2026-06-29
+
+### 추가하면 좋을 기능
+
+- **복권 picking 단계에서 진행자에게 제출 현황 카운터 미노출** (`app.py:1114-1147 get_lottery()`, `app.js:2079-2087 _showLotHostPickingUI`): 복권 'picking' 상태 중 `get_lottery()` 응답에 `all_results`는 'revealed' 단계에만 포함되고, 참가자 제출 수(`len(cur['picks'])`)와 전체 대상 인원이 진행자에게 전달되지 않음. 진행자는 카운트다운 60초를 무조건 기다려야 하며 이미 모두 제출한 경우에도 early draw가 불가. `get_lottery()`(`app.py:1133`) 내 `room.host_id == user.id` 조건 블록에서 `picks_count: len(cur.get('picks', {}))` 와 eligible 인원(전체 멤버 - 호스트가 멤버인 경우 제외)을 추가로 반환하고, `_showLotHostPickingUI()`(`app.js:2086`)에서 해당 값으로 `"N/전체명 제출"` 텍스트를 매 5초 폴링마다 갱신. 추가로 모두 제출 시 즉시 drawing 단계로 넘어가는 "모두 제출 시 자동 진행" 옵션도 연계 가능.
+
+- **종료 임박 배너에 실시간 카운트다운 초 미표시** (`app.js:672-684 showEndingSoonBanner`, `app.js:540-551 doEndGame`): 진행자가 종료 버튼을 눌러 1분 카운트다운이 시작되면 참가자 화면에 "⏰ 게임이 곧 종료됩니다 (1분 이내)"(`app.js:678`)만 정적으로 표시됨. 상단 `pg-timer`가 이미 초 단위 카운트다운을 보여주므로 중복이지만, 배너가 고정 문구라 긴박감 전달이 약하고 신뢰성도 낮음(배너는 다음 10초 폴링까지 뜨지 않을 수도 있음). `showEndingSoonBanner()` 내에서 `const _bTimer = setInterval(() => { const rem = Math.max(0, Math.floor((new Date(S.room.end_time) - new Date()) / 1000)); banner.textContent = \`⏰ 게임 종료까지 ${String(Math.floor(rem/60)).padStart(2,'0')}:${String(rem%60).padStart(2,'0')}\`; }, 1000)` 를 추가하고 `hideEndingSoonBanner()` 내 `clearInterval(_bTimer)` 처리. 3줄 추가, 서버 변경 없음.
+
+- **결과 화면에서 학생 본인 전체 거래 내역 접근 불가** (`app.py:829-847 get_transactions`, `index.html:597-637`, `app.js:1702-1795 loadResults`): 게임 종료 후 결과 화면에는 최종 순위·수익률만 표시되고 본인 거래 내역을 볼 수 없음. `GET /api/rooms/<rid>/transactions` 엔드포인트는 게임 종료 후에도 작동하지만 결과 화면에 진입점이 없음. `loadResults()`(`app.js:1702`) 실행 후 `results-my-stats` 카드 아래에 "📋 내 거래 내역 보기" 버튼을 추가하고 클릭 시 기존 `txn-list` 로직(app.js:1569-1591)을 재활용한 모달을 표시하면, 학생이 수업 후 자기 결정을 돌아보는 성찰 활동에 활용 가능. 서버 변경 없음, 클라이언트 약 15줄 추가.
+
+- **학번·이름이 동일한 두 학생이 계정을 공유하는 버그** (`app.py:329-343 enter()`, `models.py:16-22 User`): `doAuth()`가 `"{학번} {이름}"` 형태로 `username`을 합성하고, `User.query.filter_by(username=u).first()`로 기존 유저를 재사용(`app.py:337`). 같은 반에 학번·이름이 동일한 학생(쌍둥이, 오타 등)이 있으면 두 학생이 동일한 `User`·`RoomMember`·포트폴리오를 공유해 거래가 뒤섞임. `enter()` 응답에 `is_new_user: bool` 필드를 추가(기존 유저 재사용 시 `False`)하고, 클라이언트 `onLogin()`(app.js:82-90)에서 `is_new_user === false && active_room === null` 조건 시 "동일한 학번·이름이 이미 존재합니다. 본인이 아니라면 학번이나 이름을 다시 확인하세요" 경고 다이얼로그 1줄 추가.
+
+- **게임 내 실제 가격 변동 이력이 차트에 반영되지 않음** (`stock_service.py:281-309 get_history()`, `app.py:710-719 get_chart()`): `get_history()`는 현재 가격에서 거꾸로 난수 워크를 생성해 가짜 과거 차트를 반환. 진행자 강제 조정·뉴스 이벤트로 주가가 급등락한 실제 경위가 전혀 차트에 반영되지 않아 학생이 차트를 분석해도 현재 가격을 이해할 수 없음. `StockService.__init__`에 `self._price_log: dict = {}` 추가, `get_price()`(stock_service.py:174) 내 가격 갱신 시 `self._price_log.setdefault(sym, []).append((now, new_price))` 기록, `get_history()`에서 로그가 10개 이상이면 실제 이력을 반환하는 분기 추가. 최대 메모리 추정: 47종목 × 최대 1080 포인트(360분/20초) ≈ 5만 항목, 각 튜플 24바이트 = 약 1.2MB로 부담 없음.
+
+---
+
+### 제거/단순화할 것들
+
+- **`host_adjust()` delta=0 시 빈 트랜잭션 레코드 생성** (`app.py:595-601`): `delta = float(d.get('delta', 0))` 유효성 검사 없이 진행되므로 진행자가 금액을 입력하지 않고 "확인"을 누르면 `RoomTransaction(amount=0)` 이 DB에 저장되고, 거래 내역에 "0원 자산 조정" 노이즈가 발생. `app.py:595` 직후에 `if not delta: return jsonify({'error': '조정 금액을 입력하세요.'}), 400` 한 줄로 방어 가능. 클라이언트 `doAdjust()`(app.js:491-500)도 `if (isNaN(delta) || delta === 0)` 조건을 이미 처리하지 않아 병행 수정 필요.
+
+- **`doJoinRoom()` 방 코드 검증 전에 auth가 먼저 실행돼 고아 유저 생성** (`app.js:143-155`): 참가자가 잘못된 방 코드를 입력한 경우 순서가 ①`doAuth()` 성공 → User DB 기록 ②`/api/rooms/join` → 404 에러. 방에 못 들어간 학생의 User 레코드가 DB에 남아 `username` 풀이 오염됨. 해결책 A: `GET /api/rooms/validate?code=` 경량 엔드포인트(2줄, 로그인 불필요)를 추가해 방 코드 유효성을 auth 전에 검사. 해결책 B: 단일 `POST /api/rooms/enter-and-join` 엔드포인트로 User 생성·방 참가를 원자적으로 처리.
+
+- **`_quiz_settings`·`_roulette_config` 인메모리 저장으로 서버 재시작 시 초기화** (`app.py:1246-1247`, `app.py:250-251`): Render 무료 플랜은 비활성 30분 후 재시작하므로 긴 게임 중 진행자가 설정한 퀴즈 보상 비율(예: 3%)과 룰렛 확률이 초기화돼 기본값으로 복귀. `Room` 모델에 `quiz_reward_pct FLOAT DEFAULT 1.0`, `quiz_penalty_pct FLOAT DEFAULT 0.5`, `rlt_weights VARCHAR(100) DEFAULT ''` 컬럼을 추가(ALTER TABLE 패턴은 `app.py:31-40`에 이미 존재)하고, `quiz_settings()`(app.py:1399) 및 `host_roulette_config()`(app.py:1363)에서 인메모리 딕셔너리 대신 DB 컬럼을 Read/Write하면 재시작 후에도 설정 유지.
+
+- **`showBombNews()` 에서 뉴스 헤드라인을 `innerHTML`에 이스케이프 없이 삽입** (`app.js:1157-1163`): `content.innerHTML = items.map(item => \`<div ...>${item.headline}</div>\`)`. 현재 헤드라인은 서버 측 템플릿(`stock_service.py:6-34`)에서만 생성돼 XSS 위험이 없으나, 향후 "진행자 커스텀 뉴스" 기능(현재 `host_send_news()`, app.py:690에서 템플릿 기반이라 안전) 확장 시 취약점이 될 수 있음. 지금 당장 `item.headline` → `escHtml(item.headline)` 교체(app.js:897의 `escHtml()` 재사용)하면 기능 변화 없이 방어적 코딩 확보.
+
+- **`enterParticipantGame()` 10초 폴링마다 `/rankings` + 다른 API가 동시 다발** (`app.js:611-650`): 폴 콜백 마지막에 `refreshMyRank()`(app.js:647)가 항상 호출돼 `GET /api/rooms/<rid>` + `GET /api/rooms/<rid>/rankings` + (마켓 탭 시) `GET /api/rooms/<rid>/stocks` 세 요청이 10초마다 연달아 발생. 30명 학급에서 초당 약 9회 요청. `get_portfolio()`(app.py:772) 응답에 `rank: int` 필드 하나를 추가하면 `refreshMyRank()`를 포트폴리오 갱신과 통합 가능하며, 랭킹 탭 진입 시에만 전체 목록을 조회하는 패턴으로 전환해 요청 수 1/3 절감. (상단 바 `pg-rank` 업데이트만 필요하므로 전체 목록 불필요)
