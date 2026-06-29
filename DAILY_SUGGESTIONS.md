@@ -1360,3 +1360,37 @@
 - **`showBombNews()` 에서 뉴스 헤드라인을 `innerHTML`에 이스케이프 없이 삽입** (`app.js:1157-1163`): `content.innerHTML = items.map(item => \`<div ...>${item.headline}</div>\`)`. 현재 헤드라인은 서버 측 템플릿(`stock_service.py:6-34`)에서만 생성돼 XSS 위험이 없으나, 향후 "진행자 커스텀 뉴스" 기능(현재 `host_send_news()`, app.py:690에서 템플릿 기반이라 안전) 확장 시 취약점이 될 수 있음. 지금 당장 `item.headline` → `escHtml(item.headline)` 교체(app.js:897의 `escHtml()` 재사용)하면 기능 변화 없이 방어적 코딩 확보.
 
 - **`enterParticipantGame()` 10초 폴링마다 `/rankings` + 다른 API가 동시 다발** (`app.js:611-650`): 폴 콜백 마지막에 `refreshMyRank()`(app.js:647)가 항상 호출돼 `GET /api/rooms/<rid>` + `GET /api/rooms/<rid>/rankings` + (마켓 탭 시) `GET /api/rooms/<rid>/stocks` 세 요청이 10초마다 연달아 발생. 30명 학급에서 초당 약 9회 요청. `get_portfolio()`(app.py:772) 응답에 `rank: int` 필드 하나를 추가하면 `refreshMyRank()`를 포트폴리오 갱신과 통합 가능하며, 랭킹 탭 진입 시에만 전체 목록을 조회하는 패턴으로 전환해 요청 수 1/3 절감. (상단 바 `pg-rank` 업데이트만 필요하므로 전체 목록 불필요)
+
+---
+
+## 2026-06-29 (2차)
+
+### 추가하면 좋을 기능
+
+- **`doEndGame()` 확인 다이얼로그 없이 즉시 1분 카운트다운 시작** (`app.js:540-551`): `doStartGame()`(app.js:246)과 `doKickMember()`(app.js:234)는 `confirm()`을 사용하지만, `doEndGame()`에는 확인 절차가 없음. 진행자가 실수로 종료 버튼을 터치하면 즉시 `end_time`이 60초 앞으로 당겨지고(`app.py:531`) 참가자 화면에 종료 임박 배너가 표시됨. 취소도 불가. `doEndGame()` 함수 첫 줄에 `if (!confirm('게임을 종료하시겠습니까? 남은 시간이 1분 이상이면 1분 후 자동 종료됩니다.')) return;` 한 줄 추가로 방어 가능. 서버 변경 없음.
+
+- **퀴즈 오답률 통계 진행자 미제공** (`app.py:1270-1342`, `app.js:enterHostGame`): 퀴즈 제출 결과가 `RoomTransaction(action='ADJ', note='퀴즈 오답 패널티')`(app.py:1336)로 기록되지만, 어떤 문제에서 학생들이 가장 많이 틀렸는지 집계하는 엔드포인트가 없음. 게임 종료 후 진행자가 "이 문제는 80%가 틀렸네요"라고 분석해 추가 설명할 수 있으면 교육적 가치가 높음. `GET /api/rooms/<rid>/host/quiz-stats` 엔드포인트에서 `_quiz_state`(app.py:1245)를 순회해 문제별 정오답 집계를 반환하거나, `RoomTransaction.note` 컬럼에 `qid`를 포함해 DB에서 집계하는 방식으로 구현 가능. 서버 약 20줄, 클라이언트 진행자 설정 탭에 테이블 표시 약 15줄.
+
+- **진행자 화면에 종목별 학생 보유 현황 히트맵 부재** (`app.py:host_members()`, `app.js:loadHostMembers()`): 현재 진행자 화면 랭킹 탭은 학생별 총자산만 보여줌. 어떤 학생이 어떤 종목을 얼마나 보유했는지 행렬 형태로 보여주면 "왜 저 학생이 갑자기 1위가 됐나요?"라는 상황에서 진행자가 즉각 설명 가능. `GET /api/rooms/<rid>/host/holdings-matrix` 엔드포인트에서 `RoomHolding.query.filter_by(room_id=rid)`로 모든 보유 데이터를 가져와 `{user: {symbol: shares}}` 형태로 반환하고, 진행자 탭에 토글 버튼으로 히트맵 뷰를 제공하면 됨. 서버 약 15줄, 클라이언트 약 30줄.
+
+- **학생 화면 상단 바에 학급 평균 수익률 비교 미표시** (`app.js:735-752 refreshMyRank()`, `app.py:808-824 get_rankings()`): 현재 `pg-gain-pct`(app.js:741)에 본인 수익률만 표시됨. `get_rankings()` 응답에는 전체 데이터가 있으므로 `refreshMyRank()` 내부에서 `const avg = data.reduce((s,e) => s+e.gain_pct, 0)/data.length`를 계산해 `"나 +3.2% / 평균 +1.8%"` 형태로 상단에 표시하면, 학생이 자신의 투자 성과가 학급 수준에서 어디쯤인지 즉시 파악 가능. 서버 변경 없음, 클라이언트 약 5줄.
+
+- **PWA(Progressive Web App) 지원 없어 모바일 홈 화면 추가 불가** (`static/` 디렉터리): `manifest.json`과 서비스 워커가 없어 모바일 학생들이 앱처럼 홈 화면에 저장하지 못함. Render 콜드 스타트 후 첫 접속 로딩이 느려 학생들이 수업 초반에 집중하지 못하는 문제와도 연관됨. `static/manifest.json` 생성(앱 이름·아이콘·색상 지정, 약 20줄)과 `index.html:` `<head>`에 `<link rel="manifest">`·`<meta name="theme-color">` 추가(약 3줄)만으로 "홈에 추가" 기능 활성화. 오프라인 캐시는 선택사항이므로 서비스 워커 없이도 기본 PWA 기능 확보 가능.
+
+---
+
+### 제거/단순화할 것들
+
+- **`get_history()` `'1y'` 기간 n_bars 누락 및 interval 파라미터 미사용** (`stock_service.py:281-309`): `n_bars = {'1d':30,'5d':5,'1mo':30,'3mo':90}.get(period, 30)` (stock_service.py:292) — `'1y'`가 dict에 없어 30개 바가 반환됨. 반면 `get_chart()`(app.py:715)는 `'1y' → interval='1wk'`로 매핑해 요청하므로 "1년" 차트를 클릭하면 52주치 데이터 대신 30일치가 표시되는 버그. 또한 `get_history()` 시그니처가 `interval` 파라미터를 받지만 본문에서 전혀 사용하지 않아 항상 `step=86400`(1일)으로 날짜를 계산함. `n_bars` 딕셔너리에 `'1y': 52` 추가 및 `step_map = {'5m':300,'30m':1800,'1d':86400,'1wk':604800}` 으로 step을 파라미터로부터 유도하면 차트 X축 레이블이 올바르게 표시됨.
+
+- **`doDeposit()` 더블클릭 시 동일 금액 중복 예금 가능** (`app.js:1646-1659`): `doDeposit()` 함수는 API 호출 전 버튼을 disabled 처리하지 않음. 모바일에서 느린 응답 중 버튼을 두 번 탭하면 같은 금액으로 두 건의 예금이 생성됨. `app.py:890`에서 `m.cash < amount` 체크가 있어 두 번째 요청이 실패할 수도 있지만, 첫 번째 커밋 전 두 요청이 동시에 잔액 확인을 통과하면 이중 예금이 성공. 클라이언트에서 `const btn = document.querySelector('#dep-form button[onclick]'); btn.disabled = true;` 후 `finally { btn.disabled = false; }` 패턴(3줄)으로 UI 방어, 서버에서는 `dep = Deposit(...); db.session.flush(); if m.cash < 0: db.session.rollback()` 원자적 처리 추가.
+
+- **`host_force_price()` · `force_sector_event()` 실행 이력 DB 미기록** (`app.py:673-687`, `app.py:1345-1360`): 진행자가 특정 종목·섹터를 강제 조정해도 `RoomTransaction`에 기록이 남지 않음. 반면 진행자 자산 조정(`host_adjust()`, app.py:600)은 `RoomTransaction(action='ADJ', note=...)`을 생성. 게임 종료 후 학생이 "왜 갑자기 삼성전자가 30% 빠졌나요?"라고 물어도 진행자가 증거를 제시할 수 없음. `force_price()` 성공 후 `db.session.add(RoomTransaction(room_id=rid, user_id=room.host_id, symbol=symbol, action='ADJ', shares=0, price=new_price, amount=0, note=f'진행자 강제 조정 {sign}{pct}%'))` 한 줄 추가, `force_sector_event()` 도 동일 패턴으로 각 영향 종목에 기록하면 사후 수업 분석에 활용 가능.
+
+- **`SESSION_COOKIE_SAMESITE` 미설정으로 CSRF 공격 가능** (`app.py:12-13`): `app.secret_key` 설정 이후 `app.config['SESSION_COOKIE_SAMESITE']`가 없어 Flask 기본값인 `None`이 적용됨. 크로스 오리진 요청에서도 세션 쿠키가 전송되므로, 외부 사이트에서 로그인된 학생 브라우저를 이용해 `POST /api/rooms/<rid>/trade` 등 모든 인증 API를 CSRF로 호출 가능. `app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'` 한 줄 추가 + `app.config['SESSION_COOKIE_SECURE'] = True` (HTTPS 환경)로 대부분 CSRF 공격 차단. Flask-WTF CSRF 토큰 도입 불필요.
+
+- **`RoomTransaction.symbol`에 'LOTTO'·'ROULETTE'·'DEPOSIT' 의사 심볼 혼재 → 거래 내역에 '자산조정' 오표시** (`app.py:218`, `app.py:1065`, `app.py:1056`, `app.py:621`): `get_transactions()`(app.py:839)와 `host_member_transactions()`(app.py:621)에서 `STOCKS.get(t.symbol,{}).get('name','자산조정')` 매핑 시 'LOTTO', 'ROULETTE', 'DEPOSIT' 심볼은 `STOCKS`에 없어 모두 '자산조정'으로 표시됨. 학생 거래 내역에서 복권 당첨금과 진행자 직접 조정이 동일하게 "자산조정"으로 보임. `PSEUDO_SYMBOL_NAMES = {'LOTTO':'복권 당첨', 'ROULETTE':'룰렛', 'DEPOSIT':'예금', 'ADJ':'자산조정'}` 딕셔너리를 `app.py` 상단에 선언하고, 두 트랜잭션 직렬화 위치에서 `STOCKS.get(t.symbol, PSEUDO_SYMBOL_NAMES).get('name', t.symbol)` 패턴으로 교체하면 4줄 수정으로 해결.
+
+- **`loadLobbyMembers()`·`loadHostMembers()` onclick 속성에 username 직접 삽입** (`app.js:229`, `app.js:425`): `` `onclick="doKickMember(${m.user_id},'${m.username.replace(/'/g,"\\'")}')"``. 유저명에 `\n`, `\`, `"` 같은 문자가 포함될 경우 onclick 속성 파싱이 깨져 버튼이 작동하지 않거나 JS 에러 발생. 현재 서버에서 2~30자 제한(`app.py:333`)만 있고 특수문자는 막지 않음. `onclick="doKickMember(${m.user_id})"` + `<button data-username="${escHtml(m.username)}">` 형태로 변경하고 `doKickMember(uid)`에서 버튼의 `dataset.username`을 읽는 방식으로 교체하면 HTML injection 위험을 완전히 제거 가능.
+
+- **`trade()` 잔액 확인과 차감 사이에 원자적 처리 없음** (`app.py:747-765`): `if member.cash < amount: return 400` 통과 후 `member.cash -= amount; db.session.commit()`까지 다른 요청이 끼어들 수 있음. gunicorn 기본 설정(`--workers 2`)에서 두 요청이 동시에 잔액 확인을 통과하면 잔액이 음수가 됨. `RoomMember.query.filter_by(...).with_for_update().first()` 패턴으로 SELECT ... FOR UPDATE를 사용하면 SQLite에서도 row-level lock이 적용됨(WAL 모드에서 write lock). `member = RoomMember.query.filter_by(room_id=rid, user_id=user.id).with_for_update().first()` 한 줄 교체로 방어 가능하며, 동일 패턴이 필요한 `create_deposit()`(app.py:885)·`minigame_spin()`(app.py:1006)에도 동시 적용 권장.
