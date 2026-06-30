@@ -1394,3 +1394,18 @@
 - **`loadLobbyMembers()`·`loadHostMembers()` onclick 속성에 username 직접 삽입** (`app.js:229`, `app.js:425`): `` `onclick="doKickMember(${m.user_id},'${m.username.replace(/'/g,"\\'")}')"``. 유저명에 `\n`, `\`, `"` 같은 문자가 포함될 경우 onclick 속성 파싱이 깨져 버튼이 작동하지 않거나 JS 에러 발생. 현재 서버에서 2~30자 제한(`app.py:333`)만 있고 특수문자는 막지 않음. `onclick="doKickMember(${m.user_id})"` + `<button data-username="${escHtml(m.username)}">` 형태로 변경하고 `doKickMember(uid)`에서 버튼의 `dataset.username`을 읽는 방식으로 교체하면 HTML injection 위험을 완전히 제거 가능.
 
 - **`trade()` 잔액 확인과 차감 사이에 원자적 처리 없음** (`app.py:747-765`): `if member.cash < amount: return 400` 통과 후 `member.cash -= amount; db.session.commit()`까지 다른 요청이 끼어들 수 있음. gunicorn 기본 설정(`--workers 2`)에서 두 요청이 동시에 잔액 확인을 통과하면 잔액이 음수가 됨. `RoomMember.query.filter_by(...).with_for_update().first()` 패턴으로 SELECT ... FOR UPDATE를 사용하면 SQLite에서도 row-level lock이 적용됨(WAL 모드에서 write lock). `member = RoomMember.query.filter_by(room_id=rid, user_id=user.id).with_for_update().first()` 한 줄 교체로 방어 가능하며, 동일 패턴이 필요한 `create_deposit()`(app.py:885)·`minigame_spin()`(app.py:1006)에도 동시 적용 권장.
+
+## 2026-06-30 (이전 분석 미수정 현황 점검)
+
+오늘은 app.py·models.py·stock_service.py·app.js(전체 2323줄)·index.html을 재검토했으나, 43일째 누적된 1396줄 분량의 기존 기록과 교차 대조한 결과 신규 항목은 모두 기존 지적(룰렛 자동 종료 타이머, `setDepPct` 절삭, 복권 결과 화면 uid 표시, 학번+이름 계정 공유 등)과 중복으로 확인됨. 대신 가장 영향이 크면서도 수정 비용이 낮은(1~3줄) 미수정 항목 현황을 점검함.
+
+### 추가하면 좋을 기능
+
+- (해당 없음 — 오늘은 신규 기능 제안 대신 아래 고우선순위 버그의 미수정 현황만 점검)
+
+### 제거/단순화할 것들
+
+- **[긴급, 06-13부터 미수정] PostgreSQL URL 스킴 자동 변환 누락** (`app.py:14`): `os.environ.get('DATABASE_URL', 'sqlite:///game.db')`를 그대로 `SQLALCHEMY_DATABASE_URI`에 대입. Render가 주는 `DATABASE_URL`은 `postgres://` 형식이라 SQLAlchemy 1.4+에서 `db_url.replace('postgres://', 'postgresql://', 1)` 없이는 PostgreSQL 전환 시 서버가 즉시 죽음. SQLite를 계속 쓰는 한 드러나지 않아 우선순위가 낮아 보이지만, 한 줄 수정 비용 대비 잠재 영향(서버 전체 다운)이 가장 큰 항목.
+- **[미수정] `SESSION_COOKIE_SAMESITE`/`SESSION_COOKIE_SECURE` 미설정** (`app.py:12-13`): CSRF 노출 상태 그대로. `app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'` 한 줄 추가로 해결 가능한데 43일째 미반영.
+- **[미수정] `trade()` 잔액 확인-차감 비원자적 처리** (`app.py:747-765`): TOCTOU 경합 여전. `create_deposit()`(app.py:885)·`minigame_spin()`(app.py:1006)도 동일 패턴 미적용.
+- **[미수정] `stock_service.py:292` `n_bars` 딕셔너리에 `'1y'` 키 없음**: `{'1d': 30, '5d': 5, '1mo': 30, '3mo': 90}.get(period, 30)` — 1년 차트 요청 시 여전히 기본값 30이 적용되어 실제로는 30일치만 표시됨. `'1y': 52` 한 줄 추가로 해결.
