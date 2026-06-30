@@ -1409,3 +1409,26 @@
 - **[미수정] `SESSION_COOKIE_SAMESITE`/`SESSION_COOKIE_SECURE` 미설정** (`app.py:12-13`): CSRF 노출 상태 그대로. `app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'` 한 줄 추가로 해결 가능한데 43일째 미반영.
 - **[미수정] `trade()` 잔액 확인-차감 비원자적 처리** (`app.py:747-765`): TOCTOU 경합 여전. `create_deposit()`(app.py:885)·`minigame_spin()`(app.py:1006)도 동일 패턴 미적용.
 - **[미수정] `stock_service.py:292` `n_bars` 딕셔너리에 `'1y'` 키 없음**: `{'1d': 30, '5d': 5, '1mo': 30, '3mo': 90}.get(period, 30)` — 1년 차트 요청 시 여전히 기본값 30이 적용되어 실제로는 30일치만 표시됨. `'1y': 52` 한 줄 추가로 해결.
+
+---
+
+## 2026-06-30 (2차)
+
+### 추가하면 좋을 기능
+
+- **진행자 → 전체 학생 공지사항 방송 기능** (`app.py` 신규 엔드포인트, `app.js:startNewsPolling()`): 진행자가 임의 텍스트 메시지를 전송하면 모든 참가자 화면에 배너/toast로 표시되는 기능. 현재는 뉴스 이벤트로만 의사소통이 가능. 뉴스 API 응답에 `announcement: str | null` 필드를 추가하고 클라이언트에서 배너로 렌더링하면 서버 5줄·클라이언트 10줄로 구현 가능. 수업 흐름 유도("지금 반도체를 주목하세요!")에 직접 활용 가능.
+- **결과 화면에서 예금 이자 수익 분리 표시** (`app.py:808-824 get_rankings()`, `app.js:1760-1777 loadResults()`): `total_value`에 투자 손익과 예금 이자가 합산되어 있어 전략 비교가 불가능. `get_rankings()` 응답에 `deposit_interest` 필드를 추가하고 결과 카드에 "예금 이자: +X원" 별도 표시. 서버에서 `Deposit.query.filter_by(status='matured')` 합산 약 5줄 추가로 구현 가능.
+- **섹터별 순위 필터** (`app.py:808-824 get_rankings()`, `app.js:1673-1691 loadParticipantRankings()`): 현재 총 자산 기준 단일 정렬만 제공. `?sector=반도체` 쿼리 파라미터로 해당 섹터 보유자만 필터링해 수익률 순 정렬하면 "반도체 투자자 중 최고 성과" 수업 토론이 가능. 서버 `RoomHolding.query.filter_by` 필터 약 15줄, 클라이언트 섹터 드롭다운 추가.
+- **진행자 전체 포트폴리오 집계 패널** (`app.py:host_members()`, `app.js:loadHostMembers()`): 진행자가 학급 전체의 종목별 보유 수량 합계를 한눈에 볼 수 없음. `GET /api/rooms/<rid>/host/portfolio-summary` 엔드포인트에서 `RoomHolding.query.filter_by(room_id=rid)`로 집계해 `{symbol: total_shares, sector_total: {...}}` 반환. "현재 학급이 반도체에 40% 집중됐군요"를 즉시 파악 가능. 서버 20줄·클라이언트 탭 패널 25줄로 구현.
+- **퀴즈 타이머 서버 설정화** (`app.js:856, 861`): `_quizTimeSec = 30`과 `(_quizTimeSec / 30 * 100)` 두 곳에 30이 리터럴로 박혀 있어 타이머 시간 변경 시 두 곳을 동시 수정해야 함. `quiz-settings` API에 `time_sec` 필드를 추가해 서버에서 내려받는 구조로 전환하면 교사별 맞춤 설정이 가능.
+- **시장 탭 종목 카드에 내 보유량 뱃지 표시** (`app.js:1287-1311 renderGrid()`): 학생이 특정 종목 보유 현황을 확인하려면 포트폴리오 탭으로 이동해야 함. `openStockModal()` 호출 시 이미 `S.tradeHolding`에 보유량이 캐시되므로, `renderGrid()` 시 보유 종목 카드 하단에 작은 뱃지("보유 N주")를 표시하면 별도 API 호출 없이 UX 개선 가능.
+
+### 제거/단순화할 것들
+
+- **`host_market_event()` 후 `_news_cache` 미무효화** (`app.py:1345-1360`): `host_force_price()` 미무효화는 2026-06-23에 문서화됐지만, `host_market_event()`도 동일하게 `force_sector_event()`로 `self._news`를 갱신한 뒤 `_invalidate_news_cache(rid)` 호출이 없음. 섹터 이벤트 후 최대 2초간 참가자는 구 뉴스를 수신. `app.py:1360` return 직전에 `_invalidate_news_cache(rid)` 한 줄 추가로 해결. `host_send_news()`(`app.py:700`)에는 이미 존재해 동일 경로 간 불일치 상태.
+- **`api.get`/`api.post` HTTP 4xx 응답 시 서버 오류 메시지 폐기** (`app.js:32-33, 38-39`): `if (!r.ok) return {error: \`HTTP ${r.status}\`}` 패턴이 서버 상세 에러 JSON("잔액 부족 — 필요: X원 / 보유: Y원")을 버림. `trade()`(`app.py:749`)·`create_deposit()`(`app.py:890`) 등에서 400과 함께 상세 메시지를 반환해도 학생에게 "HTTP 400"만 표시됨. `if (!r.ok) return r.json().catch(() => ({error: \`HTTP ${r.status}\`}))` 로 교체하면 서버 오류 메시지가 UI에 전달됨.
+- **`_lot_round_due()` 에서 `_lottery_lock` 없이 `_lots` 변이** (`app.py:171-178`, 호출 위치 `app.py:300`): `room_dict()`(line 300)가 `_lot_round_due()`를 호출하고 내부에서 `_lots.setdefault(rid, {'done': set(), 'current': None})`(line 176-178)를 실행. 동시에 `get_lottery()`가 `_lottery_lock` 하에서 `_lots[rid]`를 수정하면 딕셔너리 변이 레이스 컨디션 발생 가능. `_lot_round_due()` 내 `_lots.setdefault()` 를 읽기 전용 `_lots.get(rid, {})` 로 교체하고 초기화를 `lottery_start()`/`get_lottery()` 내부로 이전.
+- **룰렛 트리거 조건 `remaining <= 5`가 10초 폴링 주기보다 좁아 트리거 스킵 가능** (`app.py:437-439, 446-448`): `now_dt >= room.end_time` 체크가 룰렛 트리거 체크보다 먼저 평가됨. 마지막 폴링이 종료 5초 전에 발생하고 다음 폴링이 이미 종료 시각 초과 시 룰렛 없이 `_end_room()` 실행. `remaining <= 5` → `remaining <= 15`(폴링 주기 + 버퍼)로 확대하거나 `room.end_time - timedelta(seconds=15)` 이전에 트리거 예약.
+- **`enterHostGame()` 에서 `startNewsPolling()` 불필요 호출** (`app.js:267`): `startNewsPolling()`은 참가자용 폭탄뉴스 팝업을 위한 것인데 진행자 진입 함수에서도 호출됨. 진행자는 뉴스를 직접 트리거하는 주체라 수신이 불필요. `/api/rooms/<rid>/news`를 8초마다 불필요하게 폴링해 진행자당 분당 7.5회 요청 낭비. `enterHostGame()`에서 `startNewsPolling()` 호출 제거.
+- **`loadDepositsPage()` active 예금만 표시해 게임 종료 후 이자 내역 확인 불가** (`app.js:1629-1630`): `const active = (data || []).filter(d => d.status === 'active')` — `_end_room()`이 모든 예금을 matured 처리하므로 게임 종료 후 예금 탭에는 "활성 예금 없음"만 표시. `get_deposits()`(`app.py:852`)는 matured 예금도 반환하므로, 게임 종료 후 matured 예금을 "💰 만기 완료" 별도 섹션으로 표시해 학생이 이자 수령액 확인 가능.
+- **`room_dict()` 에서 `RoomMember.count()` 쿼리가 매 캐시 미스마다 실행** (`app.py:297`): `'member_count': RoomMember.query.filter_by(room_id=room.id).count()` — `_room_cache` TTL이 1.5초라 10초 폴링에서도 자주 미스 발생. 30명 방에서 분당 수십 번 COUNT 쿼리 실행. `Room.members` 관계(`models.py:43`)를 활용해 `len(room.members)`로 대체하거나 멤버 수를 캐시에 포함시켜 JOIN 없이 관리하면 쿼리 제거 가능.
