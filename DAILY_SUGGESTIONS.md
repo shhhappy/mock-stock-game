@@ -1432,3 +1432,33 @@
 - **`enterHostGame()` 에서 `startNewsPolling()` 불필요 호출** (`app.js:267`): `startNewsPolling()`은 참가자용 폭탄뉴스 팝업을 위한 것인데 진행자 진입 함수에서도 호출됨. 진행자는 뉴스를 직접 트리거하는 주체라 수신이 불필요. `/api/rooms/<rid>/news`를 8초마다 불필요하게 폴링해 진행자당 분당 7.5회 요청 낭비. `enterHostGame()`에서 `startNewsPolling()` 호출 제거.
 - **`loadDepositsPage()` active 예금만 표시해 게임 종료 후 이자 내역 확인 불가** (`app.js:1629-1630`): `const active = (data || []).filter(d => d.status === 'active')` — `_end_room()`이 모든 예금을 matured 처리하므로 게임 종료 후 예금 탭에는 "활성 예금 없음"만 표시. `get_deposits()`(`app.py:852`)는 matured 예금도 반환하므로, 게임 종료 후 matured 예금을 "💰 만기 완료" 별도 섹션으로 표시해 학생이 이자 수령액 확인 가능.
 - **`room_dict()` 에서 `RoomMember.count()` 쿼리가 매 캐시 미스마다 실행** (`app.py:297`): `'member_count': RoomMember.query.filter_by(room_id=room.id).count()` — `_room_cache` TTL이 1.5초라 10초 폴링에서도 자주 미스 발생. 30명 방에서 분당 수십 번 COUNT 쿼리 실행. `Room.members` 관계(`models.py:43`)를 활용해 `len(room.members)`로 대체하거나 멤버 수를 캐시에 포함시켜 JOIN 없이 관리하면 쿼리 제거 가능.
+
+---
+
+## 2026-07-01
+
+### 추가하면 좋을 기능
+
+- **게임 내 실제 가격 변동 이력 저장 → 종료 후 진짜 시계열 차트 제공** (`stock_service.py:121-190`, `get_history():281-309`): 현재 `get_history()`는 현재가에서 역방향 랜덤 워크로 "과거 차트"를 생성하므로, 진행자가 `force_price()`나 `force_sector_event()`로 큰 변동을 일으켜도 차트에 반영되지 않음. 학생이 "왜 차트에 폭락이 안 보이나요?"라고 물을 수 있어 교육 혼란 유발. `StockService.__init__`에 `self._price_log: list = []` 추가 후 `get_price()` 내 가격 갱신 시(`stock_service.py:185`) `self._price_log.append((now, sym, new_price))` 한 줄로 이력 적재. `get_history()` 에서 `_price_log`를 활용해 실제 변동 차트를 반환하면 교육 가치가 크게 올라감.
+
+- **진행자 → 개별 학생 맞춤 힌트 전송 기능** (`app.py:690-701 host_send_news()`, `app.js:1579-1591 loadTxn()`): 현재 `send-news` 엔드포인트는 전체 브로드캐스트만 가능. 뒤처지는 학생이나 잘못된 전략을 구사하는 학생에게 조용히 힌트를 주는 수단이 없음. `POST /api/rooms/<rid>/host/hint` 엔드포인트에서 `RoomTransaction(room_id=rid, user_id=target_uid, symbol='MSG', action='ADJ', amount=0, note=hint_text)` 레코드를 삽입하면, 이미 10초마다 폴링 중인 `loadTxn()` 경로에서 action='MSG' 타입을 식별해 `toast()` 표시. 웹소켓 불필요, 서버 15줄·클라이언트 10줄.
+
+- **학생 상단 바에 1위와의 자산 격차 표시** (`app.js:735-752 refreshMyRank()`): `refreshMyRank()`는 이미 전체 랭킹 배열을 수신하므로 `const gap = data[0].total_value - me.total_value`를 계산할 수 있음. 현재 `pg-rank`(순위)·`pg-gain-pct`(수익률)만 표시하는데, 1위와의 격차(예: "-2,350,000원")를 추가하면 학생이 역전 여부를 즉시 판단해 전략적 의사결정을 유도 가능. 서버 변경 없음, 클라이언트 약 3줄.
+
+- **가격 강제 초기화(base price 리셋) 버튼** (`stock_service.py:218-228 force_price()`, `index.html:162-180 호스트 시장 탭`): 진행자가 실수로 특정 종목을 50% 연속 올리거나 내려 `base * 3.0` 상한에 붙어버리면 되돌릴 수단이 없음. `StockService`에 `reset_price(symbol)` 메서드(`base * random.uniform(0.97, 1.03)` 재적용)를 추가하고, 호스트 시장 탭의 "주가 강제 조정" 카드에 "기준가 복원" 버튼을 추가하면 수업 중 실수 복구가 가능. 서버 10줄·클라이언트 5줄.
+
+---
+
+### 제거/단순화할 것들
+
+- **`member_total_value()` N+1 쿼리 — 30명 방에서 60~90회 개별 SELECT** (`app.py:107-118`, `host_members():544`, `get_rankings():815`): `member_total_value(uid)`가 `RoomHolding.query.filter_by(room_id=rid, user_id=uid).all()` + `Deposit.query.filter_by(room_id=rid, user_id=uid, status='active').all()` 두 SELECT를 멤버마다 실행. 30명 학급에서 `host_members()` 호출 한 번에 최소 60회 쿼리 발생, 10초 폴링에서 반복됨. 해결: `holdings = RoomHolding.query.filter_by(room_id=rid).all()`로 전체를 한 번에 가져와 `{uid: [h, ...]}` 딕셔너리로 그룹화 후 이용. `Deposit`도 동일하게 방 단위 일괄 조회로 O(N) → O(1) 절감.
+
+- **`setDepPct(100)` 전액 버튼이 잔액 9,999원 이하일 때 0원 반환** (`app.js:1597-1600`): `Math.floor(cash * pct / 100 / 10000) * 10000` 계산에서 9,999원 보유 학생이 "전액" 버튼을 눌러도 0이 입력됨. 잔액이 거의 없는 학생이 이자라도 받으려고 예금을 시도해도 불가능. `pct === 100 ? cash : Math.floor(cash * pct / 100 / 10000) * 10000`으로 교체하면 전액 버튼은 절삭 없이 정확한 금액을 대입.
+
+- **`create_room()` stale 체크가 장기 일시정지된 방을 누락** (`app.py:372-379`): `Room.end_time < stale_cutoff` 조건만 검사. 5시간짜리 방을 시작 직후 일시정지하면 `end_time = start_time + 5h`로 미래에 위치해 stale 판정이 영원히 안 됨. 진행자가 새 방을 만들려 해도 "이미 진행 중인 방이 있습니다." 오류가 뜸. `OR (Room.status == 'paused' AND Room.paused_at < stale_cutoff)` 조건을 추가하면 장기 방치된 paused 방도 정리 가능.
+
+- **`confirmLeaveGame()` 메시지가 재입장 가능함을 알리지 않아 학생 혼란** (`app.js:114-117`): `"게임을 나가시겠습니까?\n진행 중인 게임에서 퇴장합니다."` 문구를 보면 영구 퇴장으로 오해. 실제로는 로그아웃 후 동일 학번+이름 재입력 시 `find_active_room()`이 RoomMember를 찾아 자동 복귀(`app.py:307-313`). `"나갔다가 같은 학번+이름으로 다시 들어오면 게임 기록이 유지됩니다."` 한 줄을 confirm 메시지에 추가하면 수업 중 패닉 방지. 1줄 수정.
+
+- **`minigame_spin()`·`submit_quiz()` 에서 주식 청산 시 `h.shares = 0` 으로 설정하고 레코드 삭제 안 함** (`app.py:1037-1038`, `app.py:1318`): 룰렛 베팅 자금 마련이나 퀴즈 패널티로 보유 주식이 전량 청산될 때 `h.shares = 0; h.avg_price = 0`으로 설정하고 `db.session.delete(h)`를 호출하지 않음. `get_portfolio()`(`app.py:782`)에서 `if h.shares <= 0: continue`로 걸러지지만, `RoomHolding.query.filter_by(room_id=rid, user_id=uid).all()` 결과에 빈 레코드가 포함돼 반복문이 불필요하게 확장됨. 두 위치에서 `if sell_value <= shortfall: ... db.session.delete(h)` (또는 `if h.shares == 0: db.session.delete(h)`)로 즉시 삭제 처리.
+
+- **`lobby_members()` 가 `/host/` 경로에 있지만 진행자 권한 검사 없음** (`app.py:577-585`): `GET /api/rooms/<rid>/host/lobby-members`는 `room.host_id != user.id` 체크 없이 누구든 인증만 되면 다른 방 학생 명단 조회 가능. 참가자 로비가 이 엔드포인트를 사용하는 것은 의도된 설계(`app.js:579`)이지만, URL이 `/host/` 하위라 향후 일괄 권한 미들웨어 적용 시 실수로 학생 접근을 차단할 위험이 있음. 엔드포인트를 `/api/rooms/<rid>/lobby-members`로 이동하거나, 현 위치에 진행자 OR 해당 방 멤버 조건을 명시적으로 추가.
