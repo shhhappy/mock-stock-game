@@ -1462,3 +1462,35 @@
 - **`minigame_spin()`·`submit_quiz()` 에서 주식 청산 시 `h.shares = 0` 으로 설정하고 레코드 삭제 안 함** (`app.py:1037-1038`, `app.py:1318`): 룰렛 베팅 자금 마련이나 퀴즈 패널티로 보유 주식이 전량 청산될 때 `h.shares = 0; h.avg_price = 0`으로 설정하고 `db.session.delete(h)`를 호출하지 않음. `get_portfolio()`(`app.py:782`)에서 `if h.shares <= 0: continue`로 걸러지지만, `RoomHolding.query.filter_by(room_id=rid, user_id=uid).all()` 결과에 빈 레코드가 포함돼 반복문이 불필요하게 확장됨. 두 위치에서 `if sell_value <= shortfall: ... db.session.delete(h)` (또는 `if h.shares == 0: db.session.delete(h)`)로 즉시 삭제 처리.
 
 - **`lobby_members()` 가 `/host/` 경로에 있지만 진행자 권한 검사 없음** (`app.py:577-585`): `GET /api/rooms/<rid>/host/lobby-members`는 `room.host_id != user.id` 체크 없이 누구든 인증만 되면 다른 방 학생 명단 조회 가능. 참가자 로비가 이 엔드포인트를 사용하는 것은 의도된 설계(`app.js:579`)이지만, URL이 `/host/` 하위라 향후 일괄 권한 미들웨어 적용 시 실수로 학생 접근을 차단할 위험이 있음. 엔드포인트를 `/api/rooms/<rid>/lobby-members`로 이동하거나, 현 위치에 진행자 OR 해당 방 멤버 조건을 명시적으로 추가.
+
+---
+
+## 2026-07-01 (2차)
+
+### 추가하면 좋을 기능
+
+- **포트폴리오 도넛 차트에 섹터별 집계 전환 토글 버튼** (`app.js:1480-1502 loadPortfolio()`): 현재 도넛 차트는 보유 종목 단위로 분할돼 종목이 많으면 범례가 좁아져 한눈에 분산투자 비율을 파악하기 어려움. "섹터별 보기" 버튼 클릭 시 `port.holdings`를 `sector → sum(current_value)` 로 그룹화해 Chart.js 데이터만 교체하면 "내가 반도체에 40% 집중됐네"를 즉시 파악 가능. 분산투자 교육 효과 높음. 서버 변경 없음, 클라이언트 Chart destroy/재생성 포함 약 20줄.
+
+- **자산 히스토리를 `localStorage`에 백업해 새로고침·재접속 시 20분 상한 소실 방지** (`app.js:749-752 refreshMyRank()`): `S.assetHistory.shift()`로 120개(10초×120=20분) 초과분이 삭제되어, 2시간짜리 게임에서는 마지막 20분 데이터만 포트폴리오 탭 라인차트(`app.js:1505-1540`)에 남음. 초기 투자 전략과 현재의 대비가 불가능. `refreshMyRank()` 말미에 `localStorage.setItem('ah_' + S.room.id, JSON.stringify(S.assetHistory))`를 추가하고 `enterParticipantGame()`(app.js:589)에서 `JSON.parse(localStorage.getItem(...)) || []`로 복구하면, 새로고침 및 장기 게임 데이터 축적이 가능. 클라이언트 약 5줄, 서버 변경 없음.
+
+- **관심종목 목표 등락률 도달 시 toast 알림** (`app.js:1279-1285 toggleWatchlist()`, `app.js:1313-1323 renderGrid()`): 현재 관심목록(`S.watchlist`)은 필터링에만 사용되고 가격 도달 알림이 없어 수업 중 학생이 계속 화면을 주시해야 함. `toggleWatchlist()` 호출 시 목표 등락률(예: +10%)을 모달로 입력받아 `localStorage`의 `watchAlerts = {SMSNG: 10, TSLA: -5}` 에 저장하고, `renderGrid()` 루프에서 관심종목의 `change_pct`가 목표를 돌파하면 `toast('삼성전자 목표 +10% 도달!')` 1회 발생. `alertFired` 세트로 중복 방지. 서버 변경 없음, 클라이언트 약 25줄.
+
+- **진행자용 풀스크린 랭킹 표시 전용 뷰 `/rooms/<code>/display`** (`app.py:318-320 index()`, `app.js:258-273 enterHostGame()`): 현재 진행자 게임 화면에는 설정·시장·랭킹 탭이 혼재해 프로젝터로 학생들에게 공개하기 어려움. `GET /rooms/<code>/display` 라우트를 추가해 `display.html`(CSS 최소화, 10초 자동 갱신, 조작 UI 없는 풀스크린 랭킹 테이블)을 반환하면, 교사가 별도 브라우저 탭을 열어 프로젝터로 실시간 순위를 학생들에게 공개 가능. Flask 라우트 5줄 + 최소 HTML 60줄.
+
+- **게임 종료 시 최종 보유 종목 스냅샷을 결과 화면에 표시** (`app.py:144-153 _end_room()`, `app.js:1760-1777 loadResults()`): `_end_room()`에서 `RoomHolding`을 전량 삭제(`db.session.delete(h)`, app.py:152)하므로 게임 종료 후 학생이 "내가 어떤 종목을 얼마나 갖고 있었나?"를 복기할 수 없음. 삭제 전 `RoomTransaction(action='SNAP', symbol='PORTFOLIO', note=json.dumps([{'sym': h.symbol, 'shares': h.shares, 'avg': h.avg_price} for h in holdings]))` 한 건을 저장하면, `get_transactions()` 경로로 종료 후에도 최종 포트폴리오 조회 가능. 결과 화면 "내 결과" 카드(`app.js:1762-1774`)에 보유 종목 목록 추가. 서버 약 5줄, 클라이언트 약 15줄.
+
+---
+
+### 제거/단순화할 것들
+
+- **`_next_price()` 클램프 `base×1.4`와 `force_price()` 클램프 `base×3.0` 불일치 → 강제 조정 직후 스냅백 버그** (`stock_service.py:139`, `stock_service.py:225`): 진행자가 `host_force_price(pct=+100)`으로 주가를 base×2.0으로 올리면, 다음 유기 틱(최대 20초 후) `_next_price()`에서 `max(base * 0.6, min(base * 1.4, new_price))` 클램핑에 의해 가격이 base×1.4로 급락. 학생이 "진행자가 방금 올려줬는데 왜 바로 내려가요?"라고 혼란. `stock_service.py:139`의 `min(base * 1.4, ...)` → `min(base * 3.0, ...)`, `max(base * 0.6, ...)` → `max(base * 0.3, ...)` 로 통일하면 2줄 수정으로 강제 조정 범위와 유기 범위가 일치.
+
+- **`lobby_members()` 루프 내 `db.session.get(User, m.user_id)` N+1 SELECT** (`app.py:582-584`): 멤버마다 별도 `SELECT users WHERE id=?` 실행 — 30명 방에서 31회 쿼리. `host_members()`(app.py:548-551)는 이미 `uids = [m.user_id for m in members]; user_map = {u.id: u for u in db.session.query(User).filter(User.id.in_(uids)).all()}` 일괄 조회 패턴을 사용하고 있어 불일치. `lobby_members()`에 동일 4줄 패턴 적용 시 O(N) → O(1) 절감. 5초 폴링에서 30명 접속 시 분당 최대 186회 → 12회로 감소.
+
+- **`openStockModal()` 호출마다 `/portfolio` 전체 재조회** (`app.js:1344-1351`): 학생이 시장 탭에서 여러 종목 카드를 연속 클릭하면 클릭마다 `GET /api/rooms/<rid>/portfolio` 를 호출해 `RoomHolding` + `Deposit` 전체를 DB에서 재조회. `execTrade()` 성공 시 이미 `S.tradeCash`(app.js:1442)·`S.tradeHolding`(1446)이 갱신되므로 재조회가 불필요한 경우가 많음. `S._portfolioCache = {ts: 0, cash: 0, holdings: []}` 를 도입해 30초 이내이면 캐시를 재사용(`if (Date.now() - S._portfolioCache.ts < 30000)`)하고, `execTrade()`·`loadPortfolio()` 성공 시 캐시를 갱신. 클라이언트 약 10줄.
+
+- **`_end_room()` 내 전역 딕셔너리 수정에 잠금 없음 — gunicorn multi-worker 환경에서 상태 불일치** (`app.py:155-161`): `_lots.pop()`, `_rlt_active.pop()`, `_quiz_settings.pop()`, `_roulette_config.pop()`, `_ending_soon.discard()` 모두 잠금 없이 수행. 단일 워커에선 GIL이 어느 정도 보호하지만, `WEB_CONCURRENCY=2+` 시 각 프로세스가 독립 메모리를 가져 "워커 A에서 room 종료 → 워커 B에서 여전히 active로 간주"하는 상태 불일치 발생. 현재 `render.yaml`·`Procfile` 어디에도 단일 워커 제약 명시 없음. `app.py:12` 주석 또는 `Procfile`에 `web: gunicorn app:app --workers 1 --threads 4`를 명시해 인메모리 전역 상태 공유 보장. 장기적으로는 `_lots`, `_rlt_active` 등을 Redis로 이전 권장.
+
+- **`get_history()` X축 날짜가 실제 캘린더 날짜여서 30분 게임과 맥락 불일치** (`stock_service.py:296-302`): `date_str = datetime.utcfromtimestamp(now - i * 86400).strftime('%Y-%m-%d')` 로 "2026-06-01"~"2026-07-01" 같은 실제 날짜가 차트 X축에 표시됨. 30분짜리 게임에서 학생이 "1달 차트"를 보면 지난 달 날짜들이 보이므로 "이게 실제 주가 데이터인가요?"라는 혼동 유발. `date_str = f"T-{i}"`나 `f"라운드 {n_bars - i}"` 같은 상대 레이블로 교체하면 1줄 수정으로 "이건 가상 시뮬레이션 데이터" 임을 명확히 전달 가능.
+
+- **`Room.query.get_or_404(rid)` — Flask-SQLAlchemy 3.1+에서 `LegacyAPIWarning` 발생, 코드베이스 13곳** (`app.py:435, 478, 492, 507, 523, 543, 566, 580, 591, 610, 675, 693, 713`): `cur_user()`(app.py:105)·`withdraw_deposit()`(app.py:907) 등 최신 추가 코드는 이미 `db.session.get(Model, pk)` 를 사용하고 있어 동일 파일 내 일관성이 없음. `Room.query.get_or_404(rid)` → `db.get_or_404(Room, rid)` (Flask-SQLAlchemy 3.1 공식 API)로 일괄 교체하면 경고 제거 + 스타일 통일. `sed -i "s/Room\.query\.get_or_404(rid)/db.get_or_404(Room, rid)/g" app.py` 한 줄로 13곳 자동 치환 가능.
