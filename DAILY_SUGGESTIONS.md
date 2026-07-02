@@ -1526,3 +1526,37 @@
 - **진행자 시장 탭 초기 렌더링 시 종목 드롭다운이 탭 전환마다 누적 삽입 방지 로직이 방어적** (`app.js:322-330`, `loadHostMarket()`): 드롭다운 중복 방지를 `if (!sel.options.length)` 조건으로만 체크하므로, 호스트가 탭을 나갔다 돌아올 때 새 종목이 추가되어도 드롭다운이 갱신되지 않음(현재 종목은 고정이라 실문제 아님). 더 중요한 것은 `if (!grid.children.length)` 조건(`app.js:317`)으로 로딩 스피너가 이미 렌더링된 그리드에는 표시 안 되므로, 탭 재진입 시 갱신 중임을 알 수 없음. `grid.innerHTML = '<div class="loading-center">...'` 를 조건 없이 항상 실행한 후 `data.stocks` 도착 시 교체하면 더 일관된 UX 제공.
 
 - **`get_room()` 에서 `Room.query.get_or_404(rid)` 이후 `cur_user()` 가 두 번 호출됨** (`app.py:432-473`): `get_room()` 함수 내에서 `cur_user().id`를 `app.py:440, 444, 464, 473` 등 여러 곳에서 중복 호출하여 매번 `db.session.get(User, session['user_id'])`를 실행함. 함수 시작 시 `user = cur_user()` 한 번만 호출해 변수에 저장하면 DB 조회를 3~4회 절감. 동일 패턴이 `get_stocks()` (`app.py:651`) 등에서도 반복됨.
+
+---
+
+## 2026-07-02 (2차)
+
+### 추가하면 좋을 기능
+
+- **진행자 화면 재접속 시 퀴즈 보상·패널티 비율이 입력 필드에 복구되지 않음** (`app.js:258-274 enterHostGame()`, `app.py:1399-1414 quiz_settings()`): `enterHostGame()`에서 `loadRltConfig()`는 호출해 룰렛 설정을 복구하지만, 퀴즈 설정 로딩 함수가 없어 진행자가 새로고침·재접속하면 입력 필드가 기본값(보상 1%, 패널티 0.5%)으로 초기화됨. 진행자가 "내가 3%로 설정했나 2%로 설정했나?"를 알 수 없음. `GET /api/rooms/<rid>/host/quiz-settings` 엔드포인트가 이미 존재하므로, `async function loadQuizSettings()` 함수(5줄)를 추가해 응답값을 `quiz-reward-input`·`quiz-penalty-input`·`quiz-reward-info`에 세팅하고 `enterHostGame()` 에서 `loadRltConfig()` 직후 호출하면 해결. 서버 변경 불필요.
+
+- **`startConfetti()` 가 진행자 결과 화면에서도 실행돼 수업 진행 방해** (`app.js:1794`): `loadResults()` 마지막 줄 `if (data.length > 0) setTimeout(startConfetti, 200)` 에 `S.room?.is_host` 체크가 없어 진행자가 결과 화면에 진입할 때도 110개 파티클 폭죽 애니메이션이 실행됨. 프로젝터로 결과를 공개하는 도중 폭죽이 터지면 학생이 집중 불가. `if (data.length > 0 && !S.room?.is_host) setTimeout(startConfetti, 200)` 로 한 조건 추가(1줄 수정)로 참가자에게만 confetti 표시.
+
+- **포트폴리오 탭 보유 종목 "매수/매도" 버튼이 로딩 시점의 stale 가격으로 모달 초기화** (`app.js:1558-1560`): `openStockModal('${h.symbol}', {price: ${h.current_price}, ...})` 로 fallback 객체를 넘기고, `openStockModal()` 내부에서 `S.stocks.find(s => s.symbol === symbol) || fallback` 로 현재 시세를 우선하지만 `S.stocks`가 오래된 경우(포트폴리오 탭 진입 후 시장 탭 미방문) stale fallback 가격이 모달에 표시됨. 학생이 "방금 X원으로 봤는데 Y원에 체결됐어요" 혼란 발생. `openStockModal()` 내 `port = await api.get('/portfolio')` 결과가 이미 `S.tradeCash`·`S.tradeHolding`을 갱신하므로, 가격도 `/stocks` API를 간단히 재조회(`svc.get_price(symbol)` 경량 엔드포인트)하거나, fallback의 `price`를 모달 표시용에만 사용하고 거래 시에는 서버에서 실시간 가격을 재조회하는 방식으로 개선 가능.
+
+- **"더 보기" 버튼 연속 탭 시 `loadMoreTxn()` · `loadMoreStudentTxn()` 이 중복 페이지 요청** (`app.js:1593, 538`): 두 함수 모두 `S.txnPage++` 후 API 호출 전에 버튼 `disabled` 처리가 없어, 느린 응답 중 두 번 탭하면 동일 페이지 번호로 두 요청이 가서 거래 항목이 중복 삽입됨. `const btn = e.currentTarget; btn.disabled = true; try { S.txnPage++; await loadTxn(false); } finally { btn.disabled = false; }` 패턴(각 3줄)으로 방어 가능. onclick 속성에서 이벤트 객체 전달이 필요하므로 HTML 측 `onclick="loadMoreTxn(event)"` 로 소폭 수정 필요.
+
+- **참가자 게임 로비 폴링에서 `room` 상태와 `lobby-members`를 매 5초마다 각각 별도 요청** (`app.js:562-575`): `enterParticipantLobby()` `setInterval` 콜백에서 `loadPLobbyMembers()` + `api.get('/api/rooms/<rid>')` 두 요청이 항상 순차 실행. 30명 대기 중 분당 각각 12회, 총 24회 API 요청 발생. `get_room()` 응답에 이미 `member_count`(app.py:297)가 있으므로 `room` 응답만으로 멤버 수 표시 가능. `/api/rooms/<rid>` 폴링 응답에 대기 중 멤버 목록(`lobby_members`)을 추가하거나, `loadPLobbyMembers()` 폴링 주기를 10초로 늘이면 요청 횟수를 절반으로 줄일 수 있음. 서버 약 5줄·클라이언트 약 3줄.
+
+- **`renderSectors()` 가 섹터 버튼 클릭마다 `innerHTML` 전체를 재생성해 포커스 유실** (`app.js:1243-1255`): `setSector()` → `renderSectors()` → `sector-filters.innerHTML = ...` 전체 교체. 17개 섹터 버튼 DOM 전체를 재생성하므로 키보드·스크린리더 사용 시 포커스가 날아감. 이미 렌더링된 버튼에 `active` 클래스만 토글하는 방식(`document.querySelectorAll('.sector-btn').forEach(b => b.classList.toggle('active', b.dataset.sector === (S.activeSector || '전체')))`)으로 교체하면 DOM 재생성 없이 3줄로 대체 가능. 초기 렌더는 그대로 두고 업데이트 경로만 분리.
+
+---
+
+### 제거/단순화할 것들
+
+- **`submitQuiz()` 타임아웃 분기에서 서버 응답의 `explanation`이 학생에게 미표시** (`app.js:875-879`): 정답·오답 분기에서는 `data.explanation`이 결과 HTML에 포함(app.js:883, 887)되는 반면, 타임아웃(`answer === null`) 분기는 `td = await api.post('/quiz', {answer: false})` 를 호출한 뒤 `td.explanation`을 무시함. 학생이 "왜 틀렸는지" 설명을 보지 못해 학습 기회를 놓침. `if (td?.explanation) result.innerHTML += \`<div style="color:var(--muted);font-size:13px;margin-top:8px">\${td.explanation}</div>\`` 3줄 추가로 타임아웃에도 해설 표시. 서버 변경 불필요.
+
+- **`_end_room()` 예금 이자 계산이 게임 일시정지 시간을 held_seconds에 포함해 이자 과대 지급 가능** (`app.py:133-143`): `held_seconds = (game_end - d.created_at).total_seconds()` — `game_end`는 `room.paused_at`(일시정지 시)이지만 `d.created_at`은 예금 가입 시점의 wall-clock 시간. 예금 가입 후 진행자가 일시정지하면 정지 중에도 held_seconds가 증가. 예금 가입 시 `room.end_time - datetime.utcnow()` (즉, 잔여 게임 시간)를 `d.remaining_game_seconds`로 저장하고, 종료 시 `(d.remaining_game_seconds / total_seconds)` 를 ratio로 사용하면 일시정지 영향 없이 정확한 이자 계산 가능. 현재 `Deposit` 모델에 `remaining_game_seconds FLOAT` 컬럼 추가 필요(ALTER TABLE 패턴 이미 app.py:31-40에 존재).
+
+- **`api.get()`·`api.post()`에 fetch 타임아웃 없어 서버 무응답 시 폴링 콜백이 무한 병렬 누적** (`app.js:30-44`): `fetch()` 기본 동작에 타임아웃이 없어 서버가 응답을 지연하면 이전 폴링 요청이 완료되지 않은 채 다음 10초 폴링 콜백이 시작됨. 결국 pending 요청이 쌓여 서버 복구 시 폭발적 재요청 발생. `api` 객체 메서드에 `AbortController` 패턴: `const ctrl = new AbortController(); setTimeout(() => ctrl.abort(), 8000); const r = await fetch(url, {signal: ctrl.signal}).catch(() => ({ok:false,status:0}))` 로 교체하면 8초 초과 요청을 자동 취소. 3개 메서드에 각 3줄 추가.
+
+- **Chart.js `destroy()` 후 변수를 `null`로 초기화하지 않아 예외 발생 시 stale 참조 잔류** (`app.js:1375, 1486, 1509, 1854`): `if (S.stockChart) S.stockChart.destroy(); S.stockChart = new Chart(...)` 패턴에서 `destroy()` 직후 `S.stockChart = null` 없음. `destroy()` 중 예외가 발생하면 `S.stockChart`이 파괴된 인스턴스를 가리킨 채로 남아 다음 `if (S.stockChart) S.stockChart.destroy()` 호출 시 이미 파괴된 인스턴스를 재파괴 시도해 런타임 에러 가능. `S.stockChart`, `S.portChart`, `S.assetLineChart`, `S.resultsBarChart` 각 `destroy()` 직후 `S.XXXChart = null` 한 줄씩 추가(총 4줄). `S.hostBarChart`는 update() 패턴이라 해당 없음.
+
+- **`loadDepositsPage()` 에서 `/portfolio` → `/deposits` 를 순차 await로 직렬 요청** (`app.js:1621-1629`): `await api.get('/portfolio')` 완료 후에야 `await api.get('/deposits')` 가 시작됨. 두 요청이 서로 독립적이라 `Promise.all()` 로 병렬화하면 레이턴시가 두 요청 중 느린 쪽으로 수렴(직렬 대비 약 40-50% 단축). `const [port, data] = await Promise.all([api.get(\`/api/rooms/${S.room.id}/portfolio\`), api.get(\`/api/rooms/${S.room.id}/deposits\`)])` 1줄 교체. 동일 순차 패턴이 `loadResults()`(`app.js:1702-1704`), `openStockModal()`(`app.js:1344`)에도 적용 가능.
+
+- **`export_rankings()` 내부 `import openpyxl` 이 파일 상단 임포트 스타일과 불일치** (`app.py:1422-1424`): `openpyxl`, `BytesIO`, `Font`, `PatternFill` 등 4줄의 임포트가 API 핸들러 함수 내부에 위치해 있어 파일 전체 코드 스타일(상단 일괄 임포트)과 충돌. Python `sys.modules` 캐시로 두 번째 이후 임포트는 즉시 반환되므로 지연 임포트의 성능 이점이 없음. `openpyxl`이 미설치된 환경을 방어하려면 `try: import openpyxl; from openpyxl.styles import ... except ImportError: openpyxl = None` 을 파일 최상단에 두고 핸들러에서 `if openpyxl is None: return jsonify({'error': 'openpyxl 미설치'}), 501` 처리가 더 명확. 현행 4줄 내부 임포트를 상단으로 이동.
