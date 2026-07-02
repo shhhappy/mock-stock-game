@@ -2,7 +2,13 @@ from flask import Flask, jsonify, request, send_from_directory, session, send_fi
 from functools import wraps
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.exc import IntegrityError
-import os, threading
+from io import BytesIO
+import os, threading, math
+try:
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side as _XlSide
+except ImportError:
+    openpyxl = None
 
 from models import db, User, Room, RoomMember, RoomHolding, RoomTransaction, Deposit
 from stock_service import get_room_service, cleanup_room_service, STOCKS, SECTORS
@@ -24,9 +30,13 @@ def _set_sqlite_pragmas(dbapi_conn, _):
     cur.close()
 
 with app.app_context():
-    db.create_all()
     from sqlalchemy import event as _sa_event, text as _sa_text
-    _sa_event.listen(db.engine, "connect", _set_sqlite_pragmas)
+    if 'sqlite' in str(db.engine.url):
+        _sa_event.listen(db.engine, "connect", _set_sqlite_pragmas)
+        with db.engine.connect() as _c:
+            _c.execute(_sa_text("PRAGMA journal_mode=WAL"))
+            _c.execute(_sa_text("PRAGMA busy_timeout=5000"))
+    db.create_all()
     # 기존 DB에 새 컬럼 추가 (없을 때만)
     for _col_sql in [
         "ALTER TABLE rooms ADD COLUMN rlt_triggered BOOLEAN DEFAULT 0",
@@ -577,7 +587,10 @@ def kick_member(rid, uid):
 @app.route('/api/rooms/<int:rid>/host/lobby-members')
 @login_required
 def lobby_members(rid):
-    Room.query.get_or_404(rid)
+    room = Room.query.get_or_404(rid)
+    user = cur_user()
+    if room.host_id != user.id and not RoomMember.query.filter_by(room_id=rid, user_id=user.id).first():
+        return jsonify({'error': '권한 없음'}), 403
     result = []
     for m in RoomMember.query.filter_by(room_id=rid).all():
         u = db.session.get(User, m.user_id)
@@ -592,7 +605,10 @@ def host_adjust(rid):
     if room.host_id != user.id: return jsonify({'error': '권한 없음'}), 403
     d = request.json or {}
     target_uid = d.get('user_id')
-    delta = float(d.get('delta', 0))
+    if not target_uid: return jsonify({'error': 'user_id 필요'}), 400
+    try: delta = float(d.get('delta', 0))
+    except (TypeError, ValueError): return jsonify({'error': '금액 오류'}), 400
+    if delta == 0: return jsonify({'error': '조정 금액을 입력하세요.'}), 400
     note = d.get('note', '진행자 자산 조정')
     m = RoomMember.query.filter_by(room_id=rid, user_id=target_uid).first()
     if not m: return jsonify({'error': '참여자를 찾을 수 없습니다.'}), 404
@@ -600,7 +616,8 @@ def host_adjust(rid):
     db.session.add(RoomTransaction(room_id=rid, user_id=target_uid, symbol='ADJ', action='ADJ', amount=delta, note=note))
     db.session.commit()
     target = db.session.get(User, target_uid)
-    return jsonify({'message': f'{target.username} 자산 {delta:+,.0f}원 조정', 'new_cash': m.cash})
+    name = target.username if target else str(target_uid)
+    return jsonify({'message': f'{name} 자산 {delta:+,.0f}원 조정', 'new_cash': m.cash})
 
 
 @app.route('/api/rooms/<int:rid>/host/members/<int:uid>/transactions')
@@ -973,7 +990,7 @@ def minigame_close(rid):
             return jsonify({'ok': True})
         state['count'] = max(0, state['count'] - 1)
         if state['count'] == 0 and state.get('auto_paused'):
-            room = Room.query.get(rid)
+            room = db.session.get(Room, rid)
             if room and room.status == 'paused':
                 get_room_service(rid).unfreeze()
                 if room.rlt_triggered:
@@ -1012,6 +1029,9 @@ def minigame_spin(rid):
     try:
         bet = float((request.json or {}).get('bet', 0))
     except (TypeError, ValueError):
+        return jsonify({'error': '금액 오류'}), 400
+    import math
+    if not math.isfinite(bet):
         return jsonify({'error': '금액 오류'}), 400
     # 총자산(현금+보유주식+예금) 기준으로 베팅 한도 계산
     svc = get_room_service(rid)
@@ -1419,9 +1439,12 @@ def quiz_settings(rid):
 @app.route('/api/rooms/<int:rid>/export')
 @login_required
 def export_rankings(rid):
-    import openpyxl
-    from io import BytesIO
-    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    if openpyxl is None:
+        return jsonify({'error': 'openpyxl 패키지가 설치되지 않았습니다.'}), 500
+    Font, PatternFill, Alignment, Border, Side = (
+        openpyxl.styles.Font, openpyxl.styles.PatternFill,
+        openpyxl.styles.Alignment, openpyxl.styles.Border, _XlSide
+    )
     room = Room.query.get_or_404(rid)
     user = cur_user()
     if room.host_id != user.id:

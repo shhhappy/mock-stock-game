@@ -14,7 +14,7 @@ const S = {
   depRate: 3, depCash: 0,
   eduTab: 'glossary', glossaryData: [],
   hostTab: 'rank',
-  watchlist: new Set(JSON.parse(localStorage.getItem('watchlist') || '[]')),
+  watchlist: (() => { try { return new Set(JSON.parse(localStorage.getItem('watchlist') || '[]')); } catch(e) { return new Set(); } })(),
   watchlistOnly: false,
   assetHistory: [],
   quizTimerInterval: null,
@@ -108,6 +108,8 @@ async function doLogout() {
 function goHome() {
   api.post('/api/auth/logout', {}).catch(() => {});
   S.user = null; S.room = null;
+  _stopLotPolling();
+  _lotParticipantPicks = []; _lotPickerSubmitted = false; _lotResultRound = null;
   showLanding();
 }
 
@@ -223,10 +225,10 @@ async function loadLobbyMembers() {
   document.getElementById('lobby-members-list').innerHTML = data.length
     ? data.map(m => `
         <div class="lobby-member">
-          <div class="avatar-sm">${m.username[0].toUpperCase()}</div>
-          <span style="font-weight:600;flex:1">${m.username}</span>
+          <div class="avatar-sm">${escHtml(m.username[0].toUpperCase())}</div>
+          <span style="font-weight:600;flex:1">${escHtml(m.username)}</span>
           <button class="btn btn-secondary btn-sm" style="padding:3px 8px;color:var(--down)"
-            onclick="doKickMember(${m.user_id},'${m.username.replace(/'/g,"\\'")}')">강퇴</button>
+            data-uid="${m.user_id}" data-name="${escHtml(m.username)}" onclick="doKickMember(this.dataset.uid,this.dataset.name)">강퇴</button>
         </div>`).join('')
     : '<div class="muted" style="font-size:13px;padding:10px 0">아직 참여자가 없습니다.</div>';
 }
@@ -417,13 +419,13 @@ async function loadHostMembers() {
     return `
       <div class="host-member-row${cls}">
         <span style="font-size:18px;width:34px;text-align:center">${medal}</span>
-        <span style="flex:1;font-weight:600">${m.username}</span>
+        <span style="flex:1;font-weight:600">${escHtml(m.username)}</span>
         <span style="font-size:12px;${m.gain_pct>=0?'color:var(--up)':'color:var(--down)'}">
           ${sign}${m.gain_pct.toFixed(1)}%
         </span>
         <span style="font-weight:700;min-width:90px;text-align:right;font-size:13px">${krw(m.total_value)}</span>
-        <button class="btn btn-secondary btn-sm" onclick="openStudentTxn(${m.user_id},'${m.username.replace(/'/g,"\\'")}')" style="margin-left:4px;padding:4px 8px;font-size:11px">거래</button>
-        <button class="btn btn-secondary btn-sm" onclick="openAdjust(${m.user_id},'${m.username.replace(/'/g,"\\'")}',${m.cash})" style="margin-left:4px;padding:4px 8px">조정</button>
+        <button class="btn btn-secondary btn-sm" data-uid="${m.user_id}" data-name="${escHtml(m.username)}" onclick="openStudentTxn(this.dataset.uid,this.dataset.name)" style="margin-left:4px;padding:4px 8px;font-size:11px">거래</button>
+        <button class="btn btn-secondary btn-sm" data-uid="${m.user_id}" data-name="${escHtml(m.username)}" data-cash="${m.cash}" onclick="openAdjust(this.dataset.uid,this.dataset.name,this.dataset.cash)" style="margin-left:4px;padding:4px 8px">조정</button>
       </div>`;
   }).join('');
 
@@ -523,7 +525,7 @@ async function loadStudentTxn(reset = false) {
     <div class="txn-item">
       <div>
         <div style="font-weight:600">${t.name}</div>
-        <div class="muted" style="font-size:11px">${t.timestamp}${t.note ? ' · ' + t.note : ''}</div>
+        <div class="muted" style="font-size:11px">${escHtml(t.timestamp)}${t.note ? ' · ' + escHtml(t.note) : ''}</div>
       </div>
       <div style="text-align:right">
         <span class="txn-badge ${t.action.toLowerCase()}">${t.action==='BUY'?'매수':t.action==='SELL'?'매도':'조정'}</span>
@@ -538,6 +540,7 @@ async function loadStudentTxn(reset = false) {
 async function loadMoreStudentTxn() { S.studentTxnPage++; await loadStudentTxn(false); }
 
 async function doEndGame() {
+  if (!confirm('정말 게임을 종료하시겠습니까?')) return;
   const data = await api.post(`/api/rooms/${S.room.id}/end`, {});
   if (data.error) { toast(data.error, 'error'); return; }
   S.room = data.room;
@@ -580,8 +583,8 @@ async function loadPLobbyMembers() {
   if (!Array.isArray(data)) return;
   document.getElementById('plobby-count').textContent = data.length;
   document.getElementById('plobby-members-list').innerHTML = data.map(m =>
-    `<div class="lobby-member"><div class="avatar-sm">${m.username[0].toUpperCase()}</div>
-     <span style="font-weight:600">${m.username}</span></div>`
+    `<div class="lobby-member"><div class="avatar-sm">${escHtml(m.username[0].toUpperCase())}</div>
+     <span style="font-weight:600">${escHtml(m.username)}</span></div>`
   ).join('');
 }
 
@@ -1109,6 +1112,7 @@ function resetRltSpin() {
 }
 
 async function closeRoulette() {
+  if (_rltSpinning) return;
   _stopRltAutoClose();
   document.getElementById('roulette-overlay').style.display = 'none';
   const cr = await api.post(`/api/rooms/${S.room.id}/minigame/close`, {}).catch(() => null);
@@ -1578,7 +1582,7 @@ async function loadTxn(reset = false) {
     <div class="txn-item">
       <div>
         <div style="font-weight:600">${t.name}</div>
-        <div class="muted" style="font-size:11px">${t.timestamp}${t.note ? ' · ' + t.note : ''}</div>
+        <div class="muted" style="font-size:11px">${escHtml(t.timestamp)}${t.note ? ' · ' + escHtml(t.note) : ''}</div>
       </div>
       <div style="text-align:right">
         <span class="txn-badge ${t.action.toLowerCase()}">${t.action==='BUY'?'매수':t.action==='SELL'?'매도':'조정'}</span>
@@ -2277,7 +2281,7 @@ function _showLotteryResult(d, isHost) {
 function closeLotteryOverlay() {
   document.getElementById('lottery-overlay').style.display = 'none';
   _stopLotPolling();
-  document.getElementById('paused-banner')?.remove();
+  // 배너는 다음 폴링 사이클에서 서버 상태 기반으로 복원/유지됨
 }
 
 function closeLotteryResultModal() {
