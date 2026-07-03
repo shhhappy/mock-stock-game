@@ -1590,3 +1590,35 @@
 - **`get_room()` 에 부작용(상태 변경) 로직이 인라인으로 존재** (`app.py:432-473`): GET 핸들러임에도 불구하고 룸 종료 체크(`_end_room()`), 룰렛 자동 트리거, `_auto_start_lottery_if_due()` 등 상태를 변경하는 로직이 함수 본문에 직접 존재. 매 10초 폴링마다 이 분기들이 실행되며 가독성을 저해하고 테스트를 어렵게 만듦. `_maybe_end_room(room, now)`, `_maybe_trigger_roulette(room, now)` 등의 헬퍼 함수로 추출하면 각 책임이 명확해지고 `get_room()`은 조회 + 헬퍼 호출만 담당하게 됨. 로직 변경 없는 순수 리팩터링으로 2~3시간 작업 분량.
 
 - **`history` 차트의 X축 레이블이 실제 날짜(`2026-06-01`)여서 "이게 실제 주가인가요?" 혼란 유발** (`stock_service.py:297`): `date_str = datetime.utcfromtimestamp(now - i * 86400).strftime('%Y-%m-%d')` 로 실제 캘린더 날짜가 X축에 표시됨. 30분짜리 가상 게임에서 "지난 1달" 차트를 보면 학생들이 "삼성전자 실제 차트인가요?" 라고 묻는 상황 발생. `f"D-{i}"` 또는 `f"라운드 {n_bars - i}"` 같은 상대 레이블로 바꾸면 1줄 수정으로 교육용 시뮬레이션임을 명확히 전달 가능.
+
+---
+
+## 2026-07-03 (2차)
+
+### 추가하면 좋을 기능
+
+- **퀴즈 보상/패널티 실제 금액 실시간 프리뷰** (`app.js:1130-1141`): `quiz-reward-input`, `quiz-penalty-input` 의 `%` 값이 바뀔 때 `S.room.starting_cash * value / 100` 계산 결과를 입력 필드 바로 아래에 실시간 표시(`예: 100% → ₩10,000,000`). 현재는 비율만 입력하면 학생당 실제 영향 금액을 가늠하기 어렵고 퍼센트 스케일을 잘못 설정하는 오류가 빈번. `input` 이벤트 리스너 + DOM 텍스트 노드 업데이트 약 5줄, 서버 변경 없음.
+
+- **엑셀 내보내기 방 메타데이터 헤더 행 추가** (`app.py:1442-1488`): 현재 `export_rankings()`가 출력하는 엑셀 파일은 이름·순위·자산 컬럼만 있고 "어느 방, 언제 진행한 게임"인지 정보가 없음. 첫 1~3행에 `방 이름`, `게임 날짜`, `시작 자금`, `게임 시간(분)` 을 메타 행으로 삽입하고 파일명도 `rankings.xlsx` → `rankings_<방이름>_<날짜>.xlsx` 로 변경하면 보관·비교 편의성이 크게 향상됨. `openpyxl ws.insert_rows(1, 3)` 3줄과 `filename = f"rankings_{room.name}_{datetime.utcnow().strftime('%Y%m%d')}.xlsx"` 1줄 수정.
+
+- **시장 탭 섹터별 수익률 요약 칩 표시** (`app.js:1229-1244`): `loadMarket()` 에서 `S.stocks` 배열을 가져올 때 섹터별 평균 `change_pct` 를 계산하고, 종목 테이블 상단에 `[반도체 ▲+2.3%]`, `[바이오 ▼-1.1%]` 형태 칩을 렌더링. 학생이 어느 섹터가 흐름을 주도하는지 한눈에 파악 가능. `S.stocks`는 이미 클라이언트에 있으므로 서버 요청 없이 reduce 연산으로 약 10줄 추가.
+
+- **모바일 입력 필드 autocomplete/autocorrect 방지 속성 누락** (`index.html` 학번·이름 입력 필드): 학번·이름 입력 필드에 `autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false"` 가 없어서 모바일에서 자동완성이 엉뚱한 값(전화번호, 이전 입력값)을 채우거나 이름 첫 글자가 대문자로 자동 변환됨. `index.html` 의 해당 `<input>` 태그에 속성 4개 추가, HTML 수정만으로 해결.
+
+- **포트폴리오 분산도 지표 배지 표시** (`app.js:1457-1566`): `loadPortfolio()` 에서 `holdings` 배열을 렌더링할 때 보유 섹터 종류를 중복 제거해 `[보유 섹터: 반도체·IT·바이오 3개]` 배지를 포트폴리오 상단에 표시. 섹터 1개 집중 보유 시 `⚠️ 섹터 집중도 높음` 경고 추가 가능. 기존 `S.stocks` 에 섹터 정보가 있으므로 클라이언트 로직 약 8줄 추가, 서버 변경 없음.
+
+- **진행자 전체 퀴즈 상태 초기화 버튼** (`app.py:1245-1247`): `_quiz_state = {}` 는 앱 재시작 없이는 초기화 방법이 없어, 이전 퀴즈 응답 이력이 남아있으면 "이미 응답" 상태가 사라지지 않음. `DELETE /api/rooms/<rid>/host/quiz-state` 엔드포인트를 추가해 `_quiz_state[rid] = {}` 를 실행하도록 약 8줄, 진행자 퀴즈 패널에 "퀴즈 초기화" 버튼 1개 추가로 운영 유연성 확보.
+
+### 제거/단순화할 것들
+
+- **`minigame_spin()` 예금 부분 인출 미지원으로 초과 차감** (`app.py:1049-1058`): 룰렛 당첨금 지급 시 shortfall(부족분) 보전을 위해 활성 예금을 순서대로 해지하는데 `m.cash += d.amount; shortfall -= d.amount` 가 전액을 빼가므로, shortfall 20만·예금 100만인 경우 80만이 초과 차감됨. `take = min(d.amount, shortfall); m.cash += take; d.amount -= take; shortfall -= take; if d.amount == 0: d.status = 'withdrawn'` 패턴으로 수정하면 최소 필요 금액만 해지. 동일 로직이 `_end_room()`에도 있는지 교차 확인 필요.
+
+- **`_roulette_config`·`_quiz_settings` 재시작 시 소실** (`app.py:250`, `app.py:1246`): 두 딕셔너리가 순수 인메모리라 Render 서버 재시작(무료 티어 15분 슬립)마다 설정 초기화. `Room` 모델에 `roulette_config = db.Column(db.Text)` (JSON 직렬화), `quiz_reward_pct = db.Column(db.Float, default=10.0)`, `quiz_penalty_pct = db.Column(db.Float, default=5.0)` 컬럼을 추가하고 읽기/쓰기를 DB로 이전하면 Render 재배포 후에도 설정 유지. ALTER TABLE 3줄 마이그레이션으로 무중단 적용 가능.
+
+- **`host_force_price()` pct=0 통과 시 방향 오류 뉴스 생성** (`app.py:682-683`): 유효성 검사 조건이 `if not symbol or abs(pct) > 50:` 이라 `pct=0` 요청이 통과됨. `stock_service.force_price()` 내부에서 `direction = 'up' if pct > 0 else 'down'` 분기 시 pct=0이면 'down'으로 판정돼 `"[이름] 하락"` 뉴스가 생성되는 오작동 발생. `host_market_event()`(`app.py:1355`)가 이미 `if pct == 0 or abs(pct) > 50:` 로 처리하듯 동일 조건 추가, 1줄 수정.
+
+- **`host_adjust()` note 필드 길이 미검증으로 DB 오류 위험** (`app.py:596`): `db.Column(db.String(200))` 상한이 설정돼 있지만 요청 데이터의 note 값을 그대로 저장하므로, 200자 초과 입력 시 PostgreSQL에서 `DataError: value too long` 예외 발생(SQLite는 무시). `note = (d.get('note', '') or '')[:200]` 한 줄로 서버 사이드 방어. 클라이언트 `index.html` 의 해당 textarea에 `maxlength="200"` 추가도 병행 권장.
+
+- **`doAdjust()` delta=0 미방지로 불필요한 트랜잭션 기록** (`app.js:491-495`): `if (isNaN(delta))` 체크만 있어 0원 조정 요청이 서버로 전송되고 `RoomTransaction` 레코드가 생성됨. 학생 거래 내역에 "0원 조정" 항목이 표시되어 혼란 야기. `if (isNaN(delta) || delta === 0) { err.textContent = '0이 아닌 금액을 입력하세요.'; return; }` 로 1줄 수정. 서버 `host_adjust()` 에도 `if amount == 0: return jsonify({'error': '0원 조정 불가'}), 400` 방어를 추가하면 이중 방어 완성.
+
+- **`loadParticipantRankings()` 비배열 응답 시 "참여자 없음" 오작동** (`app.js:1679`): `if (!data.length)` 조건에서 `data = {error: 'HTTP 500'}` 처럼 오류 객체가 반환될 경우 `data.length === undefined` → `!undefined === true` 로 평가돼 "참여자 없음" 빈 화면을 표시. 실제 오류를 학생이 알 수 없어 디버깅이 어려움. `if (!Array.isArray(data)) { list.innerHTML = '<div class="empty-state">랭킹을 불러올 수 없습니다.</div>'; return; }` 가드를 `!data.length` 체크 앞에 추가, 2줄 수정.
