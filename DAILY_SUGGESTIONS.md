@@ -1560,3 +1560,33 @@
 - **`loadDepositsPage()` 에서 `/portfolio` → `/deposits` 를 순차 await로 직렬 요청** (`app.js:1621-1629`): `await api.get('/portfolio')` 완료 후에야 `await api.get('/deposits')` 가 시작됨. 두 요청이 서로 독립적이라 `Promise.all()` 로 병렬화하면 레이턴시가 두 요청 중 느린 쪽으로 수렴(직렬 대비 약 40-50% 단축). `const [port, data] = await Promise.all([api.get(\`/api/rooms/${S.room.id}/portfolio\`), api.get(\`/api/rooms/${S.room.id}/deposits\`)])` 1줄 교체. 동일 순차 패턴이 `loadResults()`(`app.js:1702-1704`), `openStockModal()`(`app.js:1344`)에도 적용 가능.
 
 - **`export_rankings()` 내부 `import openpyxl` 이 파일 상단 임포트 스타일과 불일치** (`app.py:1422-1424`): `openpyxl`, `BytesIO`, `Font`, `PatternFill` 등 4줄의 임포트가 API 핸들러 함수 내부에 위치해 있어 파일 전체 코드 스타일(상단 일괄 임포트)과 충돌. Python `sys.modules` 캐시로 두 번째 이후 임포트는 즉시 반환되므로 지연 임포트의 성능 이점이 없음. `openpyxl`이 미설치된 환경을 방어하려면 `try: import openpyxl; from openpyxl.styles import ... except ImportError: openpyxl = None` 을 파일 최상단에 두고 핸들러에서 `if openpyxl is None: return jsonify({'error': 'openpyxl 미설치'}), 501` 처리가 더 명확. 현행 4줄 내부 임포트를 상단으로 이동.
+
+---
+
+## 2026-07-03
+
+### 추가하면 좋을 기능
+
+- **학생 실수 퇴장 시 자동 복귀 제안 없음** (`app.js:114-118 confirmLeaveGame()`, `app.js:73-80 doAuth()`): 학생이 실수로 "← 나가기"를 누르면 세션이 끊기고 재입장 시 학번·이름을 다시 입력해야 함. `goHome()` 호출 시 `localStorage.setItem('last_game', JSON.stringify({sid, name, code: S.room?.code}))` 로 마지막 게임 정보를 저장하고, 참가 화면 진입 시 저장된 값이 있으면 입력 필드를 자동완성 + "이전 게임(코드: XXXX)에 빠르게 재입장" 버튼을 표시하면 30초 내 복귀 가능. 서버 변경 불필요, 클라이언트 약 15줄 추가.
+
+- **대기 화면(waiting)에서 방 설정 수정 불가** (`app.py:363-390 create_room()`): 학생들이 입장한 후 뒤늦게 "30분이 아닌 20분으로 하자"는 등 설정을 바꾸려면 방을 삭제하고 다시 만들어야 함. `PUT /api/rooms/<rid>` 엔드포인트를 추가하고 `room.status == 'waiting'` 조건에서만 `duration_minutes`, `starting_cash`, `deposit_rate` 수정을 허용하면 됨(~15줄). 호스트 로비 화면에 "⚙️ 설정 수정" 버튼 하나 추가. 이미 입장한 학생의 `RoomMember.cash`는 게임 시작 시 `starting_cash`로 재설정하면 일관성 유지 가능.
+
+- **진행자가 지금까지 발생한 뉴스 이력을 확인할 수 없음** (`stock_service.py:141-158 _generate_news()`, `app.py:690-701 host_send_news()`): 자동 뉴스가 발생해도 진행자는 학생들이 보는 내용을 알기 어려움. `StockService.__init__()`에 `self._news_history: list = []` deque(maxlen=5)를 추가하고, `_generate_news()` 완료 시 `self._news_history.append(self._news)` 로 최근 5건 보관. `GET /api/rooms/<rid>/news` 응답에 `'history': self._news_history` 를 포함해 진행자 화면 설정 탭에 "최근 뉴스 이력" 아코디언을 표시하면 수업 진행 맥락 파악 용이.
+
+- **`member_total_value()` 가 rankings·host_members에서 멤버마다 N번 DB 쿼리 발생** (`app.py:107-118`, `app.py:542-562 host_members()`, `app.py:808-824 get_rankings()`): 30명 방 기준 `get_rankings()` 1회 호출 시 `RoomHolding` 30회 + `Deposit` 30회 = 60회 쿼리. 두 API 모두 `RoomHolding.query.filter_by(room_id=rid).all()` 과 `Deposit.query.filter_by(room_id=rid, status='active').all()` 을 각 1회 일괄 조회한 뒤 Python dict로 `user_id → holdings/deposits` 를 매핑하면 O(N) → O(1) 쿼리로 감소. `host_members()`에 이미 `user_map` 패턴이 적용되어 있으므로(`app.py:550`) 동일 방식 확장이 자연스러움.
+
+- **퀴즈 결과 해설이 타임아웃 시에는 미표시** (`app.js:875-890 submitQuiz()`): 정답/오답 분기에서는 `data.explanation` 이 화면에 표시되지만, 30초 타임아웃 발생 시(`answer === null` 분기, `app.js:875`)에는 `POST /quiz {answer: false}` 를 호출해 패널티만 적용하고 `td.explanation` 을 무시함. 학생이 "왜 틀렸는지" 확인할 기회가 없어 교육 효과가 반감됨. `app.js:878` 의 타임아웃 결과 렌더링에 `if (td?.explanation) result.innerHTML += \`<div style="font-size:13px;color:var(--muted);margin-top:8px">\${td.explanation}</div>\`` 3줄 추가로 해결. 서버 변경 불필요.
+
+---
+
+### 제거/단순화할 것들
+
+- **`startTimer()` 에 기존 인터벌 정리 코드 없어 이중 실행 가능** (`app.js:1155-1165 startTimer()`): `enterHostGame()`, `enterParticipantGame()`, `resumeRoom()` 경로에서 `startTimer()`가 호출될 수 있고, `stopTimer()`가 중간에 호출되지 않으면 `S.timerInterval` 이 두 개 동시 실행되어 타이머가 2배 속도로 깜빡임. `startTimer()` 함수 첫 줄에 `clearInterval(S.timerInterval);` 한 줄을 추가하면 방어 가능. 현재 `stopTimer()` 를 `showLanding()`에서만 호출하는 설계상 재진입 위험이 상존.
+
+- **뉴스 폴링과 룸 상태 폴링이 별도 인터벌로 이중 실행** (`app.js:8 S.newsInterval`, `app.js:267-271 enterHostGame()`, `app.js:613-614 enterParticipantGame()`): `S.pollInterval`(10초 룸 상태)과 `S.newsInterval`(별도 주기 뉴스)이 동시에 설정됨. 두 인터벌을 합쳐 룸 상태 폴링 응답(`GET /api/rooms/<rid>`)에 `current_news` 필드를 포함하거나, 뉴스를 룸 상태 폴링 콜백 내 조건부 호출로 통합하면 서버 요청 횟수를 20~30% 절감 가능. Render 무료 티어에서 가용 대역폭 절감 효과 직접적.
+
+- **`S.assetHistory` 배열이 게임 내내 무제한 증가** (`app.js:19`, `app.js:696-710`): 포트폴리오 탭 "자산 변화" 선 그래프를 위해 `S.assetHistory.push({t, v})` 가 10초마다 누적됨. 60분 게임에서 약 360개 포인트로 큰 문제는 없지만 360분 게임에서 2,160개가 될 수 있음. `S.assetHistory.push(...)` 직후 `if (S.assetHistory.length > 120) S.assetHistory.shift()` 한 줄로 슬라이딩 윈도우 적용. Chart.js 렌더도 최근 120포인트(20분 분량)만 표시하면 선 그래프 가독성도 향상.
+
+- **`get_room()` 에 부작용(상태 변경) 로직이 인라인으로 존재** (`app.py:432-473`): GET 핸들러임에도 불구하고 룸 종료 체크(`_end_room()`), 룰렛 자동 트리거, `_auto_start_lottery_if_due()` 등 상태를 변경하는 로직이 함수 본문에 직접 존재. 매 10초 폴링마다 이 분기들이 실행되며 가독성을 저해하고 테스트를 어렵게 만듦. `_maybe_end_room(room, now)`, `_maybe_trigger_roulette(room, now)` 등의 헬퍼 함수로 추출하면 각 책임이 명확해지고 `get_room()`은 조회 + 헬퍼 호출만 담당하게 됨. 로직 변경 없는 순수 리팩터링으로 2~3시간 작업 분량.
+
+- **`history` 차트의 X축 레이블이 실제 날짜(`2026-06-01`)여서 "이게 실제 주가인가요?" 혼란 유발** (`stock_service.py:297`): `date_str = datetime.utcfromtimestamp(now - i * 86400).strftime('%Y-%m-%d')` 로 실제 캘린더 날짜가 X축에 표시됨. 30분짜리 가상 게임에서 "지난 1달" 차트를 보면 학생들이 "삼성전자 실제 차트인가요?" 라고 묻는 상황 발생. `f"D-{i}"` 또는 `f"라운드 {n_bars - i}"` 같은 상대 레이블로 바꾸면 1줄 수정으로 교육용 시뮬레이션임을 명확히 전달 가능.
