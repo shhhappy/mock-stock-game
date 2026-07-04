@@ -1622,3 +1622,36 @@
 - **`doAdjust()` delta=0 미방지로 불필요한 트랜잭션 기록** (`app.js:491-495`): `if (isNaN(delta))` 체크만 있어 0원 조정 요청이 서버로 전송되고 `RoomTransaction` 레코드가 생성됨. 학생 거래 내역에 "0원 조정" 항목이 표시되어 혼란 야기. `if (isNaN(delta) || delta === 0) { err.textContent = '0이 아닌 금액을 입력하세요.'; return; }` 로 1줄 수정. 서버 `host_adjust()` 에도 `if amount == 0: return jsonify({'error': '0원 조정 불가'}), 400` 방어를 추가하면 이중 방어 완성.
 
 - **`loadParticipantRankings()` 비배열 응답 시 "참여자 없음" 오작동** (`app.js:1679`): `if (!data.length)` 조건에서 `data = {error: 'HTTP 500'}` 처럼 오류 객체가 반환될 경우 `data.length === undefined` → `!undefined === true` 로 평가돼 "참여자 없음" 빈 화면을 표시. 실제 오류를 학생이 알 수 없어 디버깅이 어려움. `if (!Array.isArray(data)) { list.innerHTML = '<div class="empty-state">랭킹을 불러올 수 없습니다.</div>'; return; }` 가드를 `!data.length` 체크 앞에 추가, 2줄 수정.
+
+---
+
+## 2026-07-04
+
+### 추가하면 좋을 기능
+
+- **퀴즈 타임아웃 시 해설 미표시** (`app.js:875-880 submitQuiz()`): `answer === null` 분기(30초 타임아웃)에서 `POST /quiz {answer: false}` 를 보내고 패널티만 보여주되 `td.explanation` 을 렌더링하지 않음. 학생이 "왜 틀렸는지" 확인 불가로 교육 효과 반감. `app.js:878` 다음에 `if (td?.explanation) result.innerHTML += \`<div style="color:var(--muted);font-size:13px;margin-top:8px">\${td.explanation}</div>\`` 3줄 추가, 서버 변경 없음.
+
+- **결과 화면에서 개인 자산 변화 선 그래프 재활용** (`app.js:1702-1795 loadResults()`): 게임 중 `S.assetHistory` 배열(`app.js:19`)에 10초마다 자산이 누적되지만, 결과 화면(`screen-results`)으로 전환 시 이 데이터가 재활용되지 않음. `loadResults()` 내부에 `S.assetHistory.length >= 2`를 조건으로 "내 자산 변화" 선 그래프(`canvas` + Chart.js)를 "내 결과" 카드(`results-my-stats`) 아래에 삽입하면 학생이 자신의 투자 여정을 복기 가능. 클라이언트 약 20줄 추가, 서버 변경 없음.
+
+- **복권 picking 단계에서 진행자에게 제출 인원 실시간 표시** (`app.py:1114-1147 get_lottery()`, `app.js:2079-2087 _showLotHostPickingUI()`): `_lots[rid]['current']['picks']` 딕셔너리에 이미 제출자 수가 있지만 `/api/rooms/<rid>/lottery` 응답에 `submitted_count` 필드가 없음. 응답에 `'submitted_count': len(cur.get('picks', {}))` 1줄 추가, 진행자 picking UI(`lhost-pick-countdown` 영역)에 "N명 제출 완료" 텍스트 표시하면 진행자가 강제 drawing 전환 타이밍을 판단하는 데 도움.
+
+- **세션 만료 시 자동 랜딩 화면 전환 없음** (`app.js:29-44 api.get/post`): 401 Unauthorized 응답이 `{error: 'HTTP 401'}` 로만 처리돼 polling 도중 쿠키 만료 시 오류 토스트만 반복 표시. `api.get/post` 래퍼에 `if (r.status === 401) { S.user = null; S.room = null; showLanding(); return {error: '세션 만료'}; }` 블록을 추가하면 세션 만료를 자동 감지해 홈으로 이동. Render 무료 티어 슬립 복귀 후 세션 유실 상황에서 특히 유용.
+
+- **차트 모달 내 주가가 개장 후 갱신되지 않음** (`app.js:1327-1357 openStockModal()`): 모달 열릴 때 `st.price` 를 한 번 세팅하고 이후 갱신이 없어 장시간 모달을 열어두면 표시 가격이 stale. 모달이 열려있는 동안 5~10초 인터벌로 `GET /api/rooms/<rid>/stocks` 에서 해당 종목 가격만 찾아 `ms-price` 엘리먼트를 업데이트하는 폴러를 추가하면 실시간감 향상. `closeModal()` 시 인터벌 정리 필요.
+
+- **진행자 게임 중 문제 참가자 처리 수단 부재** (`app.py:564-575 kick_member()`): `if room.status != 'waiting': return ... 400` 로 게임 중 강퇴가 막혀 있음. 게임 중 전액 환불 후 제거는 복잡하지만, `host_adjust()` 를 이용해 해당 참가자의 자산을 0으로 설정하거나 별도 `freeze_member()` 엔드포인트로 해당 참가자의 거래만 막는 방식이 현실적. 교실 환경에서 부정행위 대응 수단이 없으면 운영 곤란.
+
+### 제거/단순화할 것들
+
+- **`goHome()` 이 불필요하게 로그아웃 API 호출** (`app.js:108-112`): `goHome()`이 `POST /api/auth/logout` 을 호출하고 `S.user = null` 을 세팅함. 이 때문에 "게임 나가기" 후 새로고침 시 자동 재입장(`/api/auth/me` 세션 복구)이 불가. "게임 나가기"와 "로그아웃"의 의미가 달라야 하는 교실 맥락에서 `goHome()`은 클라이언트 상태 초기화만 해야 함(서버 세션 유지). `doLogout()`(명시적 로그아웃)과 역할 분리 필요. 1줄 `await api.post('/api/auth/logout', {})` 제거.
+
+- **가격 상·하한이 `_next_price()`와 `force_price()`·`force_sector_event()` 간 불일치** (`stock_service.py:139`, `stock_service.py:225`, `stock_service.py:253`): 자동 가격 변동은 `base * 0.6 ~ base * 1.4` 범위, 수동 강제 변동은 `base * 0.3 ~ base * 3.0` 범위. 동일 종목에 대해 정책이 달라 일관성 없음. 모듈 상단에 `PRICE_FLOOR = 0.5; PRICE_CEIL = 2.0` 상수를 정의하고 세 곳을 동일 값으로 교체하면 정책 통일 + 유지보수 용이. 현재 `force_price` 한도를 300%까지 허용하면 학생들이 게임을 망가뜨릴 수 있음.
+
+- **`host_force_price()` 에서 `pct=0` 요청이 통과돼 하락 뉴스 오생성** (`app.py:682-683`): 유효성 검사가 `if not symbol or abs(pct) > 50:` 이라 `pct=0` 통과. `stock_service.force_price()` 내부 `direction = 'up' if pct > 0 else 'down'` 에서 pct=0이 'down'으로 판정돼 거짓 하락 뉴스 생성. `host_market_event()`(`app.py:1355`)의 `if pct == 0 or abs(pct) > 50:` 와 동일 패턴으로 수정, 1줄.
+
+- **`host_adjust()` note 필드 길이 미검증으로 PostgreSQL DataError 위험** (`app.py:596-603`): `db.Column(db.String(200))` 로 모델에 200자 제한이 있지만 입력값을 그대로 저장해 200자 초과 시 PostgreSQL에서 `DataError` 발생(SQLite는 무시). `note = (d.get('note', '') or '')[:200]` 1줄 추가. `index.html:790` `adj-note` 입력 필드에 `maxlength="200"` 병행 추가.
+
+- **`doAdjust()` 에서 delta=0 미방지로 0원 트랜잭션 생성** (`app.js:491-495`): `isNaN(delta)` 체크만 있어 0원 조정이 서버로 전송되고 `RoomTransaction` 레코드가 생성됨. 거래 내역에 "0원 조정" 항목이 표시돼 혼란. `if (isNaN(delta) || delta === 0) { err.textContent = '0이 아닌 금액을 입력하세요.'; return; }` 1줄 수정. 서버 `host_adjust()`에도 `if not delta: return jsonify({'error': '0원 조정 불가'}), 400` 추가 권장.
+
+- **`_rlt_active`·`_quiz_settings`·`_roulette_config` 재시작 시 소실** (`app.py:250-252`, `app.py:1246`): 인메모리 딕셔너리라 Render 무료 티어 15분 슬립·재배포마다 초기화됨. 룰렛 확률 설정이 사라지면 기본값(꽝 70%)으로 돌아가 진행자가 수업 전 설정한 값이 증발. `Room` 모델에 `roulette_config JSON 컬럼`, `quiz_reward_pct FLOAT`, `quiz_penalty_pct FLOAT` 추가 후 DB 지속화 권장. `ALTER TABLE` 마이그레이션 3줄, 읽기/쓰기 핸들러 수정.
+
