@@ -1655,3 +1655,29 @@
 
 - **`_rlt_active`·`_quiz_settings`·`_roulette_config` 재시작 시 소실** (`app.py:250-252`, `app.py:1246`): 인메모리 딕셔너리라 Render 무료 티어 15분 슬립·재배포마다 초기화됨. 룰렛 확률 설정이 사라지면 기본값(꽝 70%)으로 돌아가 진행자가 수업 전 설정한 값이 증발. `Room` 모델에 `roulette_config JSON 컬럼`, `quiz_reward_pct FLOAT`, `quiz_penalty_pct FLOAT` 추가 후 DB 지속화 권장. `ALTER TABLE` 마이그레이션 3줄, 읽기/쓰기 핸들러 수정.
 
+
+## 2026-07-04
+
+### 추가하면 좋을 기능
+
+- **호스트 "거래 잠금" 토글** (`app.py:724-767`, `app.js:1437-1470`): 타이머를 멈추지 않고 전체 학생의 매수/매도만 일시 차단하는 기능. 현재는 `pause_room()`으로만 거래를 막을 수 있어 시간이 함께 정지됨. `Room` 모델에 `trading_locked = db.Column(db.Boolean, default=False)` 컬럼 추가 + `trade()` 진입부에 `if room.trading_locked: return jsonify({'error': '거래가 잠겨 있습니다.'}), 403` 1줄 삽입. 교사가 해설·강의 중 학생 거래를 멈추고 싶을 때 타이머 차감 없이 사용 가능.
+
+- **호스트 대시보드에서 학생별 보유 종목 드릴다운** (`app.py:432-473`, `app.js:408-431`): 현재 `loadHostMembers()`는 순위·현금·총평가액만 표시하고 어떤 종목을 얼마나 보유하는지 볼 수 없음. `/api/room/<id>/host/member/<uid>/holdings` GET 엔드포인트를 추가해 `RoomHolding` 쿼리 결과(종목·수량·평균단가·현재평가액)를 반환하면, 호스트가 이름 클릭 시 모달로 학생 포트폴리오 확인 가능. 기존 `member_total_value()` (`app.py:107-118`)의 쿼리를 재활용.
+
+- **게임 종료 후 학생 개인 성과 요약** (`app.py:1419-1488`, `models.py:68-79`): 결과 화면에 개인 최고 수익 단일 거래·최대 손실 거래·가장 많이 거래한 종목을 표시하면 교육 효과 상승. `RoomTransaction` 테이블에 `room_id + user_id` 조건으로 BUY/SELL 쌍을 매칭해 실현 손익 계산 가능. `/api/room/<id>/results/personal` 엔드포인트를 추가하고 결과 뷰(`showResults()`) 하단 섹션에 렌더링. 기존 데이터만 사용하므로 모델 변경 불필요.
+
+- **섹터별 뉴스 영향 시각화** (`stock_service.py:155-172`, `app.js:1208-1244`): `_current_biases` 딕셔너리(`stock_service.py:155`)에 종목별 현재 업/다운 바이어스가 존재하나 클라이언트에 전달되지 않음. `/api/room/<id>/market` 응답에 `bias` 필드(값: `"up"`, `"down"`, `null`)를 포함시키고, `renderMarket()`에서 카드 배경에 연한 녹색/적색 틴트를 적용하면 학생이 뉴스 영향을 직관적으로 파악 가능. 1줄 응답 추가 + CSS 2줄.
+
+- **게임 속도 조절 UI를 호스트 게임 화면 메인에 노출** (`app.py:1139-1158`, `app.js:856-900`): `/api/room/<id>/host/news-interval` POST로 `price_seconds`·`news_seconds`를 변경하는 엔드포인트가 이미 존재하나, 설정 탭에만 있어 게임 진행 중 접근이 불편함. 호스트 게임 뷰 상단 툴바에 "속도: 🐢 / 🚀" 토글 버튼을 추가해 빠른 속도(price 5s/news 15s)·기본(10s/30s)·느린 속도(20s/60s) 3단계로 전환하면 수업 흐름에 맞게 실시간 조정 가능. 기존 엔드포인트 재사용, JS 토글 로직 ~20줄 추가.
+
+### 제거/단순화할 것들
+
+- **`resume_room()`이 룰렛·복권 진행 중 재개 가능** (`app.py:503-517`): `pause_room()`은 `status='paused'`만 세팅하고 `resume_room()`도 상태만 `active`로 바꿔 `_rlt_active[room_id]` 또는 `_lots` 복권 상태를 확인하지 않음. 교사가 룰렛 회전 도중 수동으로 재개하면 룰렛 결과 배분 직전에 학생 거래가 열려 결과를 예측한 거래가 가능해짐. `resume_room()` 진입부에 `if _rlt_active.get(room_id): return jsonify({'error': '룰렛 진행 중 재개 불가'}), 400` 1줄 추가.
+
+- **`host_roulette_config()` POST가 첫 슬롯을 무음으로 0으로 강제** (`app.py:1378`): `mults = [0] + [max(0, float(x)) for x in raw_m[1:]]` 코드가 교사 입력값 `multipliers[0]`을 무조건 버림. 교사가 첫 칸에 0.5를 넣어도 0으로 교체되며 피드백이 없음. 의도적 강제라면 주석 추가 또는 검증 메시지(`"첫 슬롯은 항상 꽝(0)입니다."`) 응답에 포함. 의도가 아니라면 `mults = [max(0, float(x)) for x in raw_m]`으로 수정.
+
+- **`_lot_round_due()` 경계값 포함 여부 불일치** (`app.py:185-198`): `pct >= 1/3`과 `pct >= 2/3` 비교에서 부동소수점 오차로 정확히 1/3·2/3에 도달한 순간 예상과 다른 라운드가 반환될 수 있음. 실제로는 10초 폴링 주기 때문에 정확한 경계 도달이 드물지만, `round(pct, 6) >= round(1/3, 6)` 또는 명시적 `ROUND_THRESHOLDS = [1/3, 2/3]` 상수로 교체해 의도를 명확히 하면 향후 폴링 주기 변경 시 혼란 방지.
+
+- **`trade()` 와 `create_deposit()`에 최소 금액 검증 없음** (`app.py:738`, `app.py:887`): 학생이 1주짜리 매수(수천 원)나 1원 예금을 생성 가능. 거래 내역·예금 목록이 의미 없는 소액으로 오염되고 순위 계산 쿼리(`member_total_value()`, `app.py:107-118`) 부하 증가. `trade()` 에 `if qty < 1: return error`, `create_deposit()`에 `if amount < 10000: return jsonify({'error': '최소 예치 금액은 10,000원입니다.'}), 400` 추가.
+
+- **`stopPolling()`이 `_lotPollInterval` 을 클리어하지 않음** (`app.js:779-782`): `stopPolling()`은 `clearInterval(S.pollInterval)`, `clearInterval(S._waitingPoll)`, `stopNewsPolling()`을 호출하지만 `_lotPollInterval` 은 건드리지 않음. 게임 종료·방 나가기 시 복권 3초 폴이 계속 작동해 불필요한 네트워크 요청 발생. `stopPolling()` 내부에 `_stopLotPolling()` 호출 1줄 추가.
