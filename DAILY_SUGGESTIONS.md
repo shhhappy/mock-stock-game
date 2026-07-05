@@ -1707,3 +1707,33 @@
 - **`_init_prices()`에서 모든 종목 TTL이 동시 만료되는 thundering herd** (`stock_service.py:121-128`): 게임 시작 시 `self._prices[sym] = (now, start)` 가 모든 47개 종목에 동일한 `now` 타임스탬프로 초기화되어 첫 TTL(기본 20초) 만료 시 다음 poll에서 47개 가격이 동시에 재계산됨. 학생 30명이 동시에 시세를 조회하면 같은 순간 47×30개의 `_next_price()` 계산이 몰림. `self._prices[sym] = (now - random.uniform(0, PRICE_TTL * 0.8), start)` 처럼 초기 타임스탬프에 지터를 추가해 만료 시점을 분산 권장. 1줄 수정.
 
 - **`minigame_open()` 카운터가 학생 브라우저 강제 종료 시 누수, 게임 영구 paused 위험** (`app.py:938-963`, `app.py:965-994`): `_rlt_active[rid]['count']` 는 `minigame/open`으로 증가하지만 브라우저 강제 종료 시 `minigame/close` POST가 발송되지 않아 카운트가 영구 잔존. count가 0에 도달하지 않으면 게임 재개 트리거가 없어 룰렛 세션이 멈춘 채 방이 영구 pause 상태 유지 가능. `_rlt_active[rid]` 에 `'opened_at': time.time()` 타임스탬프 추가 후 `get_room()` 폴링 시(`app.py:432`) 5분 이상 경과하면 자동 reset + 게임 재개하는 안전장치 권장. 서버 약 8줄 추가.
+
+## 2026-07-05
+
+### 추가하면 좋을 기능
+
+- **진행자 호스트 탭에 실시간 자산 변화 라이브 막대 그래프 추가** (`app.js:enterHostGame()`, `app.py:542`): 현재 호스트의 '순위' 탭에는 정적 테이블만 있어 수업 중 "지금 1위는 누구?"를 묻기 어려움. `host_members` API(`app.py:542`)가 이미 `total_value`·`gain_pct`를 반환하므로, `S.pollInterval`(10초) 시마다 Chart.js 수평 막대 그래프를 갱신하면 학생 자산 분포를 실시간으로 시각화 가능. `hostBarChart`(`app.js:7`)가 이미 선언만 돼 있어 초기화 로직만 추가하면 됨. 호스트 화면에 40줄 이내 추가.
+
+- **Notification API를 활용한 뉴스 백그라운드 푸시** (`app.js:806-826`, `showBombNews()`): 학생이 다른 브라우저 탭을 보고 있으면 폭탄 뉴스 팝업을 놓침. `startNewsPolling()` 내 뉴스 감지 시 `Notification.requestPermission()`을 게임 진입 시점에 한 번 요청하고, 새 뉴스 도착 시 `new Notification(headline)` 호출을 추가하면 됨. 백엔드 변경 없이 프론트 15줄 추가, 수업 집중도·반응성 향상.
+
+- **포트폴리오 섹터 다각화 점수 및 섹터별 분포 시각화** (`app.py:780-803`, `app.js:1480-1503`): `get_portfolio()`가 반환하는 `holdings`에는 이미 `sector` 필드가 있어 클라이언트에서 섹터별 합계를 집계 가능. 도넛 차트(`app.js:1483`)의 레이블을 종목명 대신 섹터명으로 그룹화하는 옵션 버튼을 추가하면 학생들이 분산투자 개념을 직관적으로 학습 가능. 한 섹터에 전 자산이 집중되면 "집중 투자 경고" 배지를 표시하는 로직도 20줄 이내 구현 가능.
+
+- **방 설정 복사("방 복사") 기능으로 매 수업 재설정 부담 감소** (`app.py:363-390`, `app.js:doCreateRoom()`): 수업이 끝난 방(`status='ended'`)의 `name`·`duration_minutes`·`starting_cash`·`deposit_rate` 설정을 그대로 복사해 새 방을 만드는 "이 설정으로 다시 시작" 버튼을 결과 화면 진행자 영역에 추가. `POST /api/rooms`에 `template_room_id` 선택 파라미터를 추가하고, 지정된 방이 있으면 해당 방의 설정을 기본값으로 적용하면 됨. 백엔드 10줄, 프론트 15줄 수정.
+
+- **퀴즈 참여·정답률 통계 진행자 집계 뷰** (`app.py:1245-1342`, `_quiz_state`): 현재 `_quiz_state`에는 `seen` 집합과 `cooldown_until`만 저장되어 진행자가 누가 퀴즈에 얼마나 참여했는지 알 수 없음. `_quiz_state[key]`에 `correct_count`, `wrong_count`를 추가하고(`submit_quiz()` 내 2줄 증가 로직), `GET /api/rooms/<rid>/host/quiz-stats` 엔드포인트를 신설해 참여 횟수·정답률 집계를 반환하면, 진행자가 수업 중 학생 참여도를 모니터링하고 수업 후 형성 평가 자료로 활용 가능.
+
+- **대용량 단일 거래 실행 전 확인 팝업** (`app.js:1424-1454`, `app.py:724-767`): 현재 단일 거래 수량에 서버·클라이언트 양쪽 모두 상한이 없음. 주가 낮은 종목(HMM 약 17,000원)을 5,000주 매수하면 8,500만 원이 한 번에 소진됨. `execTrade()` 내 `amount = shares × S.tradePrice`가 `S.room.starting_cash × 0.3` 초과 시 `confirm('총 거래금액 X원 — 계속하시겠습니까?')` 다이얼로그를 삽입하면 실수로 인한 대량 매수·매도를 방지. 클라이언트 5줄 추가, 서버 변경 불필요.
+
+### 제거/단순화할 것들
+
+- **`Room.query.get(rid)` 레거시 호출 1개 잔존** (`app.py:976`): `minigame_close()` 함수 내부에서 `room = Room.query.get(rid)`을 사용하고 있어 SQLAlchemy 2.0에서 제거된 `Query.get()` API에 의존. 나머지 코드 전체는 `db.session.get(Room, rid)` 패턴으로 이미 마이그레이션됐음. 해당 1줄을 `db.session.get(Room, rid)`으로 교체하면 SQLAlchemy 2.x 완전 호환 달성. `get_or_404` 계열은 Flask-SQLAlchemy 헬퍼라 별도 이슈.
+
+- **`t.note` HTML 미이스케이프로 인한 저장형 XSS 가능** (`app.js:1581`, `app.py:596`): 거래 내역 렌더링 `loadTxn()`에서 `` ${t.note ? ' · ' + t.note : ''} ``를 그대로 `innerHTML`에 삽입. `note` 값은 진행자가 `host_adjust()` 호출 시 `d.get('note', '진행자 자산 조정')`으로 임의 문자열을 저장 가능(`app.py:596`). 악의적인 진행자가 `<img src=x onerror=alert(1)>` 같은 페이로드를 입력하면 해당 거래 내역을 보는 모든 학생에게 실행됨. `app.js:897`에 이미 `escHtml()` 함수가 정의돼 있으므로 `escHtml(t.note)`로 교체해 1줄 수정으로 해결.
+
+- **룰렛·퀴즈 강제 청산 후 `RoomHolding` 0주 레코드 미삭제** (`app.py:1037-1038`, `app.py:1318`): 룰렛 베팅 자금 마련(`app.py:1025-1047`)과 퀴즈 오답 패널티(`app.py:1302-1326`) 코드에서 전량 청산 시 `h.shares = 0; h.avg_price = 0`만 설정하고 레코드를 삭제하지 않음. 반면 일반 매도 로직(`app.py:762`)은 `if holding.shares == 0: db.session.delete(holding)`으로 올바르게 처리. 0주 잔여 레코드는 `get_portfolio()` 조회 시 `h.shares <= 0` 조건 필터링(`app.py:783`)으로 출력은 막히지만, `RoomHolding.query.filter_by(...)` 쿼리 결과 집합을 불필요하게 키워 청산 반복 시 DB 부하 누적. 두 경로 모두 `db.session.delete(h)` 추가로 통일.
+
+- **`get_rankings()` N+1 쿼리 문제** (`app.py:815-824`): 멤버 N명에 대해 루프 내 `db.session.get(User, m.user_id)` 1회 + `member_total_value()`(내부에서 `RoomMember·RoomHolding·Deposit` 각 1회) = 총 4N+1개 DB 쿼리 발생. 30명 클래스에서 121 쿼리/요청이며, `S.pollInterval`(10초)로 전원이 동시 조회하면 초당 3,600 쿼리 가능. `User.id.in_(uids)` 배치 조회 + `RoomHolding.query.filter_by(room_id=rid)` 전체 1회 조회 후 Python 딕셔너리로 그룹화하면 O(1) 쿼리로 단축. `host_members()`(`app.py:548`)도 동일 패턴이라 같이 개선 필요.
+
+- **`_room_cache`·`_news_cache`가 종료된 방 데이터를 무한 누적** (`app.py:43-84`): `_invalidate_room_cache(rid)` / `_invalidate_news_cache(rid)`는 방 종료 시 해당 키를 삭제하지만, `_end_room()`에서 호출되는 시점 이후 재조회가 없으므로 사실상 남아있지 않을 것처럼 보임. 그러나 방이 종료돼도 `get_room()` 폴링은 계속 캐시를 갱신(TTL 만료마다 재삽입)할 수 있고, 크기 상한이 없으므로 대규모 배포 환경에서 수백 개 방이 메모리를 점유 가능. `_room_cache`를 `collections.OrderedDict`로 교체하고 `maxsize=200` 초과 시 가장 오래된 항목을 제거하는 LRU 로직을 추가해 5줄로 해결.
+
+- **하드코딩된 `SECRET_KEY` 폴백으로 세션 위조 가능** (`app.py:13`): `app.secret_key = os.environ.get('SECRET_KEY', 'mock-stock-game-secret-2024')`은 환경 변수가 설정되지 않으면 공개된 기본 키를 사용. 이 키를 아는 누구든 `itsdangerous` 라이브러리로 유효한 Flask 세션 쿠키를 생성해 임의 `user_id`로 로그인한 것처럼 위장 가능. Render 같은 PaaS 배포 시 환경 변수 설정을 빠뜨리는 실수가 쉬움. `if not os.environ.get('SECRET_KEY'): raise RuntimeError('SECRET_KEY env var must be set')` 한 줄로 배포 시 명시적 오류를 발생시키는 것이 안전.
