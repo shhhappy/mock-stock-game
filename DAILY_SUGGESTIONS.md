@@ -1681,3 +1681,29 @@
 - **`trade()` 와 `create_deposit()`에 최소 금액 검증 없음** (`app.py:738`, `app.py:887`): 학생이 1주짜리 매수(수천 원)나 1원 예금을 생성 가능. 거래 내역·예금 목록이 의미 없는 소액으로 오염되고 순위 계산 쿼리(`member_total_value()`, `app.py:107-118`) 부하 증가. `trade()` 에 `if qty < 1: return error`, `create_deposit()`에 `if amount < 10000: return jsonify({'error': '최소 예치 금액은 10,000원입니다.'}), 400` 추가.
 
 - **`stopPolling()`이 `_lotPollInterval` 을 클리어하지 않음** (`app.js:779-782`): `stopPolling()`은 `clearInterval(S.pollInterval)`, `clearInterval(S._waitingPoll)`, `stopNewsPolling()`을 호출하지만 `_lotPollInterval` 은 건드리지 않음. 게임 종료·방 나가기 시 복권 3초 폴이 계속 작동해 불필요한 네트워크 요청 발생. `stopPolling()` 내부에 `_stopLotPolling()` 호출 1줄 추가.
+
+## 2026-07-05
+
+### 추가하면 좋을 기능
+
+- **`searchGlossary()`가 매 키입력마다 서버 API 호출** (`app.js:1927-1931`): `S.glossaryData` 배열에 전체 용어 데이터가 이미 캐시되어 있는데도 키입력마다 `GET /api/education/glossary?q=...` 를 호출. 네트워크 지연으로 검색 반응이 느리고 서버 부하 불필요. `await api.get(...)` 1회 호출을 제거하고 `S.glossaryData.filter(g => !q || g.term.includes(q) || g.definition.includes(q))` 클라이언트 필터로 교체하면 서버 요청 없이 즉각 반응. 3줄 수정, 서버 변경 없음.
+
+- **타이머가 클라이언트 시계 기반이라 기기 시계 오차 누적** (`app.js:769`): `Math.floor((new Date(S.room.end_time) - new Date()) / 1000)` 으로 잔여 시간을 계산해 학생 기기 시계가 서버와 다를 경우 타이머가 실제보다 빠르거나 느리게 표시됨. 서버 폴 응답의 `remaining_seconds`(`app.py:285-286`)를 기준으로 클라이언트 `performance.now()` 앵커를 세팅하고 이후 보간하는 방식(`serverRemaining - (performance.now() - anchorMs) / 1000`)으로 교체하면 기기 시계와 무관하게 정확한 타이머 보장. `startTimer()` 내 약 5줄 수정.
+
+- **`get_history()`가 실제 게임 가격 이력 대신 매번 랜덤 OHLC 생성** (`stock_service.py:281-310`): 차트를 열 때마다 현재가에서 역방향으로 완전 랜덤 데이터를 생성하므로 같은 종목 차트를 두 번 열면 다른 모양이 나옴. 학생이 "이 종목은 꾸준히 상승했었다"는 식의 추세 분석이 불가능해 교육 효과 반감. `StockService.__init__`에 `self._price_log: dict = {sym: [] for sym in STOCKS}` 추가, `get_price()` 에서 새 가격 산출 시 `(now, new_price)` append(최대 200개), `get_history()`에서 로그를 캔들 바로 변환하면 실제 게임 내 가격 추이를 반영한 차트 제공. 서버 약 15줄 추가, 클라이언트 변경 없음.
+
+- **`startWaitingPoll()`이 결과 발표 전까지 무한 반복** (`app.js:785-796`): 3초마다 `GET /api/rooms/<rid>` 를 호출하며 진행자가 결과 발표를 잊거나 세션을 닫으면 학생 기기가 수십 분간 요청을 반복. 카운터를 추가해 약 10분(200 × 3초) 후 폴링을 자동 중단하고 "새로고침 해주세요" 안내를 표시하는 안전장치 필요. `let _waitPoll_attempts = 0;` + `if (++_waitPoll_attempts > 200) { clearInterval(S._waitingPoll); toast('결과 대기 시간 초과. 새로고침하세요.', 'warn'); }` 약 5줄 추가.
+
+- **`loadGuides()`, `loadTips()` 탭 전환마다 서버 재호출, 캐시 없음** (`app.js:1933`, `app.js:1956`): 학습 탭 전환 시 매번 `GET /api/education/guides` 와 `GET /api/education/tips` 호출. 내용이 정적임에도 캐시가 없어 낭비. `S.guidesData = []`, `S.tipsData = []` 상태 변수를 추가하고 각 함수 첫 줄에 데이터가 있으면 재요청 없이 렌더링하는 가드를 추가. `S.glossaryData`(`app.js:16`) 패턴 그대로 적용, 각 함수 3줄씩 추가.
+
+### 제거/단순화할 것들
+
+- **`get_rankings()`·`host_members()`에서 참가자당 최대 3건 쿼리 발생 (N×3 문제)** (`app.py:807-824`, `app.py:542-562`): `member_total_value(rid, uid)` 가 멤버별로 `RoomMember`, `RoomHolding`, `Deposit` 세 테이블을 각각 쿼리함. 30명 교실에서 랭킹 조회 1회에 최대 90쿼리 발생, 10초 폴링 기준 분당 540쿼리. `RoomHolding.query.filter_by(room_id=rid).all()` + `Deposit.query.filter_by(room_id=rid, status='active').all()` 로 방 전체를 한 번에 조회 후 Python 딕셔너리로 집계하면 쿼리 수를 3으로 고정. Render 무료 PostgreSQL 연결 지연이 크므로 체감 속도 개선 가장 명확.
+
+- **`Room.query.get()` deprecated 호출 다수 잔존** (`app.py:977`, `app.py:435` 외): SQLAlchemy 2.x에서 `Query.get()` 제거 예정. `grep -n "\.query\.get"` 결과 `minigame_close()` (`app.py:977`) 등 여러 위치에서 구형 API 사용 중. `db.session.get(Room, rid)` 로 일괄 교체 필요. `get_or_404()` 패턴은 `db.get_or_404(Room, rid)` (Flask-SQLAlchemy 3.x) 로 교체. 실행 오류는 아니지만 버전 업그레이드 시 일괄 파손 위험.
+
+- **`force_sector_event()` 실행 후 자동 가격 틱에서 이벤트 방향 상쇄** (`stock_service.py:244-276`): 섹터 이벤트로 가격을 강제 변경해도 `_next_biases` 딕셔너리가 갱신되지 않아, 직후 자동 가격 변동 틱에서 랜덤 방향으로 부분 상쇄될 수 있음. 루프 내에 `self._next_biases[sym] = 'up' if pct > 0 else 'down'` 1줄 추가하면 이벤트 효과가 다음 자동 틱까지 이어져 교사 연출 의도가 강화됨. `force_price()` (`stock_service.py:218-242`)에도 동일 패턴 적용.
+
+- **`_init_prices()`에서 모든 종목 TTL이 동시 만료되는 thundering herd** (`stock_service.py:121-128`): 게임 시작 시 `self._prices[sym] = (now, start)` 가 모든 47개 종목에 동일한 `now` 타임스탬프로 초기화되어 첫 TTL(기본 20초) 만료 시 다음 poll에서 47개 가격이 동시에 재계산됨. 학생 30명이 동시에 시세를 조회하면 같은 순간 47×30개의 `_next_price()` 계산이 몰림. `self._prices[sym] = (now - random.uniform(0, PRICE_TTL * 0.8), start)` 처럼 초기 타임스탬프에 지터를 추가해 만료 시점을 분산 권장. 1줄 수정.
+
+- **`minigame_open()` 카운터가 학생 브라우저 강제 종료 시 누수, 게임 영구 paused 위험** (`app.py:938-963`, `app.py:965-994`): `_rlt_active[rid]['count']` 는 `minigame/open`으로 증가하지만 브라우저 강제 종료 시 `minigame/close` POST가 발송되지 않아 카운트가 영구 잔존. count가 0에 도달하지 않으면 게임 재개 트리거가 없어 룰렛 세션이 멈춘 채 방이 영구 pause 상태 유지 가능. `_rlt_active[rid]` 에 `'opened_at': time.time()` 타임스탬프 추가 후 `get_room()` 폴링 시(`app.py:432`) 5분 이상 경과하면 자동 reset + 게임 재개하는 안전장치 권장. 서버 약 8줄 추가.
