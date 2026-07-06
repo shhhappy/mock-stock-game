@@ -1766,3 +1766,38 @@
 
 - **`kick_member()` 엔드포인트가 waiting 상태에서만 동작** (`app.py:566-575`): 서버에서 `room.status != 'waiting'`이면 강퇴 불가 오류를 반환하지만, 클라이언트 로비 화면의 강퇴 버튼은 대기 중에만 표시되어 이중 검증이 중복. 서버측 체크는 유지하되, 클라이언트에서 추가 확인 없이 버튼만 조건부 렌더링하면 충분. 또한 강퇴 대상자 본인은 여전히 방 조회(`/api/rooms/<rid>`) 시 방 정보를 받아볼 수 있어, 강퇴 감지 로직이 없으면 강퇴된 학생이 대기 화면에서 계속 머물게 됨. 참가자 폴링에서 `RoomMember` 조회 실패 시 로비 이탈 처리를 추가하는 것이 필요.
 
+
+## 2026-07-06
+
+### 추가하면 좋을 기능
+
+- **게임 종료 30초 전 긴박감 시각·청각 효과** (`app.js:770-795 startTimer()`, `app.py:527-537 end_room()`): `_ending_soon` 플래그가 설정되면 진행자 화면에는 "1분 후 종료" 토스트가 뜨지만, 학생 화면의 타이머에는 시각적 변화가 없음. `remaining_seconds <= 30` 조건에서 타이머 숫자를 빨간색으로 변경하고, `@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }` 애니메이션을 타이머 컨테이너에 적용하면 학생들이 마감을 직관적으로 인지. `startTimer()` 내 `tick()` 함수에서 `if (remaining <= 30) el.style.color = 'var(--down)'` 1줄 추가, 서버 변경 불필요. `Web Audio API` `OscillatorNode`로 카운트다운 비프음을 추가하면 완성도 향상.
+
+- **진행자 학생 이름 수정 기능** (`app.py:542-562 host_members()`, `models.py:User`): 학생이 오타로 이름을 잘못 입력해도 진행자가 수정할 방법이 없어 엑셀 결과물에 오류가 그대로 남음. `PUT /api/rooms/<rid>/host/members/<uid>/rename` 엔드포인트(`body: {username: "수정된 이름"}`)를 추가하고, `User.username`을 업데이트하면 됨. `username` 길이 2~30 기존 검증 재사용, 중복 username 예외 처리 포함. 진행자 순위 행에 "✏️" 버튼을 추가하는 것으로 프론트 완성. 백엔드 15줄, 프론트 20줄 수정.
+
+- **복권 번호 제출 후 재선택 기능** (`app.py:1149-1183 lottery_pick()`, `app.js: _startLotPolling()`): `lottery_pick()`은 이미 제출된 번호를 `cur['picks'][str(user.id)] = nums` 로 덮어쓰므로 서버 로직 자체는 재선택을 허용. 하지만 클라이언트 UI에서 번호를 제출하면 입력 필드가 `disabled` 처리돼 변경 불가. `state === 'picking'` 이고 `my_picks` 가 이미 있을 때 "번호 변경" 버튼을 표시하고 클릭 시 필드를 다시 활성화하면, 실수로 잘못 입력한 학생이 마감 전까지 수정 가능. 프론트 10줄 추가, 서버 변경 불필요.
+
+- **Kahoot-식 진행자 주도 동시 O/X 퀴즈** (`app.py:1243-1342 Quiz`, `app.js:846-900 submitQuiz()`): 현재 퀴즈는 학생이 개별적으로 언제든 시작하는 비동기 방식. 진행자가 `POST /api/rooms/<rid>/host/ox-start {qid}` 로 특정 문제를 "동시 공개"하고, 학생이 O/X를 누르면 결과를 집계해 `POST /api/rooms/<rid>/host/ox-reveal`로 정답·참여율을 한 번에 공개하는 동기식 미니게임을 추가하면 수업 몰입도가 크게 향상됨. `_quiz_state` 딕셔너리에 `ox_active` 키를 추가하고, `get_room()` 폴링 응답에 `ox_active: {qid, deadline}`을 포함. 백엔드 40줄, 프론트 50줄 예상.
+
+- **거래 내역 클립보드 복사 / CSV 다운로드** (`app.py:829-847 get_transactions()`, `app.js:1565-1593 loadTxn()`): 학생이 수업 후 자신의 거래 이력을 복기하려면 진행자의 엑셀 파일을 요청해야 함. `loadTxn()` 완료 후 전체 거래 내역(`data.transactions`)을 CSV 형태로 `Blob` 생성 → `<a download="거래내역.csv">` 로 저장하는 버튼 하나를 추가하면, 학생이 직접 스프레드시트로 투자 분석 가능. `page=1` 기준으로 `per_page=200` 파라미터를 추가해 단일 요청으로 전체 내역을 받아오는 별도 호출 방식 권장. 백엔드 파라미터 1줄 수정, 프론트 20줄 추가.
+
+- **진행자 특정 종목 거래 일시 차단 (서킷 브레이커)** (`app.py:724-767 trade()`, `stock_service.py:166-172 freeze()`): 현재 `StockService.freeze()`는 모든 종목 가격 갱신을 동시에 멈추지만, 특정 종목만 거래 차단하는 기능은 없음. `_blocked_symbols: set` 을 `StockService`에 추가하고, `trade()` 상단에서 `if symbol in svc._blocked_symbols: return 403` 검사를 삽입하면, 진행자가 "삼성전자 거래 차단" 이벤트를 통해 실제 주식시장의 서킷 브레이커 개념을 실습 가능. `POST /api/rooms/<rid>/host/block-symbol {symbol, blocked: bool}` 엔드포인트 20줄, `trade()` 1줄 추가.
+
+---
+
+### 제거/단순화할 것들
+
+- **`lottery_draw()` 에서 `_lottery_lock` 없이 `_do_reveal()` 호출 — 이중 지급 경쟁 조건** (`app.py:1206`): `lottery_draw()` 는 `_lottery_lock` 을 획득하지 않은 상태에서 `_do_reveal(rid, cur)` 를 직접 호출. 동시에 `get_lottery()` 폴링(`app.py:1123-1130`)이 `_lottery_lock` 내부에서 `draw_dl` 만료를 감지해 `_do_reveal()` 을 호출하면, 두 경로가 경쟁하면서 복권 보상이 두 번 지급될 수 있음. `lottery_draw()` 의 `_do_reveal(rid, cur)` 호출 전에 `with _lottery_lock:` 블록을 추가하고, 블록 내에서 `cur['state'] == 'drawing'` 여부를 재확인한 뒤 호출해야 안전 (`app.py:1205-1206`).
+
+- **`host_market_event()` 이후 `_news_cache` 미무효화** (`app.py:1357-1360`): `force_sector_event()` 내부에서 `self._news` 를 직접 갱신하지만(`stock_service.py:270-275`), `app.py:1360` 반환 직전에 `_invalidate_news_cache(rid)` 호출이 없음. `host_force_price()` (`app.py:684-687`)와 `host_send_news()` (`app.py:700`)는 뉴스 캐시를 무효화하는 반면 섹터 이벤트만 예외. 2초 NEWS_CACHE_TTL 동안 학생은 이전 뉴스를 계속 받아 섹터 이벤트 연계 뉴스를 놓칠 수 있음. `app.py:1360` `return jsonify(...)` 직전에 `_invalidate_news_cache(rid)` 한 줄 추가로 해결.
+
+- **`withdraw_deposit()` 에 `RoomTransaction` 기록 없어 거래 내역 불완전** (`app.py:904-916`): 룰렛 베팅 예금 인출(`app.py:1056-1058`)과 퀴즈 오답 패널티 예금 차감(`app.py:1336-1338`)은 각각 `RoomTransaction(action='ADJ')` 을 남기지만, `withdraw_deposit()` 는 예금 금액을 `m.cash`에 환원하면서 거래 로그를 남기지 않음. 학생의 "내 거래 내역" 화면에서 현금 증가 이유를 설명할 수 없어 교육적 혼란 유발. `db.session.add(RoomTransaction(room_id=rid, user_id=user.id, symbol='DEPOSIT', action='ADJ', shares=0, price=0, amount=dep.amount, note='예금 조기 해지'))` 를 `app.py:915` `commit()` 전에 삽입하면 일관성 확보.
+
+- **`create_deposit()` 금액 검증이 `float('inf')` 비교에 의존해 소수점 예금 허용** (`app.py:887-889`): `amount = float(...)` 후 `if not (0 < amount < float('inf'))` 조건은 `amount = 0.001` 같은 소수점 값을 허용. `Deposit.amount` 컬럼이 `db.Float`이라 DB에도 저장되고, 이자 계산(`d.amount * d.rate / 100`) 시 `0.001 * 3 / 100 = 0.00003` 같은 미세 부동소수점 값이 누적됨. `if amount < 1000: return jsonify({'error': '최소 예금 금액은 1,000원'}), 400` 하한 가드와 `amount = int(amount)` 정수 절사를 `app.py:889` 직후에 추가하면 소액 레코드·부동소수점 오차 양쪽을 방어.
+
+- **`get_quiz()` 에서 진행자도 퀴즈 문제 조회 가능 — 학생에게 사전 유출 위험** (`app.py:1248-1268`): `@login_required` + `room.status != 'active'` 만 체크하고 `cur_user().id == room.host_id` 여부를 확인하지 않아, 진행자도 `GET /api/rooms/<rid>/quiz` 로 퀴즈 문제를 열람할 수 있음. 학생에게 힌트를 주거나 O/X 답을 미리 전달하는 편법이 가능. `app.py:1253` 에 `if cur_user().id == room.host_id: return jsonify({'error': '진행자는 퀴즈에 참여할 수 없습니다.'}), 403` 가드를 삽입. `submit_quiz()` (`app.py:1272`) 에도 동일 가드 추가 권장 (현재는 member 없으면 단순히 cash 변경 없이 200 반환).
+
+- **`_roulette_config` POST 시 꽝(index 0) 배수 값이 소리 없이 0 으로 강제 설정됨** (`app.py:1378`): `mults = [0] + [max(0, float(x)) for x in raw_m[1:]]` 패턴으로 클라이언트가 제출한 `raw_m[0]` 값을 항상 버리고 0 으로 교체. API 응답은 `{'multipliers': mults}` 로 실제 저장된 값을 반환하므로 UI에서 차이를 발견할 수 있지만, 요청이 200 OK 로 처리되어 직관적이지 않음. `if float(raw_m[0]) != 0: return jsonify({'error': '첫 번째 슬롯(꽝)의 배수는 반드시 0이어야 합니다.'}), 400` 검증을 추가하거나, 클라이언트 진행자 설정 UI(`index.html` 룰렛 설정 모달)에서 첫 번째 입력 필드를 `readonly value="0"` 으로 고정하면 혼란 방지 (`app.py:1378`).
+
+- **`trade()` 에서 동시 매수 요청 시 현금 TOCTOU 취약점** (`app.py:733-765`): `member.cash >= amount` 확인 후 `member.cash -= amount` 사이에 아무런 DB 수준 잠금 없음. SQLite WAL 모드에서는 단일 쓰기 스레드로 직렬화되어 실질 위험은 낮지만, PostgreSQL 이전 시 두 탭이 동시에 같은 계정으로 매수 요청을 보내면 둘 다 잔액 충분 판정을 받아 현금이 음수로 내려갈 수 있음. `RoomMember.query.filter_by(room_id=rid, user_id=user.id).with_for_update().first()` (행 수준 배타 잠금)로 교체하면 PostgreSQL에서도 안전. SQLite에서는 `with_for_update()`가 무시되므로 하위 호환 영향 없음 (`app.py:733`).
+
