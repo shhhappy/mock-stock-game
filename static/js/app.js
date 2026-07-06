@@ -524,7 +524,7 @@ async function loadStudentTxn(reset = false) {
   const html = (data.transactions || []).map(t => `
     <div class="txn-item">
       <div>
-        <div style="font-weight:600">${t.name}</div>
+        <div style="font-weight:600">${escHtml(t.name)}</div>
         <div class="muted" style="font-size:11px">${escHtml(t.timestamp)}${t.note ? ' · ' + escHtml(t.note) : ''}</div>
       </div>
       <div style="text-align:right">
@@ -1581,7 +1581,7 @@ async function loadTxn(reset = false) {
   const html = (data.transactions || []).map(t => `
     <div class="txn-item">
       <div>
-        <div style="font-weight:600">${t.name}</div>
+        <div style="font-weight:600">${escHtml(t.name)}</div>
         <div class="muted" style="font-size:11px">${escHtml(t.timestamp)}${t.note ? ' · ' + escHtml(t.note) : ''}</div>
       </div>
       <div style="text-align:right">

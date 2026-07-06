@@ -94,6 +94,28 @@ STOCKS = {
     # 중국IT
     'BABA':  {'name': 'Alibaba',         'sector': '중국IT', 'base': 100000, 'vol': 0.048},
     'TENCE': {'name': 'Tencent',         'sector': '중국IT', 'base': 70000,  'vol': 0.042},
+    # 해외금융
+    'JPM':   {'name': 'JPMorgan Chase',   'sector': '해외금융', 'base': 305000,  'vol': 0.022},
+    'V':     {'name': 'Visa',             'sector': '해외금융', 'base': 396000,  'vol': 0.018},
+    'BRK':   {'name': 'Berkshire Hathaway','sector':'해외금융', 'base': 630000,  'vol': 0.018},
+    'MA':    {'name': 'Mastercard',        'sector': '해외금융', 'base': 681000,  'vol': 0.020},
+    # 해외소비재
+    'MCD':   {'name': "McDonald's",       'sector': '해외소비재','base': 410000, 'vol': 0.018},
+    'KO':    {'name': 'Coca-Cola',         'sector': '해외소비재','base': 95000,  'vol': 0.012},
+    'NKE':   {'name': 'Nike',              'sector': '해외소비재','base': 104000, 'vol': 0.028},
+    'SBUX':  {'name': 'Starbucks',         'sector': '해외소비재','base': 125000, 'vol': 0.025},
+    # 해외엔터
+    'NFLX':  {'name': 'Netflix',          'sector': '해외엔터', 'base': 973000,  'vol': 0.038},
+    'DIS':   {'name': 'Disney',            'sector': '해외엔터', 'base': 139000,  'vol': 0.028},
+    # 해외제약
+    'PFE':   {'name': 'Pfizer',           'sector': '해외제약', 'base': 38000,   'vol': 0.025},
+    'JNJ':   {'name': 'Johnson & Johnson','sector': '해외제약', 'base': 218000,  'vol': 0.015},
+    # 유럽
+    'LVMH':  {'name': 'LVMH',            'sector': '유럽',     'base': 1095000, 'vol': 0.025},
+    'SAP':   {'name': 'SAP',              'sector': '유럽',     'base': 304000,  'vol': 0.022},
+    # 해외반도체 추가
+    'AMD':   {'name': 'AMD',              'sector': '해외반도체','base': 222000, 'vol': 0.048},
+    'QCOM':  {'name': 'Qualcomm',         'sector': '해외반도체','base': 215000, 'vol': 0.030},
 }
 
 SECTORS = sorted({v['sector'] for v in STOCKS.values()})
