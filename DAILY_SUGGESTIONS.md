@@ -1737,3 +1737,32 @@
 - **`_room_cache`·`_news_cache`가 종료된 방 데이터를 무한 누적** (`app.py:43-84`): `_invalidate_room_cache(rid)` / `_invalidate_news_cache(rid)`는 방 종료 시 해당 키를 삭제하지만, `_end_room()`에서 호출되는 시점 이후 재조회가 없으므로 사실상 남아있지 않을 것처럼 보임. 그러나 방이 종료돼도 `get_room()` 폴링은 계속 캐시를 갱신(TTL 만료마다 재삽입)할 수 있고, 크기 상한이 없으므로 대규모 배포 환경에서 수백 개 방이 메모리를 점유 가능. `_room_cache`를 `collections.OrderedDict`로 교체하고 `maxsize=200` 초과 시 가장 오래된 항목을 제거하는 LRU 로직을 추가해 5줄로 해결.
 
 - **하드코딩된 `SECRET_KEY` 폴백으로 세션 위조 가능** (`app.py:13`): `app.secret_key = os.environ.get('SECRET_KEY', 'mock-stock-game-secret-2024')`은 환경 변수가 설정되지 않으면 공개된 기본 키를 사용. 이 키를 아는 누구든 `itsdangerous` 라이브러리로 유효한 Flask 세션 쿠키를 생성해 임의 `user_id`로 로그인한 것처럼 위장 가능. Render 같은 PaaS 배포 시 환경 변수 설정을 빠뜨리는 실수가 쉬움. `if not os.environ.get('SECRET_KEY'): raise RuntimeError('SECRET_KEY env var must be set')` 한 줄로 배포 시 명시적 오류를 발생시키는 것이 안전.
+
+## 2026-07-06
+
+### 추가하면 좋을 기능
+
+- **진행자 화면에서 학생 개인 보유 종목 확인 기능** (`app.py:542-561`, `app.js:408-431`): 현재 진행자는 `host_members()` API로 학생의 총 자산·수익률만 볼 수 있고, 어떤 종목을 얼마나 보유하는지 알 수 없음. `GET /api/rooms/<rid>/host/members/<uid>/portfolio` 엔드포인트를 신설해 `get_portfolio()` 로직(`app.py:772-803`)을 그대로 재사용하면 됨 (권한 체크를 `host_id`로 변경). 수업 중 "이 학생은 왜 삼성전자를 이렇게 많이 사뒀을까요?"처럼 포트폴리오를 교육 소재로 활용 가능. 백엔드 20줄, 프론트 학생 행 클릭 시 모달 표시 30줄.
+
+- **거래 내역 배지에 룰렛·복권 액션 표시 추가** (`app.js:529`, `app.js:1584`): 호스트 학생 거래 내역(`loadStudentTxn()`)과 참가자 본인 거래 내역(`loadTxn()`) 모두 `t.action==='BUY'?'매수':t.action==='SELL'?'매도':'조정'` 삼항 체인을 사용해 `RLT`(룰렛)와 `LOTTO`(복권) 거래가 '조정'으로 잘못 표시됨. `'RLT'?'룰렛':'LOTTO'?'복권':'조정'` 분기를 추가하면 2개 파일 각 1줄 수정으로 해결되며, 학생이 자신의 미니게임 거래 이력을 정확히 구분 가능.
+
+- **게임 시작 전 최소 참가자 수 경고** (`app.js:246-255`, `app.py:475-488`): `doStartGame()`이 참가자 0명일 때도 서버에 요청을 보내 게임이 시작됨. 클라이언트에서 `S.room.member_count === 0`이면 `if (!confirm('참가자가 없습니다. 그래도 시작하시겠습니까?'))` 확인 팝업을 추가하거나, 서버 `start_room()`(`app.py:475`)에 참가자 수 체크를 추가하면 빈 방 게임 실수 방지. 특히 Render free tier에서는 스핀업 지연으로 학생이 아직 접속 전에 시작 버튼을 누르는 상황이 흔함.
+
+- **로비 QR 코드 이미지 저장 기능** (`app.js:195-210`, `static/index.html:93`): `generateLobbyQR()`이 QRCode.js로 canvas에 QR을 그리지만, 저장·공유 버튼이 없음. 로비 QR 옆에 `canvas.toBlob()` → `<a download="qr.png">` 방식으로 PNG 저장 버튼을 추가하면, 선생님이 카카오톡·밴드 등으로 QR 이미지를 공유해 학생들이 카메라로 즉시 접속 가능. 프론트 10줄, 서버 변경 없음.
+
+- **뉴스 간격·주가 변동 간격 설정이 서버 재시작 시 초기화됨** (`app.py:630-646`, `stock_service.py:197-216`): `svc.set_news_interval()`, `svc.set_price_interval()` 값은 `StockService` 인스턴스 메모리에만 저장되어 Render free tier 슬립→웨이크업 시 초기화됨. `Room` 모델에 `news_interval_seconds`, `price_interval_seconds` 컬럼을 추가하고 방 로드 시 `StockService`에 적용하면, 설정 지속성 확보. Render 무료 플랜에서 15분 비활동 슬립은 수업 중에도 발생 가능.
+
+- **결과 화면에서 학생 본인의 매수·매도 횟수 요약 표시** (`app.py:829-847`, `app.js:1760-1777`): 결과 화면의 "내 결과" 카드(`results-my-stats`)는 최종 순위·자산·수익률 3가지만 표시. `GET /api/rooms/<rid>/transactions`로 자신의 거래 내역 전체를 조회(이미 구현됨)해 `buy_count`, `sell_count`를 집계하고 "총 XX번 거래" 문구를 추가하면 학생이 자신의 투자 활동을 돌아볼 수 있는 교육적 피드백 제공. 프론트 15줄, 서버 변경 없음.
+
+### 제거/단순화할 것들
+
+- **`stock_service.py:get_history()` 의 period 구분이 무의미** (`stock_service.py:281-310`): "1일/1주/1달/3달/1년" 탭 중 `period='1d'`와 `period='1mo'` 모두 `n_bars=30` 동일하고(`{'1d':30, '5d':5, '1mo':30, '3mo':90}` 매핑), 히스토리 전체가 현재가 기준 역방향 랜덤 워크로 생성되어 실제 시간 축이 없음. 학생이 "1일 차트"와 "1달 차트"를 비교해도 사실상 같은 노이즈. 차트 탭을 "단기(30봉)/중기(90봉)" 2개로 단순화하거나, 게임 내 실제 가격 변동 이력을 `StockService._history_log`에 누적하는 방향으로 교체하는 편이 교육적으로 더 의미 있음.
+
+- **`app.js:S.assetHistory`가 새로고침·재접속 시 리셋** (`app.js:19`, `app.js:1505-1540`): 포트폴리오 탭의 "자산 변화" 라인 차트는 `S.assetHistory` 메모리 배열 기반. 학생이 브라우저 새로고침을 하면 데이터가 사라지고 빈 차트를 보게 됨(2개 이상 데이터 포인트가 없으면 차트 자체가 숨겨짐, `app.js:1506`). `sessionStorage`에 주기적으로 저장하거나, 아니면 "자산 변화" 섹션을 제거하고 랭킹 탭에서 실시간 순위 변화를 확인하도록 안내하는 쪽이 더 실용적.
+
+- **`doAuth()` 학번+이름 공백 join 방식의 파싱 취약성** (`app.js:73-76`, `app.js:1695-1699`, `app.py:1435-1437`): `username = \`${sid} ${name}\`` 으로 저장하고, `parseUsername()` / 엑셀 내보내기에서 `split(' ', 1)` 또는 `parts[0]`, `parts[1]` 로 다시 분리. 이름에 공백이 포함된 경우(예: "이 지영") 학번·이름 구분이 깨져 엑셀 출력에서 학번 컬럼에 이름 일부가 들어감. 분리자를 `|` 또는 `\t` 같은 입력 불가 문자로 변경하면 3개 파일 각 1줄 수정으로 해결.
+
+- **`get_rankings()` 폴링과 `refreshMyRank()` 폴링이 중복 호출** (`app.js:613-651`): `S.pollInterval`(10초) 안에서 `refreshMyRank()`가 `/rankings` API를 호출하고, 참가자가 순위 탭을 열면 `loadParticipantRankings()`도 `/rankings`를 호출해 같은 엔드포인트가 최대 10초 내 2회 중복 호출됨. `refreshMyRank()`에서 `/rankings` 전체를 받아 `S.rankingsData`에 저장하고, `loadParticipantRankings()`는 별도 API 호출 없이 캐시 데이터를 렌더링하는 방식으로 단일화하면 서버 부하를 절반으로 줄일 수 있음.
+
+- **`kick_member()` 엔드포인트가 waiting 상태에서만 동작** (`app.py:566-575`): 서버에서 `room.status != 'waiting'`이면 강퇴 불가 오류를 반환하지만, 클라이언트 로비 화면의 강퇴 버튼은 대기 중에만 표시되어 이중 검증이 중복. 서버측 체크는 유지하되, 클라이언트에서 추가 확인 없이 버튼만 조건부 렌더링하면 충분. 또한 강퇴 대상자 본인은 여전히 방 조회(`/api/rooms/<rid>`) 시 방 정보를 받아볼 수 있어, 강퇴 감지 로직이 없으면 강퇴된 학생이 대기 화면에서 계속 머물게 됨. 참가자 폴링에서 `RoomMember` 조회 실패 시 로비 이탈 처리를 추가하는 것이 필요.
+
