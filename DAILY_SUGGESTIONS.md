@@ -1831,3 +1831,35 @@
 - **`StockService.get_history()` 의 차트 날짜가 항상 UTC 기준 과거일** (`stock_service.py:296-305`): `datetime.utcfromtimestamp(now - i * 86400).strftime('%Y-%m-%d')` 로 날짜를 생성하므로, KST 기준 오전 9시 이전에 수업하면 차트의 가장 최근 봉이 전날 날짜로 표시됨. 이미 시뮬레이션 데이터라 절대 날짜가 의미 없으므로, 날짜 대신 "D-30", "D-29", … "D-1" 같은 상대 레이블로 교체하면 혼란 방지 및 UTC/KST 변환 코드도 제거 가능. `stock_service.py:297` 1줄, `app.js:1369` 레이블 처리 1줄 수정.
 
 - **`doAuth()` 에서 학번·이름 검증 없이 서버에 요청** (`app.js:73-79`, `app.py:329-342`): 클라이언트에서 `sid` 와 `name` 의 공백·특수문자 여부를 검증하지 않아 학번에 공백이 포함되면 `username = '2 07 15 홍길동'` 처럼 파싱 기준인 첫 공백 위치가 달라져 엑셀 내보내기(`app.py:1435-1437`)의 학번·이름 분리가 깨짐. `doCreateRoom()`·`doJoinRoom()` 에서 `if (/\s/.test(sid)) { err.textContent = '학번에 공백을 포함할 수 없습니다.'; return; }` 1줄 추가로 방어 가능(`app.js:130`, `app.js:149`).
+
+- **`doAuth()` 에서 학번·이름 검증 없이 서버에 요청** (`app.js:73-79`, `app.py:329-342`): 클라이언트에서 `sid` 와 `name` 의 공백·특수문자 여부를 검증하지 않아 학번에 공백이 포함되면 `username = '2 07 15 홍길동'` 처럼 파싱 기준인 첫 공백 위치가 달라져 엑셀 내보내기(`app.py:1435-1437`)의 학번·이름 분리가 깨짐. `doCreateRoom()`·`doJoinRoom()` 에서 `if (/\s/.test(sid)) { err.textContent = '학번에 공백을 포함할 수 없습니다.'; return; }` 1줄 추가로 방어 가능(`app.js:130`, `app.js:149`).
+
+## 2026-07-07 (2차)
+
+### 추가하면 좋을 기능
+
+- **시장 탭 종목 카드에 "내 보유 주수" 배지 실시간 표시** (`app.js:1287-1311 renderGrid()`): 현재 시장 탭의 종목 카드에 본인 보유 여부 표시가 없어, 매도하려면 포트폴리오 탭으로 이동해야 함. `loadMarket()` 완료 후 `S.holdings`(또는 포트폴리오 조회 결과 캐시)를 활용해 `renderGrid()` 내부에서 `const heldShares = (S.holdings||[]).find(h=>h.symbol===st.symbol)?.shares; if(heldShares) '보유 N주' 뱃지 표시` 패턴으로 종목 카드 하단에 초록 배지를 추가하면 탭 이동 없이 현재 포지션 확인 가능. 포트폴리오 탭 진입 시 `S.holdings = data.holdings` 로 캐시 갱신하면 추가 API 호출 없이 해결. 프론트 10줄, 서버 변경 없음.
+
+- **진행자 → 전체 참가자 앱 내 공지 전송 기능** (`app.py:540-603 host 엔드포인트`, `app.js:258-274 enterHostGame()`): 수업 중 "지금부터 바이오 섹터에 집중하세요" 같은 교사 공지를 앱 밖에서 전달해야 하는 불편이 있음. `POST /api/rooms/<rid>/host/announce {message: str}` 로 `_announcements[rid]` 인메모리 저장 → `GET /api/rooms/<rid>` 응답에 `announcement` 필드 추가 → 참가자 폴링에서 새 공지 감지 시 5초짜리 상단 배너로 표시. 서버 15줄, 프론트 20줄로 교실 운영 편의 대폭 향상.
+
+- **게임 종료 후 진행자 화면에 수업 통계 요약 카드 표시** (`app.py:829-847 get_rankings()`, `app.js:1702-1795 loadResults()`): 진행자 결과 화면은 순위 차트만 있고 "총 거래 건수", "가장 많이 거래된 종목", "평균 수익률" 같은 클래스 전체 통계가 없음. `RoomTransaction.query.filter_by(room_id=rid).all()` 을 한 번 조회해 집계하는 `GET /api/rooms/<rid>/host/summary` 엔드포인트를 추가하고(서버 20줄), 진행자 결과 화면 상단에 "전체 거래 247건 · 최다 거래 종목 NVDA · 평균 수익률 +8.3%" 요약 카드를 렌더링하면(프론트 15줄), 교사가 수업 후 학생 투자 행동을 총평하는 소재로 활용 가능.
+
+- **활성 예금 전체 일괄 해지 버튼** (`app.js:1621-1644 loadDepositsPage()`, `app.py:904-916 withdraw_deposit()`): 학생이 여러 예금을 보유한 채 올인 투자 기회를 발견했을 때 각 예금을 개별 해지해야 하는 번거로움이 있음. `active.length >= 2` 인 경우 목록 하단에 "전체 해지" 버튼을 추가하고, 클라이언트에서 `Promise.all(active.map(d => api.del(...)))` 로 병렬 해지 요청 후 `loadDepositsPage()` 를 재호출하면 서버 변경 없이 해결(프론트 10줄).
+
+- **관심 종목(watchlist) 서버 동기화로 교차 기기 지속** (`app.js:17`, `app.js:1279-1284 toggleWatchlist()`): 관심 종목이 `localStorage`에만 저장되어 학생이 다른 컴퓨터로 이동하거나 브라우저를 교체하면 초기화됨. 교실에서 학생이 자리를 바꾸는 상황에 빈번히 발생. `RoomMember` 모델에 `watchlist VARCHAR(500)` 컬럼 추가(models.py) → `PATCH /api/rooms/<rid>/watchlist {symbols: [...]}` 엔드포인트(10줄) → `toggleWatchlist()` 에서 `localStorage` 저장과 동시에 API 호출. 로그인 시 서버에서 watchlist를 복구하면 기기 독립적 관심 목록 유지 가능.
+
+- **진행자 시장 탭 인기 보유 종목 TOP5 실시간 표시** (`app.py:542-562 host_members()`, `app.js:313-357 loadHostMarket()`): 진행자 시장 탭에는 주가만 있고 학생들이 어떤 종목에 집중하는지 파악 불가. `GET /api/rooms/<rid>/host/popular-stocks` 엔드포인트를 추가해 `RoomHolding.query.filter_by(room_id=rid).all()` 로 종목별 보유자 수·총 보유 주수를 집계하고(서버 12줄), 진행자 시장 탭 상단에 "🔥 인기 종목 TOP5 — 삼성바이오 9명, NVDA 7명…" 를 표시하면(프론트 15줄), 교사가 "왜 이 종목이 인기일까요?" 토론 유도 가능. `loadHostMarket()` 호출 시 함께 갱신.
+
+### 제거/단순화할 것들
+
+- **룰렛·퀴즈 강제 청산 경로에서 zombie `RoomHolding` 레코드 누적** (`app.py:1037-1038`, `app.py:1317-1318`): 룰렛 베팅 자금 마련 시 주식 전량 매도 후 `h.shares = 0; h.avg_price = 0` 만 처리하고 `db.session.delete(h)` 를 하지 않음. 퀴즈 패널티 청산 코드(`app.py:1318`)도 동일. 정상 `trade()` 엔드포인트(`app.py:762`)에는 `if holding.shares == 0: db.session.delete(holding)` 가 있어 일관성이 없음. `get_portfolio()` 와 `member_total_value()` 는 `h.shares <= 0` 건너뜀 체크로 정확성은 유지되지만, DB에 shares=0 레코드가 시간이 갈수록 누적됨. 두 청산 경로 모두 `h.shares = 0` 처리 직후 `if h.shares == 0: db.session.delete(h)` 를 추가하면 해결.
+
+- **퀴즈 이중 제출 TOCTOU — 빠른 연타 시 보상 중복 지급 가능** (`app.py:1270-1342`): `submit_quiz()` 진입 직후 `_quiz_state[key]` 확인 후 보상/패널티를 계산하고 마지막에 `cooldown_until = time.time() + 60` 으로 갱신(`app.py:1341`). 동시 요청 2개가 0.5초 차이로 들어오면 첫 번째 요청의 state 갱신이 DB commit 전이라 두 번째 요청도 통과해 동일 퀴즈에 두 번 보상이 지급됨. `app.py:1278` state 확인 직후, 보상 계산 전에 `_quiz_state[key] = {'qid': None, 'cooldown_until': time.time() + 60, 'seen': state.get('seen', set())}` 를 미리 설정해 진입 즉시 쿨다운 처리하면 TOCTOU 방어 가능.
+
+- **`host_adjust` delta NaN 입력 시 회원 현금이 NaN으로 오염** (`app.py:595-599`): `delta = float(d.get('delta', 0))` 후 `math.isfinite(delta)` 체크 없이 바로 `m.cash = max(0, m.cash + delta)` 수행. 공격자가 `{"delta": "nan"}` 전송 시 Python `float('nan')` 이 조용히 처리되어 `m.cash = nan` → 이후 `member_total_value()`, 렝킹 정렬, 엑셀 내보내기 등 모든 계산에서 NaN이 전파됨. `app.py:596` 에 `import math; if not math.isfinite(delta): return jsonify({'error': '잘못된 금액'}), 400` 2줄 추가로 방어. `create_room` 의 `starting_cash`·`deposit_rate`(`app.py:385-386`)도 동일 취약점.
+
+- **`create_room` 숫자 변환에 ValueError 미처리로 500 에러 발생 가능** (`app.py:384-386`): `int(d.get('duration_minutes', 30))`, `float(d.get('starting_cash', 10_000_000))` 에 try-except 없음. 클라이언트가 `{"duration_minutes": "abc"}` 전송 시 `int("abc")` 에서 ValueError → Flask 500 Internal Server Error 반환. 같은 파일의 `trade()` 엔드포인트(`app.py:738-739`)는 `try: shares = int(...) except: return 400` 패턴으로 처리하고 있어 일관성이 없음. `create_room()` 상단에 동일 패턴의 try-except 블록을 추가하면 방어적으로 400 반환 가능.
+
+- **`get_rankings()`·`host_members()` 의 N+1 쿼리 문제** (`app.py:808-824`, `app.py:542-562`): 두 함수 모두 전체 멤버를 먼저 조회 후 각 멤버에 대해 `member_total_value()` 를 개별 호출. `member_total_value()` 내부(`app.py:107-118`)에서 `RoomHolding.query.filter_by(room_id=rid, user_id=uid)` 와 `Deposit.query.filter_by(room_id=rid, user_id=uid)` 를 각각 1회씩 실행하므로, 30명 방 기준 `/rankings` 1회 호출 시 최소 62회 DB 쿼리 발생. `RoomHolding.query.filter_by(room_id=rid).all()` 과 `Deposit.query.filter_by(room_id=rid, status='active').all()` 을 각각 1회 bulk 조회 후 `{user_id: records}` dict로 그룹핑하면 2번의 쿼리로 동일 결과 달성 가능.
+
+- **기본 `SECRET_KEY` 가 공개 레포에 평문 하드코딩** (`app.py:13`): `app.secret_key = os.environ.get('SECRET_KEY', 'mock-stock-game-secret-2024')` — `SECRET_KEY` 환경변수를 설정하지 않으면 `'mock-stock-game-secret-2024'` 라는 공개된 고정 키로 Flask 세션 쿠키가 서명됨. 이 키를 아는 누구나 `itsdangerous` 로 임의 `user_id` 를 담은 세션 쿠키를 위조해 다른 사용자로 로그인 가능. fallback을 `secrets.token_hex(32)` 로 교체하면 재시작마다 랜덤 키가 생성되어 기존 세션이 무효화되는 대신 세션 위조는 불가능해짐. 운영 환경에서는 반드시 `SECRET_KEY` 환경변수를 설정해야 한다는 경고를 `app.py` 상단에 `if not os.environ.get('SECRET_KEY'): warnings.warn(...)` 으로 추가하는 것도 권장.
