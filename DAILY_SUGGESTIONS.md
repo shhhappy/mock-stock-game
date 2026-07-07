@@ -1801,3 +1801,33 @@
 
 - **`trade()` 에서 동시 매수 요청 시 현금 TOCTOU 취약점** (`app.py:733-765`): `member.cash >= amount` 확인 후 `member.cash -= amount` 사이에 아무런 DB 수준 잠금 없음. SQLite WAL 모드에서는 단일 쓰기 스레드로 직렬화되어 실질 위험은 낮지만, PostgreSQL 이전 시 두 탭이 동시에 같은 계정으로 매수 요청을 보내면 둘 다 잔액 충분 판정을 받아 현금이 음수로 내려갈 수 있음. `RoomMember.query.filter_by(room_id=rid, user_id=user.id).with_for_update().first()` (행 수준 배타 잠금)로 교체하면 PostgreSQL에서도 안전. SQLite에서는 `with_for_update()`가 무시되므로 하위 호환 영향 없음 (`app.py:733`).
 
+
+## 2026-07-07
+
+### 추가하면 좋을 기능
+
+- **진행자 전체 참가자 일괄 자산 조정 엔드포인트** (`app.py:587-603`, `app.js:480-501`): 현재 `openAdjust()` 는 학생 1명씩 개별 모달을 열어야 하므로, 수업 중 "전체 +50만원 이벤트 보너스" 같은 상황에서 30명을 일일이 클릭해야 함. `POST /api/rooms/<rid>/host/adjust-all {delta, note}` 엔드포인트를 `host_adjust()` 로직(`app.py:587`) 기반으로 추가하고, 설정 탭에 "전체 일괄 조정" 버튼 하나만 추가하면 해결. 백엔드 15줄, 프론트 10줄.
+
+- **복권 결과 모달에 참가자 이름 표시** (`app.py:1131-1147`, `app.js:2219-2244`): 진행자 복권 결과 모달(`_showLotteryResult()`)의 결과 표가 UID(숫자 문자열)를 키로 당첨 번호·일치 개수·당첨금만 보여주고 학생 이름이 없음. 진행자가 누가 당첨됐는지 바로 알 수 없음. `get_lottery()` 의 `all_results` 반환(`app.py:1145`)에 `db.session.get(User, int(uid_str)).username` 조회를 추가해 `username` 필드를 포함하면, 프론트 표 컬럼 하나 교체만으로 "홍길동 — 6개 일치 1등!" 발표 가능.
+
+- **참가자 탭 비활성 시 중요 이벤트 브라우저 알림** (`app.js:625-651`): 참가자가 다른 탭에서 공부하다가 룰렛/복권 등장을 놓치는 상황이 교실에서 흔함. `document.addEventListener('visibilitychange', ...)` + `Notification API` 를 조합해 탭이 비활성 상태에서 `r.minigame_available` 또는 `r.lottery_active` 가 감지되면 `new Notification('🎰 룰렛이 등장했습니다!')` 를 전송하면 됨. 초기 진입 시 `Notification.requestPermission()` 한 번만 호출. 서버 변경 불필요, 프론트 15줄.
+
+- **URL `?code=` 파라미터 접속 시 기존 세션 선복구** (`app.js:2308-2316`): QR 코드·공유 링크로 `?code=ABC123` 접속 시 `join-code` 입력창만 채우고 바로 `showScreen('screen-join')`으로 이동. 이전 게임 세션이 남아 있으면 `join_room()` 호출 시 "이미 진행 중인 방" 오류가 발생하거나 엉뚱한 방으로 이동할 수 있음. URL 코드 감지 후에도 `api.get('/api/auth/me')` 를 먼저 호출해 `active_room`을 확인하고, 다른 방 세션이 없을 때만 join 화면을 보여주도록 `app.js:2308` 블록을 수정하면 안전.
+
+- **진행자 대시보드에 학생별 시간대 자산 추이 라인 차트** (`app.js:408-431`, `app.js:432-478`): 진행자 순위 탭에 수평 막대 차트(`host-bar-chart`)가 있지만 시간에 따른 자산 변화는 없음. 학생 화면의 `S.assetHistory` 패턴과 같이 `hostAssetHistory: {}` (user_id → 시간별 자산 배열)를 `loadHostMembers()` 호출마다 누적하고, 상위 5명의 자산 라인을 Chart.js 멀티 데이터셋으로 렌더링하면 "이 순간 역전이 일어났다" 지점을 교육 소재로 활용 가능. 서버 변경 불필요, 프론트 30줄.
+
+- **결과 화면에서 거래 횟수·최고 수익 종목 요약 제공** (`app.py:829-847`, `app.js:1760-1777`): 결과 화면의 "내 결과" 카드(`results-my-stats`)는 순위·자산·수익률 3가지만 표시. `GET /api/rooms/<rid>/transactions` (이미 구현됨)를 단 한 번 호출해 `buy_count`, `sell_count`, 가장 많이 이익을 낸 종목을 집계하고 "총 18번 거래 · 가장 수익이 좋은 종목: 삼성바이오로직스 +23.1%"를 추가하면 수업 후 자기 투자 스타일 성찰 활동에 활용 가능. 프론트 20줄, 서버 변경 불필요.
+
+### 제거/단순화할 것들
+
+- **`api` 객체에 네트워크 예외 처리 미적용** (`app.js:29-45`): `api.get()`, `api.post()`, `api.del()` 모두 `fetch()` 가 던지는 네트워크 예외(오프라인, Render 슬립 중 타임아웃 등)를 잡지 않아, 호출부 대다수가 try-catch 없이 `const data = await api.post(...)` 패턴을 쓰므로 `data` 가 undefined가 되면 `data.error` 참조에서 런타임 에러로 UI가 완전히 멈춤. `api.get/post/del` 각각 `fetch(...)` 를 `try { ... } catch { return {error: '네트워크 오류'}; }` 로 감싸면 3개 함수 각 2줄 추가로 전체 호출부 보호.
+
+- **로비 아바타가 항상 학번 첫 숫자를 표시** (`app.js:228`, `app.js:583`): `m.username[0].toUpperCase()` 에서 `username`은 "20715 홍길동" 형식이므로 호스트 로비(`loadLobbyMembers`)와 참가자 로비(`loadPLobbyMembers`) 양쪽 모두 아바타가 '2' 같은 숫자를 표시함. `m.username.split(' ').slice(1).join(' ')[0] || m.username[0]` 으로 이름 첫 글자를 추출하면 각 파일 1줄 수정으로 해결.
+
+- **결과 대기 폴링 주기 3초가 불필요하게 짧음** (`app.js:786-796`): `startWaitingPoll()` 이 `/api/rooms/<rid>` 를 3초마다 폴링. `results_published` 는 진행자가 수동 버튼을 누를 때만 변하므로 10초 이상 지연도 체감 없음. 교실 30명 동시 대기 시 초당 10 요청 → `3000` 을 `10000` 으로 교체(1자 수정)하면 서버 부하 70% 절감.
+
+- **`showPausedBanner()` 빠른 연속 호출 시 배너 중복 삽입 가능성** (`app.js:653-666`): `showPausedBanner()` 내부에서 `getElementById('paused-banner')` 로 기존 배너를 확인하지만, 같은 tick 내에서 `hidePausedBanner()` → `showPausedBanner()` 가 두 번 호출되면 첫 번째 `remove()` 후 두 번째 `getElementById` 가 null을 반환해 배너 두 개가 삽입될 수 있음. 함수 첫 줄에 `document.getElementById('paused-banner')?.remove()` 를 추가해 항상 단일 배너를 보장하면 1줄 수정으로 해결.
+
+- **`StockService.get_history()` 의 차트 날짜가 항상 UTC 기준 과거일** (`stock_service.py:296-305`): `datetime.utcfromtimestamp(now - i * 86400).strftime('%Y-%m-%d')` 로 날짜를 생성하므로, KST 기준 오전 9시 이전에 수업하면 차트의 가장 최근 봉이 전날 날짜로 표시됨. 이미 시뮬레이션 데이터라 절대 날짜가 의미 없으므로, 날짜 대신 "D-30", "D-29", … "D-1" 같은 상대 레이블로 교체하면 혼란 방지 및 UTC/KST 변환 코드도 제거 가능. `stock_service.py:297` 1줄, `app.js:1369` 레이블 처리 1줄 수정.
+
+- **`doAuth()` 에서 학번·이름 검증 없이 서버에 요청** (`app.js:73-79`, `app.py:329-342`): 클라이언트에서 `sid` 와 `name` 의 공백·특수문자 여부를 검증하지 않아 학번에 공백이 포함되면 `username = '2 07 15 홍길동'` 처럼 파싱 기준인 첫 공백 위치가 달라져 엑셀 내보내기(`app.py:1435-1437`)의 학번·이름 분리가 깨짐. `doCreateRoom()`·`doJoinRoom()` 에서 `if (/\s/.test(sid)) { err.textContent = '학번에 공백을 포함할 수 없습니다.'; return; }` 1줄 추가로 방어 가능(`app.js:130`, `app.js:149`).
