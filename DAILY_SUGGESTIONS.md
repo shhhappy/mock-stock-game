@@ -1863,3 +1863,29 @@
 - **`get_rankings()`·`host_members()` 의 N+1 쿼리 문제** (`app.py:808-824`, `app.py:542-562`): 두 함수 모두 전체 멤버를 먼저 조회 후 각 멤버에 대해 `member_total_value()` 를 개별 호출. `member_total_value()` 내부(`app.py:107-118`)에서 `RoomHolding.query.filter_by(room_id=rid, user_id=uid)` 와 `Deposit.query.filter_by(room_id=rid, user_id=uid)` 를 각각 1회씩 실행하므로, 30명 방 기준 `/rankings` 1회 호출 시 최소 62회 DB 쿼리 발생. `RoomHolding.query.filter_by(room_id=rid).all()` 과 `Deposit.query.filter_by(room_id=rid, status='active').all()` 을 각각 1회 bulk 조회 후 `{user_id: records}` dict로 그룹핑하면 2번의 쿼리로 동일 결과 달성 가능.
 
 - **기본 `SECRET_KEY` 가 공개 레포에 평문 하드코딩** (`app.py:13`): `app.secret_key = os.environ.get('SECRET_KEY', 'mock-stock-game-secret-2024')` — `SECRET_KEY` 환경변수를 설정하지 않으면 `'mock-stock-game-secret-2024'` 라는 공개된 고정 키로 Flask 세션 쿠키가 서명됨. 이 키를 아는 누구나 `itsdangerous` 로 임의 `user_id` 를 담은 세션 쿠키를 위조해 다른 사용자로 로그인 가능. fallback을 `secrets.token_hex(32)` 로 교체하면 재시작마다 랜덤 키가 생성되어 기존 세션이 무효화되는 대신 세션 위조는 불가능해짐. 운영 환경에서는 반드시 `SECRET_KEY` 환경변수를 설정해야 한다는 경고를 `app.py` 상단에 `if not os.environ.get('SECRET_KEY'): warnings.warn(...)` 으로 추가하는 것도 권장.
+
+## 2026-07-08
+
+### 추가하면 좋을 기능
+
+- **게임 종료 1분 카운트다운 취소 기능 없음** (`app.py:527-537`, `app.js:540-552`): 진행자가 실수로 "게임 종료" 버튼을 누르면 `end_time = now + 60s` 로 단축되고 `_ending_soon.add(rid)` 되어 UI에서 버튼이 비활성화됨. 취소 수단이 없어 실수 시 무조건 1분 안에 게임이 끝남. `POST /api/rooms/<rid>/cancel-end` 엔드포인트를 추가해 `_ending_soon.discard(rid)` + `room.end_time += timedelta(seconds=60 - elapsed)` 로 복구하고, 프론트에서 `ending_soon=True` 일 때 "⏰ 1분 후 종료" 버튼 옆에 "취소" 버튼을 표시하면 진행자 실수를 바로잡을 수 있음. 서버 10줄, 프론트 5줄.
+
+- **참가자 로비에 본인 이름 하이라이트 없음** (`app.js:582-585`): `loadPLobbyMembers()` 에서 참가자 목록을 렌더링할 때 `S.user.username === m.username` 비교를 통해 본인 항목에 "나" 배지(`<span class="chip chip-blue">나</span>`)를 표시하면, 학생이 자기 이름이 올바르게 입력됐는지 바로 확인 가능. 교실에서 이름을 잘못 입력한 학생이 재입장해야 할 상황을 빠르게 인지할 수 있음. 1줄 수정.
+
+- **`_quiz_settings`, `_roulette_config` 서버 재시작 시 초기화** (`app.py:250`, `app.py:1246`): 퀴즈 보상/패널티 비율(`_quiz_settings`)과 룰렛 확률 설정(`_roulette_config`)이 모두 인메모리 딕셔너리. Render 무료 플랜은 15분 비활성 시 서버를 슬립·재시작하므로, 긴 수업 중 잠시 활동이 끊기면 진행자가 세심하게 설정한 값이 기본값으로 리셋됨. `Room` 모델에 `quiz_reward_pct FLOAT DEFAULT 1.0`, `quiz_penalty_pct FLOAT DEFAULT 0.5`, `rlt_config TEXT DEFAULT NULL` 컬럼을 추가하고(모델 3줄 + migration), `quiz_settings`·`host_roulette_config` 엔드포인트에서 DB 저장·로드로 전환하면 영속성 보장. 대안: `get_room_service()` 재초기화 시 Room에서 설정값을 읽어오는 방식도 가능.
+
+- **`host_force_price()` 호출 후 앱 레벨 뉴스 캐시 미갱신** (`app.py:684-687`, `app.py:71-84`): `force_price()` 호출 시 `StockService._news` 는 즉시 업데이트되지만(`stock_service.py:234-240`), `app.py` 의 `_news_cache` 는 갱신되지 않음. 이후 참가자의 `GET /api/rooms/<rid>/news` 요청이 최대 2초(`NEWS_CACHE_TTL`)간 이전 캐시를 반환해, 진행자가 방금 강제 조정한 종목의 뉴스가 늦게 전파됨. `app.py:686` (결과 반환 직전)에 `_invalidate_news_cache(rid)` 1줄 추가로 즉시 수정 가능. `host_send_news()` 는 이미 `_invalidate_news_cache(rid)` 를 호출하고 있어(`app.py:700`) 동일 패턴.
+
+- **`rlt_triggered=True` + Render 재시작 시 게임 무기한 일시정지 고착** (`app.py:446-465`, `app.py:467-468`): 게임 종료 5초 전 룰렛 자동 발동(`rlt_triggered=True`, `status='paused'`) 후 Render가 재시작되면 `_rlt_active[rid]` 는 `{'count': 0, 'auto_paused': True}` 로 초기화됨. 이 상태에서 모든 참가자가 이미 3번 스핀을 완료했거나 룰렛을 닫아 `minigame/open` 을 재호출하지 않으면, `minigame/close` 도 발생하지 않아 게임이 무기한 `paused` 로 고착됨. 학생 화면에는 일시정지 배너만 표시됨. 진행자 설정 탭에서 `room.rlt_triggered && room.status === 'paused'` 일 때 "🎰 룰렛 강제 종료 후 게임 마무리" 버튼을 표시하고, `POST /api/rooms/<rid>/force-end-roulette` 로 `_end_room()` 을 직접 호출하면 최소한의 방어책이 됨.
+
+### 제거/단순화할 것들
+
+- **`create_room()` stale 방 정리 쿼리에 `waiting` 상태 방 미포함** (`app.py:372-374`): 진행자가 방을 만들고 학생들을 기다리다 이탈하면 `waiting` 상태로 남음. `stale_cutoff` 쿼리가 `status.in_(['active','paused'])` 만 검사하므로 2시간이 지나도 `waiting` 방은 정리되지 않아, 다음 수업에 방을 새로 만들면 "이미 진행 중인 방이 있습니다." 오류 발생. `app.py:374` 직전에 `stale_waiting = Room.query.filter(Room.host_id == user.id, Room.status == 'waiting', Room.created_at < stale_cutoff).first(); if stale_waiting: db.session.delete(stale_waiting); db.session.commit()` 3줄 추가로 해결.
+
+- **`refreshMyRank()` 가 `execTrade()` 직후와 10초 폴링 양쪽에서 중복 호출** (`app.js:1453`, `app.js:647`): `execTrade()` 성공 후 `refreshMyRank()`(`app.js:1453`)를 즉시 호출하고, 10초 폴링(`app.js:647`)에서도 항상 `refreshMyRank()` 를 호출. `refreshMyRank()` 내부에서 `GET /api/rooms/<rid>/rankings` 를 실행하는데, 이는 모든 멤버에 대해 N+1 DB 쿼리를 유발. 거래 직후에는 서버가 이미 반환한 `data.cash` 를 사용해 상단 `pg-cash` 를 업데이트하는 것으로 충분하며, 순위 변화 반영은 다음 폴링 주기에 맡겨도 됨. `execTrade()` 의 `refreshMyRank()` 호출(app.js:1453)을 제거하거나 debounce(1000ms) 처리.
+
+- **진행자 로비·게임 탭 강퇴/조정 버튼 onclick 인라인 이스케이프 취약** (`app.js:229`, `app.js:425`): `onclick="doKickMember(${m.user_id},'${m.username.replace(/'/g,"\\'")}')"` — `m.username` 에 역슬래시·쌍따옴표·HTML 특수문자가 포함되면 이스케이프가 불완전해 onclick 속성 탈출 또는 JS 오류 발생 가능. 학생 이름이 사용자 입력값 그대로 전달되므로 XSS 벡터가 될 수 있음. `data-uid="${m.user_id}" data-name="${escHtml(m.username)}"` 속성에 값을 분리 저장하고 `onclick="kickFromAttr(this)"` → `function kickFromAttr(b){doKickMember(+b.dataset.uid, b.dataset.name)}` 패턴으로 교체하면 이스케이프 불필요. 동일 패턴이 진행자 게임 탭 `host-members-list` 렌더링(`app.js:424-425`)에도 존재.
+
+- **`setDepPct()` 의 10,000원 단위 절삭으로 소액 시작 자금에서 예금 버튼이 동작 안 함** (`app.js:1597-1600`): `Math.floor(cash * pct / 100 / 10000) * 10000` — 시작 자금이 100만원 미만이거나 현금이 5만원 이하일 때 "10%" 버튼을 누르면 결과가 0이 되어 입력값이 비워짐. `app.js:1598` 의 `amount > 0 ? amount : ''` 부분을 `amount >= 10000 ? amount : Math.floor(cash * pct / 100)` 으로 수정하면, 소액에서도 1원 단위로 정상 동작하며 최소 예금 금액 체크는 서버에 위임.
+
+- **자동 생성 뉴스의 방향 힌트(`show_hint`)가 수동 전송 한 번으로 영구 변경됨** (`stock_service.py:155-158`, `app.py:693-701`): `trigger_news(show_hint)` 가 `self._show_hint = show_hint` 를 저장하고, 이후 자동 뉴스 생성 `_maybe_generate_news()` → `_generate_news(show_hint=None)` 이 `self._show_hint` 를 사용하는 구조. 진행자가 체크박스를 해제하고 뉴스를 한 번 전송하면 이후 모든 자동 뉴스도 힌트 없이 발행됨. 이 연동이 의도된 동작인지 UI에 전혀 표시되지 않음. 설정 탭에 "자동 뉴스 힌트 기본 표시" 영속 토글(`GET/POST /api/rooms/<rid>/host/news-interval` 에 `default_show_hint` 파라미터 추가)을 분리하면 명시적 제어 가능. 단기 해결책: `trigger_news()` 의 `self._show_hint` 저장을 제거하고 자동 뉴스는 항상 `True`, 수동 전송만 파라미터를 따르도록 분리(`stock_service.py:204-209`).
