@@ -1889,3 +1889,31 @@
 - **`setDepPct()` 의 10,000원 단위 절삭으로 소액 시작 자금에서 예금 버튼이 동작 안 함** (`app.js:1597-1600`): `Math.floor(cash * pct / 100 / 10000) * 10000` — 시작 자금이 100만원 미만이거나 현금이 5만원 이하일 때 "10%" 버튼을 누르면 결과가 0이 되어 입력값이 비워짐. `app.js:1598` 의 `amount > 0 ? amount : ''` 부분을 `amount >= 10000 ? amount : Math.floor(cash * pct / 100)` 으로 수정하면, 소액에서도 1원 단위로 정상 동작하며 최소 예금 금액 체크는 서버에 위임.
 
 - **자동 생성 뉴스의 방향 힌트(`show_hint`)가 수동 전송 한 번으로 영구 변경됨** (`stock_service.py:155-158`, `app.py:693-701`): `trigger_news(show_hint)` 가 `self._show_hint = show_hint` 를 저장하고, 이후 자동 뉴스 생성 `_maybe_generate_news()` → `_generate_news(show_hint=None)` 이 `self._show_hint` 를 사용하는 구조. 진행자가 체크박스를 해제하고 뉴스를 한 번 전송하면 이후 모든 자동 뉴스도 힌트 없이 발행됨. 이 연동이 의도된 동작인지 UI에 전혀 표시되지 않음. 설정 탭에 "자동 뉴스 힌트 기본 표시" 영속 토글(`GET/POST /api/rooms/<rid>/host/news-interval` 에 `default_show_hint` 파라미터 추가)을 분리하면 명시적 제어 가능. 단기 해결책: `trigger_news()` 의 `self._show_hint` 저장을 제거하고 자동 뉴스는 항상 `True`, 수동 전송만 파라미터를 따르도록 분리(`stock_service.py:204-209`).
+
+## 2026-07-08 (2차)
+
+### 추가하면 좋을 기능
+
+- **`lottery_draw()` + `get_lottery()` 동시 실행 시 `_do_reveal()` 이중 호출로 당첨금 이중 지급 위험** (`app.py:1185-1207`, `app.py:1122-1130`): `lottery_draw()` 가 `_lottery_lock` 없이 `_do_reveal(rid, cur)` 를 호출하는 반면, `get_lottery()` 의 타임아웃 자동추첨은 `with _lottery_lock:` 블록 안에서 실행됨. 진행자가 "추첨" 버튼을 누르는 동시에 10초 타임아웃이 만료되면 두 경로가 동시에 `_do_reveal()` 에 진입해 DB에 당첨금이 이중 지급될 수 있음. `lottery_draw()` 에도 `with _lottery_lock: if _lottery_state.get(rid, {}).get('state') == 'drawing': _do_reveal(rid, cur)` 형태로 Lock 범위를 확장하고, `_do_reveal()` 내부에서 상태를 먼저 `'revealed'` 로 전환 후 DB 업데이트하는 check-and-set 패턴으로 방어 필요.
+
+- **거래 내역 `note` 필드 XSS — `host_adjust()` 자유 입력값이 innerHTML 에 직접 삽입** (`app.py:596`, `app.js:530`, `app.js:1581`): `loadStudentTxn()`(`app.js:530`)과 `loadTxn()`(`app.js:1581`) 모두 `` `${t.note}` `` 를 innerHTML 로 렌더링함. `host_adjust()` 가 note 를 별도 검증 없이 DB에 저장하므로, 교사 계정이 `<img src=x onerror=alert(document.cookie)>` 같은 값을 note 로 입력하면 거래 내역을 조회하는 모든 학생 화면에서 JS 가 실행됨. 기존에 문서화된 XSS 항목은 `username` 필드를 대상으로 했으나 `note` 필드는 미언급. `t.note` 렌더링 전 `escHtml()` 함수를 적용하거나 `textContent` 로 교체하면 해결.
+
+- **모바일 화면 회전 시 종목 차트 크기 미갱신** (`app.js:1375-1398`): Chart.js 에 `responsive: true` 가 설정되어 있지만 `orientationchange` 이벤트 리스너가 없음. 세로 모드에서 차트를 열고 가로로 회전하면 차트가 좁은 세로 폭에 고정된 채 유지됨. `window.addEventListener('orientationchange', () => { if (S.stockChart) S.stockChart.resize(); })` 한 줄 추가로 해결 가능. `resize` 이벤트와 함께 등록하면 일반 브라우저 창 크기 변경도 대응.
+
+- **퀴즈 쿨다운 일괄 강제 초기화 엔드포인트 부재** (`app.py:1244-1246`): 교사가 "다시 풀어봅시다"라고 해도 `_quiz_cooldowns[rid][uid]` 의 60초 쿨다운이 만료될 때까지 학생들이 재시도 불가. `POST /api/rooms/<rid>/host/reset-quiz-cooldowns` 엔드포인트를 추가해 `_quiz_cooldowns.pop(rid, None)` 한 줄로 해당 방의 모든 쿨다운을 즉시 초기화하면 수업 흐름 개선. 진행자 퀴즈 탭 UI에 "쿨다운 초기화" 버튼과 연결.
+
+- **`openStockModal()` 매번 portfolio API 호출 → 학생 30명 동시 모달 오픈 시 N+1 쿼리 급증** (`app.js:1344-1351`): 학생이 종목을 클릭할 때마다 `GET /api/rooms/<rid>/portfolio` 를 호출하고, 해당 엔드포인트는 RoomHolding + Deposit 을 별도 쿼리로 조회함. 교실 전체 학생이 동시에 모달을 열면 순간적으로 수십 개 요청이 발생. `S.portCache = {data: null, ts: 0}` 상태 변수를 추가하고 `Date.now() - S.portCache.ts < 5000` 이면 캐시 재사용, 매매 성공(`execTrade`) 시 `S.portCache.ts = 0` 으로 캐시 무효화하면 불필요한 API 호출을 크게 줄일 수 있음.
+
+- **`startNewsPolling()` `S.newsTs = 0` 초기화로 게임 진입 직후 오래된 뉴스 팝업이 무조건 표시** (`app.js:807-819`): `S.newsTs` 를 `0` 으로 초기화하면 첫 폴링(~8초 후)에서 서버가 반환하는 임의 타임스탬프가 항상 0 보다 크므로 "신규 뉴스" 로 판정해 팝업이 뜸. 학생이 게임에 막 입장했을 때 이미 몇 분 전에 발행된 뉴스가 팝업으로 나타나 혼란을 줌. `enterParticipantGame()` 에서 `startNewsPolling()` 을 호출하기 전 `S.newsTs = Math.floor(Date.now() / 1000)` 으로 현재 시각을 설정하면 게임 진입 이후 발행된 뉴스만 팝업으로 표시.
+
+### 제거/단순화할 것들
+
+- **`get_room()` 내 `cur_user()` 3회 중복 호출 — 요청당 최소 2회 DB 왕복 낭비** (`app.py:439`, `app.py:444`, `app.py:473`): `cur_user()` 가 `db.session.get(User, session['user_id'])` 를 실행하는데, `get_room()` 함수 내에서 자동 종료 early-return 경로(`app.py:439`), paused 자동 종료 경로(`app.py:444`), 정상 반환 경로(`app.py:473`) 각각에서 별도로 호출됨. 함수 시작부에서 `user = cur_user()` 를 한 번만 실행하고 이하 세 경로에서 재사용하면 요청당 최소 2회 DB 쿼리 절감. 폴링 빈도가 높은 엔드포인트이므로 효과 큼.
+
+- **`create_room()` `starting_cash` float 소수점 미정규화 — 소수점 초기 자금으로 오차 누적** (`app.py:385`): `starting_cash=max(100000, float(d.get('starting_cash', 10_000_000)))` — `"1000000.5"` 같은 입력을 허용해 `Room.starting_cash` (Float 컬럼)에 소수점 값이 저장됨. 이후 현금 초기화, 수익률 계산, 이자 계산 모두 이 값을 기준으로 하므로 부동소수점 오차가 누적. `int(round(float(...)))` 로 정수화 후 저장하도록 한 줄 수정으로 해결. `deposit_rate` 도 소수점 자릿수를 `round(rate, 2)` 로 제한하는 검증 추가 권장.
+
+- **`host_adjust()` `user_id` 타입 미검증 — PostgreSQL 환경에서 DataError → 500 오류** (`app.py:594-597`): `target_uid = d.get('user_id')` 후 바로 `RoomMember.query.filter_by(room_id=rid, user_id=target_uid)` 실행. JSON 바디에서 `"user_id": "abc"` 로 전송 시 SQLite 에서는 0 rows → 404 이지만, PostgreSQL 정수 컬럼에 문자열을 비교하면 `DataError` 가 발생해 500 응답. `try: target_uid = int(d.get('user_id')) except (TypeError, ValueError): return jsonify({'error': '잘못된 사용자 ID'}), 400` 가드 한 블록 추가로 방어.
+
+- **`get_quiz()` / `submit_quiz()` QUIZ_QUESTIONS 선형 탐색 반복 — dict 로 교체하면 O(n)→O(1)** (`app.py:1265`, `app.py:1283`): `next((x for x in QUIZ_QUESTIONS if x['id'] == state['qid']), None)` 패턴이 두 라우트에서 동일하게 반복. `education_data.py` 에서 `QUIZ_QUESTIONS_MAP = {q['id']: q for q in QUIZ_QUESTIONS}` 를 한 번 생성하고 `app.py` 에서 `from education_data import QUIZ_QUESTIONS_MAP` 후 `QUIZ_QUESTIONS_MAP.get(state['qid'])` 로 조회하면 O(n) → O(1). 문제 수가 늘어날수록 효과가 커지며, 코드 중복도 제거됨.
+
+- **`export_rankings()` 내부 `import openpyxl` — 모듈 레벨 import 로 이동하여 명시성 향상** (`app.py:1422-1424`): `try: import openpyxl ... except ImportError: return ... 415` 패턴이 함수 바디 안에 있어 의존성이 숨겨져 있음. 배포 환경에서 `openpyxl` 누락 시 엑셀 내보내기 요청이 올 때까지 오류가 드러나지 않음. `requirements.txt` 에 `openpyxl` 을 명시하고 파일 상단에서 `import openpyxl` 을 실행하되, 누락 시 `ImportError` 가 앱 시작 시점에 발생하도록 변경하면 운영 중 런타임 오류를 사전에 방지. 또는 현재 패턴을 유지하되 `requirements.txt` 누락 여부만 CI 에서 검증.
