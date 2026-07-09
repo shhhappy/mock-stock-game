@@ -1917,3 +1917,38 @@
 - **`get_quiz()` / `submit_quiz()` QUIZ_QUESTIONS 선형 탐색 반복 — dict 로 교체하면 O(n)→O(1)** (`app.py:1265`, `app.py:1283`): `next((x for x in QUIZ_QUESTIONS if x['id'] == state['qid']), None)` 패턴이 두 라우트에서 동일하게 반복. `education_data.py` 에서 `QUIZ_QUESTIONS_MAP = {q['id']: q for q in QUIZ_QUESTIONS}` 를 한 번 생성하고 `app.py` 에서 `from education_data import QUIZ_QUESTIONS_MAP` 후 `QUIZ_QUESTIONS_MAP.get(state['qid'])` 로 조회하면 O(n) → O(1). 문제 수가 늘어날수록 효과가 커지며, 코드 중복도 제거됨.
 
 - **`export_rankings()` 내부 `import openpyxl` — 모듈 레벨 import 로 이동하여 명시성 향상** (`app.py:1422-1424`): `try: import openpyxl ... except ImportError: return ... 415` 패턴이 함수 바디 안에 있어 의존성이 숨겨져 있음. 배포 환경에서 `openpyxl` 누락 시 엑셀 내보내기 요청이 올 때까지 오류가 드러나지 않음. `requirements.txt` 에 `openpyxl` 을 명시하고 파일 상단에서 `import openpyxl` 을 실행하되, 누락 시 `ImportError` 가 앱 시작 시점에 발생하도록 변경하면 운영 중 런타임 오류를 사전에 방지. 또는 현재 패턴을 유지하되 `requirements.txt` 누락 여부만 CI 에서 검증.
+
+---
+
+## 2026-07-09
+
+### 추가하면 좋을 기능
+
+- **QR 코드 스캔 후 방 코드 자동 입력** (`app.js:195-206`, `app.js:143-169`): `_makeQR()` 에서 `?code=${S.room.code}` 파라미터를 포함한 URL 을 QR 에 인코딩하지만, 페이지 진입 시 이 파라미터를 읽어 `join-code` 입력을 자동 채우는 코드가 없음. 학생이 QR 을 스캔해도 코드를 다시 손으로 입력해야 함. `app.js` 최상단 초기화 코드에 `const _urlCode = new URLSearchParams(location.search).get('code'); if (_urlCode) { showScreen('screen-join'); document.getElementById('join-code').value = _urlCode.toUpperCase(); document.getElementById('join-student-id').focus(); }` 를 추가하면 QR 스캔 → 이름 입력 → 입장 3단계로 단축됨. 서버 변경 불필요.
+
+- **게임 진행 중 강퇴 기능** (`app.py:564-575`): `kick_member()` 엔드포인트가 `room.status != 'waiting'` 조건으로 대기 중인 방에서만 강퇴를 허용. 게임 시작 후 이름을 잘못 입력한 학생이나 중도 이탈자를 처리할 방법이 없음. 활성 게임 중 강퇴를 허용하되, 강퇴 시 보유 주식을 현재가로 자동 청산하고 `RoomHolding` 삭제 + `RoomMember` 삭제를 원자적으로 처리하는 로직(`_end_room()` 내 청산 로직 참조, `app.py:144-152`)을 `kick_member()` 에 추가하면 됨. 대기 중 vs 진행 중 강퇴 처리 분기만 추가하면 구현 가능.
+
+- **복권 기본 상금 상한 제한** (`app.py:419`): 자동 복권 시작 시 기본 상금이 `member_count * 30_000_000` (30명 교실 → 9억원). 시작 자금이 1천만원인 경우 복권 한 번으로 순위가 완전히 역전될 수 있음. 교육 목적상 주식 실력이 아닌 복권 운이 최종 결과를 좌우하는 문제. `default_prize = min(member_count * 30_000_000, room.starting_cash * 5)` 처럼 시작 자금의 N배를 상한으로 두거나, 진행자가 수동으로 시작할 때(`app.py:1085-1087`)처럼 자동 시작 때도 진행자 확인을 거치는 방식 권장.
+
+- **주식 단일 종목 최대 비중 경고** (`app.js:1424-1454`, 거래 UI): 현재 전재산을 단 하나의 종목에 투자 가능해 고위험·고수익 전략이 우선됨. 경제 수업 취지에 맞게 단일 종목 비중이 총 자산의 50% 초과 시 매수 버튼 클릭 전 `"⚠️ 이 종목에 총 자산의 XX% 이상 투자됩니다. 계속하시겠습니까?"` confirm 대화상자를 표시하는 정도면 충분. 서버 검증 불필요, `execTrade()` (`app.js:1424`) 내 분기 추가만으로 구현.
+
+- **진행자 공지 전송 기능** (`app.py` 신규 엔드포인트, `app.js:startNewsPolling()`): 폭탄뉴스는 주가 힌트를 포함한 자동 이벤트지만, 진행자가 "지금부터 반도체 섹터 뉴스에 주목하세요" 같은 순수 텍스트 공지를 전체 참가자에게 보내는 방법이 없음. `GET /api/rooms/<rid>/news` 응답에 `notice: str | null` 필드를 추가하고, `POST /api/rooms/<rid>/host/notice` 로 설정하면, 기존 뉴스 폴링(`startNewsPolling()`, `app.js:807-819`)을 재사용해 참가자 화면에 별도 배너로 표시 가능. 서버 측 신규 필드 2개 + 클라이언트 배너 렌더링으로 구현 가능.
+
+- **게임 중 예금 금리 변경 기능** (`models.py:34`, `app.py:878-902`): `Room.deposit_rate` 는 방 생성 시에만 설정되고 게임 중 변경 불가. "오늘 기준금리가 인상되었습니다" 같은 경제 이벤트를 연출할 수 없음. `Room` 모델에 `current_deposit_rate` 컬럼을 추가하거나, 진행자 설정 탭에 `PATCH /api/rooms/<rid>/host/deposit-rate` 엔드포인트를 연결해 `room.deposit_rate` 를 실시간으로 바꾸면 됨. 이미 생성된 예금은 가입 시 `d.rate` 를 각자 보유하고 있으므로(`models.py:88`) 소급 적용 없이 새 예금부터 신금리 적용.
+
+---
+
+### 제거/단순화할 것들
+
+- **`showHome` = `showLanding` 불필요한 별칭** (`app.js:99`): `function showHome() { showLanding(); }` 한 줄짜리 함수. 파일 내 어디서도 `showHome` 이 호출되지 않음 (전체 `app.js` 에서 `showHome` 검색 시 정의부 외 사용 없음). 함수 삭제 후 혹시 남은 참조가 있다면 `showLanding()` 으로 직접 교체하면 됨.
+
+- **`api.get/post/del` 오류 응답 바디 무시** (`app.js:31-45`): `if (!r.ok) return {error: \`HTTP \${r.status}\`}` 패턴으로 서버가 반환하는 실제 오류 메시지(`data.error` JSON 필드)를 버리고 HTTP 상태 코드만 노출. 학생 화면에서 "HTTP 400" 이라는 의미 없는 오류가 표시되는 경우 발생. `if (!r.ok) { const body = await r.json().catch(() => ({})); return {error: body.error || \`HTTP \${r.status}\`}; }` 로 교체하면 서버 오류 메시지를 그대로 표시 가능. 3개 메서드 모두 동일 패턴이므로 일괄 수정.
+
+- **`_auto_start_lottery_if_due()` 가 모든 `/api/rooms/<rid>` 폴링에서 실행** (`app.py:470`): `get_room()` 라우트 (`app.py:432-473`) 의 정상 반환 직전에 `_auto_start_lottery_if_due(room)` 를 항상 호출. 참가자·진행자 합산 30여명이 10초마다 폴링하면 분당 180회 이 함수가 실행되며, 매 실행마다 `_lot_round_due()` 가 `_lots.setdefault(room.id, ...)` 를 포함한 계산을 수행. 복권 트리거 기준은 `remaining` 과 `total_s` 의 비율로 결정되므로, 이미 복권이 진행 중이거나(`lot.get('current')...state in ('picking', 'drawing')`) 방이 `active` 가 아닐 때는 `_lot_round_due()` 가 `None` 을 반환(`app.py:180-181`)해 조기 탈출. 그러나 Lock 진입 없이 dict 접근을 반복하는 비용은 여전히 발생. `room.status == 'active'` 조건 체크를 `_auto_start_lottery_if_due()` 진입부로 올려(`app.py:409`에 이미 있음) 리팩터링 불필요하지만, 인라인 조건으로 `if room.status == 'active': _auto_start_lottery_if_due(room)` 로 단락 평가를 명확히 하면 가독성 향상.
+
+- **주식 차트 기간 파라미터가 실질적으로 의미 없음** (`stock_service.py:281-309`, `app.py:715-719`): 클라이언트는 `1d/1w/1mo/3mo/1y` 중 하나를 전달하고, 서버는 이를 yfinance 스타일 기간으로 매핑(`app.py:715`)하지만 실제로는 `get_history()` 에서 `n_bars = {'1d': 30, '5d': 5, '1mo': 30, '3mo': 90}.get(period, 30)` 로 bar 수만 바뀌고, 모두 `datetime.utcnow()` 기준 과거 N일을 랜덤 생성(`stock_service.py:296`). "1일" 탭이 실제로는 30개 랜덤 일별 캔들을 표시하는 등 기간 의미가 왜곡됨. 간단한 해결: 기간 탭 UI를 제거하고 게임 시작 이후 실제 가격 변동 이력(tick log)을 서버에 누적해 표시하거나, 현재처럼 랜덤 생성이라면 UI에서 기간 탭을 없애고 단일 차트로 단순화.
+
+- **`doAuth()` 성공 후 `api.post('/api/rooms', ...)` 실패 시 사용자만 생성된 고아 상태** (`app.js:133-138`, `app.py:329-390`): `doCreateRoom()` 에서 `await doAuth(sid, hostName)` 이 성공하면 DB 에 `User` 가 생성/조회됨. 이후 `api.post('/api/rooms', ...)` 가 실패(네트워크 오류, 방 이름 중복 등)하면 사용자는 존재하지만 `S.room` 이 없는 상태로 `screen-host-create` 화면에 남음. 재시도 시 동일 학번으로 재인증 → 이미 존재하는 User 조회 → 정상 작동하므로 심각하지 않지만, 에러 상태에서 입력란을 비우지 않아 혼란 여지. `err.textContent = data.error; return;` 전에 입력 상태를 유지하는 것은 UX 상 올바르나, 실패 메시지 후 방 이름 입력란에 포커스를 이동(`document.getElementById('room-name').focus()`)하면 재시도 경험 개선.
+
+- **`_quiz_settings` 와 `_roulette_config` 가 서버 재시작 시 초기화** (`app.py:1246-1247`, `app.py:250`): 게임 중 서버가 재시작(Render 무료 플랜 자동 재배포 등)되면 진행자가 설정한 퀴즈 보상 비율과 룰렛 배율·확률이 기본값으로 리셋됨. 반면 복권 진행 라운드는 `room.lottery_rounds_done` DB 컬럼으로 복구(`app.py:174-179`). 동일 패턴으로 `Room` 에 `quiz_settings_json` (VARCHAR), `roulette_config_json` (VARCHAR) 컬럼을 추가해 진행자 설정 저장 시 DB 에도 반영하면 재시작 내성 확보 가능. Render 무료 플랜 특성상 수업 중 재시작이 발생할 수 있어 우선순위 높음.
+
