@@ -1952,3 +1952,35 @@
 
 - **`_quiz_settings` 와 `_roulette_config` 가 서버 재시작 시 초기화** (`app.py:1246-1247`, `app.py:250`): 게임 중 서버가 재시작(Render 무료 플랜 자동 재배포 등)되면 진행자가 설정한 퀴즈 보상 비율과 룰렛 배율·확률이 기본값으로 리셋됨. 반면 복권 진행 라운드는 `room.lottery_rounds_done` DB 컬럼으로 복구(`app.py:174-179`). 동일 패턴으로 `Room` 에 `quiz_settings_json` (VARCHAR), `roulette_config_json` (VARCHAR) 컬럼을 추가해 진행자 설정 저장 시 DB 에도 반영하면 재시작 내성 확보 가능. Render 무료 플랜 특성상 수업 중 재시작이 발생할 수 있어 우선순위 높음.
 
+
+---
+
+## 2026-07-09 (2차)
+
+### 추가하면 좋을 기능
+
+- **포트폴리오 탭 종목별 매수/매도 버튼 클릭 시 실시간 가격으로 모달 열기** (`app.js:1557-1561`, `app.js:1327-1357`): `holdings-list`의 매수/매도 버튼이 `openStockModal(symbol, {price: h.current_price, ...})` 형태로 `h.current_price`를 fallback으로 전달. `openStockModal()`은 `S.stocks.find(s => s.symbol === symbol)` 우선 조회하지만, 사용자가 포트폴리오 탭을 오래 유지하는 동안 `S.stocks`가 마지막 `loadMarket()` 당시 캐시라면 이미 만료된 가격으로 수량 계산이 진행됨. `openStockModal()` 내 `const port = await api.get(...)` 호출 전에 `const freshPrice = await api.get(\`/api/rooms/${S.room.id}/stocks\`)` 를 추가해 최신 가격으로 `S.tradePrice` 를 갱신하거나, 단순히 포트폴리오 → 매수/매도 버튼 클릭 시 `loadMarket()` 를 먼저 await 한 뒤 `openStockModal(symbol)` 을 호출하면 서버 1회 추가 요청으로 해결.
+
+- **진행자 대시보드에 종목별 전체 학생 보유 현황 요약 뷰** (`app.py:542-562`, 신규 엔드포인트, `app.js:303-312`): 교사가 "지금 학생들이 어떤 종목에 집중 투자하는지" 실시간으로 파악하면 수업 토론 주제로 활용 가능. 현재 진행자 화면의 "시장" 탭에는 시세만 표시. `GET /api/rooms/<rid>/host/holdings-summary` 엔드포인트를 추가해 `RoomHolding.query.filter_by(room_id=rid)` 결과를 `symbol`로 집계(보유 학생 수, 총 보유 주, 총 평가금액)해 반환. 서버 10줄, 진행자 시장 탭 하단에 표 형태로 추가하면 수업 맥락 실시간 제공.
+
+- **스와이프 제스처로 탭 전환 지원** (`app.js:1209-1226`, `app.js:600-610`): `PAGE_ORDER = ['market','portfolio','deposit','rankings','education']` 순서가 이미 정의되어 있지만 모바일에서 터치 스와이프로 탭 전환이 안 됨. 교실 환경 특성상 학생 대부분이 스마트폰 사용. `document.getElementById('screen-p-game')` 에 `touchstart`/`touchend` 리스너를 추가해 dx > 50px이면 `PAGE_ORDER[PAGE_ORDER.indexOf(S.currentPage) ± 1]` 로 `showPage()` 호출하는 15줄 코드로 구현. 서버 변경 불필요, 네이티브 앱 수준의 UX 개선.
+
+- **결과 화면에서 내 거래 통계 요약 표시** (`app.js:1760-1777`, `app.py:829-847`): `loadResults()` 내 `results-my-stats` 카드(`app.js:1761`)는 최종 순위·자산·수익률 3가지만 표시. 이미 구현된 `GET /api/rooms/<rid>/transactions` 엔드포인트를 결과 화면에서 추가 호출해 `action='BUY'` / `action='SELL'` 건수를 집계하고 가장 많이 거래한 종목(`most_traded`)을 찾아 "총 XX번 거래 (매수 N · 매도 M)" + "최애 종목: 삼성전자" 를 표시하면 학생이 자신의 투자 패턴을 돌아볼 수 있는 교육적 피드백 제공. 프론트 20줄 추가, 서버 변경 없음.
+
+- **게임 종료 후 동점자 2차 정렬 기준 부재** (`app.py:821-823`, `app.js:1841-1885`): `get_rankings()` 에서 `board.sort(key=lambda x: x['total_value'], reverse=True)` 단일 키 정렬 사용. 동점자가 발생하면 `RoomMember.query.filter_by()` 반환 순서(SQLite rowid 순)에 의존해 결과가 비결정적임. 결과 화면과 엑셀 내보내기에서 동점자 순위가 다르게 표시될 수 있음(`export_rankings()` `app.py:1440`도 동일 문제). `board.sort(key=lambda x: (-x['total_value'], x['user_id']))` 로 2차 정렬 기준을 `user_id` 오름차순으로 고정하면 동일 자산이라도 먼저 가입한 학생이 상위 순위를 가져가는 일관된 규칙이 생김. 양쪽 엔드포인트에 한 줄씩 교체.
+
+- **실제 게임 내 가격 변동 이력을 차트에 표시** (`stock_service.py:105-119`, `stock_service.py:174-190`): 현재 차트는 `get_history()`에서 현재가 기준으로 역방향 랜덤 워크를 생성해 허구의 과거 데이터를 보여줌. `StockService.__init__`에 `self._price_log: dict = {sym: [] for sym in STOCKS}` (각 심볼당 `(timestamp, price)` 튜플 리스트)를 추가하고, `get_price()`에서 가격 갱신 시 `self._price_log[sym].append((now, new_price))`를 기록하면 실제 시계열 차트 제공 가능. `get_history()` 에서 `_price_log` 데이터를 우선 사용하고, 초기 데이터가 부족하면 현재 코드의 랜덤 생성으로 fallback. 메모리 상한은 `collections.deque(maxlen=200)` 으로 관리.
+
+### 제거/단순화할 것들
+
+- **`minigame_close()` 내 `Room.query.get(rid)` — deprecated SQLAlchemy API 혼재** (`app.py:977`): 동일 파일의 모든 다른 위치는 `db.session.get(Room, rid)` 또는 Flask-SQLAlchemy의 `Room.query.get_or_404(rid)` 를 사용하는데, `minigame_close()` 안의 `room = Room.query.get(rid)` 만 SQLAlchemy 2.0에서 제거된 `Query.get()` 스타일. `room = db.session.get(Room, rid)` 1줄 교체로 해결. 에러가 발생하지 않는 이유는 현재 Flask-SQLAlchemy 버전이 아직 지원하기 때문이지만, 의존성 업그레이드 시 무음 실패 위험.
+
+- **`create_room()` 에서 `float()` / `int()` 변환에 `try/except` 없음** (`app.py:384-386`): `starting_cash=max(100000, float(d.get('starting_cash', 10_000_000)))`, `deposit_rate=max(0, min(50, float(d.get('deposit_rate', 3.0))))` — 악의적 또는 잘못된 요청에서 문자열 값이 오면 `ValueError`가 전파되어 Flask가 500 응답을 반환. 동일 파일의 `trade()` (`app.py:738`), `host_market_event()` (`app.py:1353`) 등은 `try: ... except: return jsonify({'error': ...}), 400` 패턴으로 방어. `create_room()` 상단에 `try: dur=max(1, min(360, int(d.get('duration_minutes', 30)))); cash=max(100000, float(d.get('starting_cash', 10_000_000))); rate=max(0, min(50, float(d.get('deposit_rate', 3.0)))) \nexcept (TypeError, ValueError): return jsonify({'error': '입력 형식 오류'}), 400` 블록 추가.
+
+- **`get_rankings()` 와 `host_members()` 의 N+1 쿼리 문제** (`app.py:807-823`, `app.py:542-562`): 두 엔드포인트 모두 `for m in RoomMember.query.filter_by(room_id=rid).all()` 루프 내에서 `member_total_value(rid, m.user_id)` 를 호출. `member_total_value()` 는 내부에서 `RoomMember`, `RoomHolding`, `Deposit` 각 1 쿼리 실행 — N=30명 방에서 순위 조회 1회에 91 DB 쿼리. `holdings = RoomHolding.query.filter_by(room_id=rid).all()` + `deposits = Deposit.query.filter_by(room_id=rid, status='active').all()` 2개 일괄 쿼리 후 Python dict로 집계하면 쿼리 수를 O(1)로 줄일 수 있음. 10초 폴링 × 30명 = 분당 180회 순위 요청에서 DB 부하 91배 감소.
+
+- **`app.py:13` 하드코딩 fallback secret key에 경고 없음** (`app.py:13`): `app.secret_key = os.environ.get('SECRET_KEY', 'mock-stock-game-secret-2024')` — 환경변수 미설정 시 알려진 고정 키로 세션이 서명되어 공개 배포 환경에서 세션 위조 가능. Render 등 공개 호스팅 사용 시 실제 보안 위험. `if not os.environ.get('SECRET_KEY'): import warnings; warnings.warn('SECRET_KEY 환경변수가 설정되지 않았습니다. 프로덕션에서 반드시 설정하세요.', stacklevel=2)` 경고를 앱 시작 시 출력하도록 추가. 또는 `os.environ.get('SECRET_KEY') or os.urandom(32)` 로 랜덤 바이트 사용(재시작 시 세션 무효화됨을 인지 필요).
+
+- **`_quiz_state` 딕셔너리 정리에 O(N) 전체 순회** (`app.py:159-160`): `_end_room()` 내 `for k in [k for k in _quiz_state if k[0] == room.id]: del _quiz_state[k]` — 퀴즈 상태 딕셔너리 전체를 순회하며 해당 방의 엔트리를 삭제. 방이 수백 개 동시 활성 상태라면 각 방 종료 시 O(전체 활성 사용자 수) 순회 발생. `_quiz_state_by_room: dict = {}` (room_id → set of user_id) 보조 인덱스를 `_quiz_state` 삽입 시 함께 관리하면 종료 시 `for uid in _quiz_state_by_room.pop(rid, set()): _quiz_state.pop((rid, uid), None)` 로 O(해당방 인원) 처리 가능. 현실적 규모(50개 교실, 각 30명 = 1500 항목)에서는 큰 문제 아니지만, 코드 명확성 개선 차원.
+
+- **`lobby_members()` 엔드포인트가 `/host/` URL에 있으나 진행자 권한 체크 없음** (`app.py:577-585`): `GET /api/rooms/<rid>/host/lobby-members` 는 `@login_required` 데코레이터만 있고 `room.host_id != user.id` 체크가 없어 방의 참가자(학생)도 자유롭게 호출 가능. 실제로 `loadPLobbyMembers()`(`app.js:578`)에서 참가자 로비에서도 이 엔드포인트를 호출하도록 의도적 설계이나, URL 네임스페이스(`/host/`)와 실제 접근 권한이 불일치해 코드 리딩 시 혼란을 유발. `/api/rooms/<rid>/host/lobby-members` → `/api/rooms/<rid>/lobby-members` 로 URL 이동하거나, 현재 URL 유지 시 함수 상단에 `# NOTE: /host/ prefix지만 참가자도 접근 허용 — 로비 공개 정보` 주석 추가로 의도를 명확히.
