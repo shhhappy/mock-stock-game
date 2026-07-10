@@ -1984,3 +1984,32 @@
 - **`_quiz_state` 딕셔너리 정리에 O(N) 전체 순회** (`app.py:159-160`): `_end_room()` 내 `for k in [k for k in _quiz_state if k[0] == room.id]: del _quiz_state[k]` — 퀴즈 상태 딕셔너리 전체를 순회하며 해당 방의 엔트리를 삭제. 방이 수백 개 동시 활성 상태라면 각 방 종료 시 O(전체 활성 사용자 수) 순회 발생. `_quiz_state_by_room: dict = {}` (room_id → set of user_id) 보조 인덱스를 `_quiz_state` 삽입 시 함께 관리하면 종료 시 `for uid in _quiz_state_by_room.pop(rid, set()): _quiz_state.pop((rid, uid), None)` 로 O(해당방 인원) 처리 가능. 현실적 규모(50개 교실, 각 30명 = 1500 항목)에서는 큰 문제 아니지만, 코드 명확성 개선 차원.
 
 - **`lobby_members()` 엔드포인트가 `/host/` URL에 있으나 진행자 권한 체크 없음** (`app.py:577-585`): `GET /api/rooms/<rid>/host/lobby-members` 는 `@login_required` 데코레이터만 있고 `room.host_id != user.id` 체크가 없어 방의 참가자(학생)도 자유롭게 호출 가능. 실제로 `loadPLobbyMembers()`(`app.js:578`)에서 참가자 로비에서도 이 엔드포인트를 호출하도록 의도적 설계이나, URL 네임스페이스(`/host/`)와 실제 접근 권한이 불일치해 코드 리딩 시 혼란을 유발. `/api/rooms/<rid>/host/lobby-members` → `/api/rooms/<rid>/lobby-members` 로 URL 이동하거나, 현재 URL 유지 시 함수 상단에 `# NOTE: /host/ prefix지만 참가자도 접근 허용 — 로비 공개 정보` 주석 추가로 의도를 명확히.
+
+---
+
+## 2026-07-10
+
+### 추가하면 좋을 기능
+
+- **진행자 전용 프로젝터 뷰 / 대형 화면 모드** (`index.html:114-308`, `app.js:258-278`): 교실에서 교사가 화면을 빔프로젝터로 띄울 때 모바일 최적화 레이아웃은 가독성이 떨어짐. `screen-host-game` 내 순위 탭(`htab-rank-content`)에 `?projector=1` 쿼리파라미터를 감지해 폰트 크기 140%, 차트 최대 높이 500px, QR 코드 240px를 자동 적용하는 CSS 클래스 토글(`document.body.classList.toggle('projector', ...)`)이면 서버 변경 없이 구현 가능. 교실 실용성 최상위 개선.
+
+- **진행자가 퀴즈를 전체 학생에게 푸시하는 기능** (`app.py:1248-1342`, `app.js:832-895`): 현재 학생이 자발적으로 🧠 버튼을 눌러야만 퀴즈에 참여 가능. 교사가 수업 흐름에 맞춰 특정 순간에 퀴즈를 강제로 띄우는 것이 불가. `GET /api/rooms/<rid>` 응답(`room_dict()`, `app.py:278-305`)에 `quiz_push_ts` 필드를 추가하고, 진행자가 퀴즈를 푸시하면 이 타임스탬프를 갱신. 참가자 폴링 루프(`app.js:613-651`)에서 이전 타임스탬프와 비교해 새로운 값이면 `openQuiz()` 자동 실행. 서버 측 진행자 엔드포인트 1개 추가, DB 컬럼 추가 없이 `_quiz_push: dict = {}` (room_id → timestamp) 인메모리 딕셔너리로 관리 가능.
+
+- **게임 종료 후 참가자의 거래 내역 조회 기능** (`app.py:829-847`, `screen-results`, `app.js:1702-1795`): `GET /api/rooms/<rid>/transactions` 는 `@login_required` 로 보호되어 있지만 게임 종료 후(`room.status == 'ended'`)에도 접근 가능. 그러나 결과 화면(`screen-results`)에는 최종 순위만 표시되고 개인 거래 내역을 볼 수 없음. `loadResults()` 내 `results-my-stats` 카드에 "📋 거래 내역 보기" 토글 버튼을 추가해, 클릭 시 `GET /api/rooms/<rid>/transactions` 의 첫 페이지를 인라인 표시하면 학생이 자신의 투자 패턴을 돌아볼 수 있는 교육적 피드백 제공. 추가 엔드포인트 불필요.
+
+- **예금 만기/해지 이력을 게임 중 확인 가능하게** (`app.js:1629`, `app.py:852-876`): `loadDepositsPage()` (`app.js:1621`)에서 `active` 상태만 필터링해 활성 예금 외에 해지/만기된 예금은 화면에 표시하지 않음. `deposits.filter(d => d.status !== 'active')` 결과를 "이전 예금" 섹션으로 접을 수 있게(`<details>` 태그) 하단에 추가하면 학생이 "예금하면 어떻게 이자가 쌓이는지" 기록으로 확인 가능. 서버 변경 없음, 프론트 10줄 추가.
+
+- **`_rlt_active` count 누수 방지를 위한 서버사이드 타임아웃** (`app.py:252`, `app.py:938-963`, `app.py:965-994`): 학생이 룰렛 모달을 열고(`minigame/open`) 브라우저를 강제 종료하면 `minigame/close` 가 호출되지 않아 `_rlt_active[rid]['count']` 가 감소하지 않음. 마지막 학생이 이 상황이라면 게임이 영구 일시정지 상태에 갇힘. `/api/rooms/<rid>` 폴링 핸들러(`app.py:432`)에서 `rlt_triggered == True && status == 'paused'` 인데 `_rlt_active[rid]['count'] > 0` 이고 마지막 `paused_at` 에서 5분 이상 경과한 경우 자동으로 `_end_room(room)` 을 호출하는 안전 장치 추가. 수업 중 네트워크 불안정 환경에서 교사가 개입 없이 게임이 멈추는 상황 방지.
+
+### 제거/단순화할 것들
+
+- **`force_price()`와 `_next_price()`의 가격 하한 불일치** (`stock_service.py:139`, `stock_service.py:225`): `force_price()` 에서 강제로 주가를 낮출 때 최솟값을 `base * 0.3`(30%)까지 허용하지만, 이후 자동 tick에서 `_next_price()` 의 최솟값 클램핑은 `base * 0.6`(60%) 임. 진행자가 주가를 35%로 강제 인하한 직후 첫 tick에서 60% 선으로 즉시 튀어오르는 현상 발생 — 교사가 "주가 급락" 이벤트를 연출했는데 다음 순간 +70% 급등이 발생해 학생이 혼란. `_next_price()` 의 클램핑을 `max(base * 0.3, min(base * 3.0, new_price))` 로 통일하면 됨. 한 줄 수정.
+
+- **`get_history()`에서 '1y' 기간이 '1mo'와 동일한 30개 막대를 반환** (`stock_service.py:292`): `n_bars = {'1d': 30, '5d': 5, '1mo': 30, '3mo': 90}.get(period, 30)` — `'1y'` 키가 딕셔너리에 없어 기본값 30이 적용. 결과적으로 "1년" 탭과 "1달" 탭이 동일한 30개 랜덤 일별 캔들을 표시. `app.py:715`에서 `'1y'` → `('1y','1wk')` 로 매핑하나 실제로 `get_history()` 에서 무시됨. 딕셔너리에 `'1y': 365` 추가하거나, 클라이언트 UI에서 "1년" 기간 탭 자체를 제거해 혼란 방지. 전자가 더 나음: `stock_service.py:292` 한 줄 수정.
+
+- **로비 대기 중 30명 학생이 5초마다 `lobby-members` 폴링 — 캐시 없음** (`app.py:577-585`, `app.js:562`): `enterParticipantLobby()` 에서 `setInterval(..., 5000)` 으로 학생마다 5초 폴링. 30명 × 1/5s = 6 req/s 로 `lobby_members()` 를 반복 호출하지만 이 엔드포인트에는 캐시가 없음(대조적으로 `get_room_cached()` 는 1.5s TTL 캐시 존재). 동일 패턴의 `_room_cache` 방식으로 `_lobby_cache: dict = {}` (room_id → {ts, data}) 를 추가하고 TTL 2s를 적용하면 DB 쿼리가 초당 최대 0.5회로 제한됨. 앱 서버가 `active` 상태(학생 입장 후)와 달리 `waiting` 상태(로비)에서도 높은 부하 발생을 방지.
+
+- **`S.depCash`와 `S.tradeCash` 두 개의 현금 상태 변수** (`app.js:14`, `app.js:452`, `app.js:1349`, `app.js:1656`): 현금 잔액이 `S.tradeCash`(매매 모달용)와 `S.depCash`(예금 탭용) 두 곳에 나뉘어 관리됨. 거래 체결 후 `S.tradeCash = data.cash`(`app.js:1443`)가 갱신되지만 `S.depCash`는 `loadDepositsPage()` 호출 시에만 갱신. 학생이 매수 후 예금 탭을 이동하지 않은 채 예금을 시도하면 직전 캐시된 `S.depCash` 기준으로 퍼센트 버튼이 동작해 실제 잔액보다 많은 금액이 입력됨(서버에서 400 반환되므로 데이터 손상은 없지만 UX 혼란). `S.cash` 단일 변수로 통합하거나 `S.tradeCash` 갱신 시 `S.depCash`도 동기화하는 헬퍼 함수(`setCash(v) { S.tradeCash = S.depCash = v; }`)로 일원화.
+
+- **`refreshMyRank()` 가 참가자 폴링 루프 내에서 매번 독립적으로 `rankings` API 호출** (`app.js:613-651`, `app.js:735-753`): `enterParticipantGame()` 의 `setInterval` 콜백(`app.js:613`)에서 `refreshMyRank()`와 `loadParticipantRankings()` 모두 각각 `/rankings` 엔드포인트를 호출. 참가자가 "순위" 탭에 있으면 10초마다 `/rankings` 를 2번 호출. `refreshMyRank()` 내부에서 이미 전체 순위 데이터를 받으므로 결과를 `S._lastRankings` 에 저장하고 `loadParticipantRankings()` 에서 캐시를 우선 사용하도록 분리하면 폴링 당 API 호출 1회 절감.
+
