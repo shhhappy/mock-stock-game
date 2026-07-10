@@ -2013,3 +2013,36 @@
 
 - **`refreshMyRank()` 가 참가자 폴링 루프 내에서 매번 독립적으로 `rankings` API 호출** (`app.js:613-651`, `app.js:735-753`): `enterParticipantGame()` 의 `setInterval` 콜백(`app.js:613`)에서 `refreshMyRank()`와 `loadParticipantRankings()` 모두 각각 `/rankings` 엔드포인트를 호출. 참가자가 "순위" 탭에 있으면 10초마다 `/rankings` 를 2번 호출. `refreshMyRank()` 내부에서 이미 전체 순위 데이터를 받으므로 결과를 `S._lastRankings` 에 저장하고 `loadParticipantRankings()` 에서 캐시를 우선 사용하도록 분리하면 폴링 당 API 호출 1회 절감.
 
+
+## 2026-07-10 (2차)
+
+### 추가하면 좋을 기능
+
+- **브라우저 뒤로 가기로 게임 화면 이탈 방지** (`app.js:589-651`, `app.js:61-68`): SPA 특성상 학생이 게임 중 스마트폰의 뒤로 가기를 누르면 `history.back()`이 실행되어 landing 화면으로 이동, 게임은 서버에서 계속 진행되지만 학생은 재접속해야 함. 교실 환경에서 빈번한 실수. `enterParticipantGame()` 시작부에 `history.pushState(null, '', location.href)` 로 히스토리 엔트리를 추가하고, `window.addEventListener('popstate', () => { if (S.room?.status === 'active') { history.pushState(null, '', location.href); toast('게임 중에는 뒤로 가기를 사용할 수 없습니다.', 'error'); } })` 를 앱 초기화 시점에 등록하면 의도치 않은 이탈을 방지. 서버 변경 불필요, 프론트 5줄.
+
+- **포트폴리오 도넛 차트 "섹터별 보기" 토글** (`app.js:1480-1502`, `app.js:1456-1564`): 현재 포트폴리오 도넛 차트는 종목명별로 파이를 나눠 분산 투자 여부를 한눈에 파악하기 어려움. 차트 상단에 "종목별 | 섹터별" 토글 버튼을 추가해, 섹터별 보기 선택 시 `data.holdings.reduce((acc, h) => { acc[h.sector] = (acc[h.sector]||0) + h.current_value; return acc; }, {})` 로 집계한 데이터를 동일 도넛 차트에 업데이트. 학생이 자신의 투자가 얼마나 분산되어 있는지 시각적으로 확인하는 교육 활동과 직결. 서버 변경 불필요, `loadPortfolio()` 내 10줄 추가.
+
+- **파산 학생 진행자 실시간 강조 및 알림** (`app.py:542-562`, `app.js:408-431`): 퀴즈 오답 연쇄 청산, 룰렛 고배팅 실패 등으로 총 자산이 0원 이하가 된 학생이 있어도 진행자 순위 목록에서 시각적 구분이 없어 교사가 인지하지 못함. `host_members()` 응답 각 항목에 `'is_bankrupt': total <= 0` 필드를 추가하고(`app.py:557` 근처), `loadHostMembers()` 에서 해당 행에 `style="background:rgba(248,81,73,.15);border-left:3px solid var(--down)"` 를 적용하면 교사가 즉시 `host_adjust()` 로 소액을 지급하는 교육적 개입 가능. 서버 1필드, 프론트 CSS 3줄.
+
+- **진행자 시장 시나리오 프리셋 버튼** (`app.py:1345-1360`, `app.js:373-383`): 진행자 "시장 이벤트" 패널에서 섹터와 퍼센트를 매번 수동 입력해야 해 수업 흐름이 끊김. `SCENARIO_PRESETS = [{ name:'경기침체', events:[{sector:'금융',pct:-8},{sector:'자동차',pct:-10},{sector:'통신',pct:3}] }, ...]` 상수를 정의하고 `applyScenario(i)` 함수가 순차적으로 `doMarketEvent()`를 호출하면 수업 주제에 맞는 시나리오를 1클릭으로 연출 가능. "에너지 위기", "AI 버블", "중앙은행 금리 인상" 등을 미리 준비해 두면 교육 맥락 연계 강화. 서버 변경 없이 `app.js` 약 30줄 + `index.html` 버튼 추가.
+
+- **종목별 목표가 알림 기능** (`app.js:1287-1323`, `filterStocks(prevPrices)`): 학생이 보고 있는 종목에 목표 매도가/매수 진입가를 설정하면, `filterStocks()` 내 가격 비교 루프(`app.js:1313-1323`)에서 임계값 돌파 시 `toast('삼성전자 목표가 도달: 75,000원', 'success')` 토스트 표시. `S.priceAlerts = JSON.parse(localStorage.getItem('priceAlerts') || '{}')` (symbol → {above?: price, below?: price})로 localStorage에 저장해 서버 변경 없이 구현 가능. 주식 모달 하단에 "목표가 설정" 입력 필드 1개 추가. 투자 계획 수립 개념 교육과 직결.
+
+- **거래 내역 탭에 룰렛·복권 이벤트 필터 카테고리 추가** (`app.js:1569-1591`, `app.py:829-847`): `RoomTransaction.action` 에 이미 `'RLT'`(룰렛), `'ADJ'(note 포함)`(복권 당첨) 이 기록되어 있으나, 거래 내역 탭에는 필터 없이 전체 목록만 표시. 탭 상단에 "전체 | 매수 | 매도 | 룰렛/복권 | 조정" 필터 버튼을 추가하고, 선택한 필터를 `loadTxn()` 의 URL 파라미터로 전달(`?action=RLT`)하면 학생이 자신의 이벤트 참여 결과를 따로 조회 가능. 서버에 `request.args.get('action', '')` 필터 1줄 추가로 구현.
+
+---
+
+### 제거/단순화할 것들
+
+- **`withdraw_deposit()` 이 `RoomTransaction` 레코드를 생성하지 않음** (`app.py:904-916`): 예금 해지 시 `dep.status = 'withdrawn'`, `m.cash += dep.amount`만 실행되고 `RoomTransaction` 기록이 없음. 동일 파일에서 룰렛(`app.py:1065`), 퀴즈 패널티(`app.py:1315-1325`), 복권 당첨(`app.py:218-220`) 모두 `RoomTransaction`을 생성하는 것과 불일치. 학생의 거래 내역 탭에 "갑자기 현금이 늘어났지만 이유 없음" 현상 발생. `db.session.add(RoomTransaction(room_id=rid, user_id=user.id, symbol='DEPOSIT', action='ADJ', shares=0, price=0, amount=dep.amount, note='예금 해지'))` 를 `dep.status='withdrawn'` 직후에 추가하는 1줄로 해결. 예금 생성(`create_deposit()`, `app.py:878`)도 동일하게 트랜잭션 기록 추가 고려.
+
+- **`ROULETTE_OUTCOMES` 상수의 `seg_start`/`seg_end` 값이 완전한 dead data** (`app.py:242-248`): `_rlt_outcomes()` (`app.py:261-276`)가 `cumulative` 누적으로 `seg_start/seg_end`를 동적 계산해 새 dict를 반환하므로, `ROULETTE_OUTCOMES[i]['seg_start']`/`['seg_end']` 는 코드 어디서도 읽히지 않음. 5개 항목 × 2개 필드 = 10개 하드코딩 값이 방치되어 이후 개발자가 `ROULETTE_OUTCOMES`를 직접 수정하면 `_rlt_outcomes()` 출력에 반영되지 않아 혼란 유발. 두 필드를 삭제하거나 `# 참고용 — _rlt_outcomes()에서 동적 재계산됨` 주석으로만 남길 것.
+
+- **XSS 취약점: `m.username`/`e.username` 을 HTML 이스케이프 없이 `innerHTML` 삽입** (`app.js:421`, `app.js:583`): `loadHostMembers()` 의 `${m.username}`, `loadPLobbyMembers()` 의 `${m.username}` 등 여러 곳에서 사용자명을 템플릿 리터럴로 `innerHTML`에 직접 삽입. 사용자명에 `<img src=x onerror=alert(1)>` (24자, 서버 상한 30자 이내)를 포함하면 다른 학생/진행자 화면에서 JS가 실행됨. `app.js:897-898`에 `escHtml()` 함수가 이미 정의되어 있으나 사용자명 렌더링에 적용되지 않음. 사용자명이 등장하는 모든 `innerHTML` 템플릿 리터럴에서 `${m.username}` → `${escHtml(m.username)}` 으로 일괄 교체(약 5-7곳). 교실 환경에서 장난기 있는 학생이 악용 가능한 실질 보안 취약점.
+
+- **`loadChart()` 가 기간 탭 전환마다 Chart.js 인스턴스 destroy+recreate로 깜빡임 발생** (`app.js:1375-1397`): `if (S.stockChart) S.stockChart.destroy()` 후 `new Chart(ctx, {...})` 를 매번 생성해 탭 전환 시 흰 깜빡임. `renderHostBarChart()` 가 이미 `app.js:440-447`에서 `.data.labels = ...` + `.update()` 패턴으로 인스턴스를 재사용하도록 개선된 것과 대조적. `loadChart()` 도 `if (S.stockChart && S.stockChart.canvas) { S.stockChart.data.labels = labels; S.stockChart.data.datasets[0].data = closes; S.stockChart.data.datasets[0].borderColor = color; S.stockChart.data.datasets[0].backgroundColor = color+'22'; S.stockChart.update(); return; }` 분기를 `new Chart()` 호출 전에 추가하면 깜빡임 없이 부드러운 기간 전환 구현. 학생이 1일/1달 탭을 빠르게 전환하는 상황에서 UX 개선.
+
+- **`enterHostLobby()` 와 `enterParticipantLobby()` 가 기존 `setInterval` 정리 없이 새 폴링 설정** (`app.js:191`, `app.js:562`): 두 함수 모두 `S.pollInterval = setInterval(...)` 직전에 `clearInterval(S.pollInterval)` 을 호출하지 않아, 네트워크 오류 후 재진입 또는 예외적 흐름에서 두 개의 폴링 인터벌이 동시에 동작할 수 있음. `enterParticipantLobby()` 는 `loadPLobbyMembers()` 와 `api.get('/api/rooms/...')` 가 각각 5초마다 2회씩 호출되는 상황이 발생. 두 함수 첫 줄에 `clearInterval(S.pollInterval); S.pollInterval = null;` 을 추가하는 방어 코드 1줄로 해결. `stopPolling()` 이 정상 흐름에서 선행 호출되므로 성능상 비용 없음.
+
+- **`host_force_price()` 와 `host_market_event()` 가 방 상태(status) 검증 없음** (`app.py:673-687`, `app.py:1345-1360`): 두 엔드포인트 모두 진행자 권한(`room.host_id != user.id`)만 체크하고 `room.status` 를 확인하지 않아 `waiting` 또는 `ended` 상태에서도 호출 가능. `waiting` 상태 호출 시 게임 시작 전 `StockService` 가격을 변경해 학생이 비정상적인 초기 가격을 봄. `ended` 후 호출 시 `cleanup_room_service()` 이후 `get_room_service(rid)` 가 새 `StockService` 를 생성해 불필요한 메모리 점유. 두 함수 유효성 검사 블록에 `if room.status not in ('active', 'paused'): return jsonify({'error': '게임이 진행 중일 때만 사용 가능합니다.'}), 400` 한 줄을 각각 추가.
+
