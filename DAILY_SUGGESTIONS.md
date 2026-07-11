@@ -2046,3 +2046,33 @@
 
 - **`host_force_price()` 와 `host_market_event()` 가 방 상태(status) 검증 없음** (`app.py:673-687`, `app.py:1345-1360`): 두 엔드포인트 모두 진행자 권한(`room.host_id != user.id`)만 체크하고 `room.status` 를 확인하지 않아 `waiting` 또는 `ended` 상태에서도 호출 가능. `waiting` 상태 호출 시 게임 시작 전 `StockService` 가격을 변경해 학생이 비정상적인 초기 가격을 봄. `ended` 후 호출 시 `cleanup_room_service()` 이후 `get_room_service(rid)` 가 새 `StockService` 를 생성해 불필요한 메모리 점유. 두 함수 유효성 검사 블록에 `if room.status not in ('active', 'paused'): return jsonify({'error': '게임이 진행 중일 때만 사용 가능합니다.'}), 400` 한 줄을 각각 추가.
 
+
+---
+
+## 2026-07-11
+
+### 추가하면 좋을 기능
+
+- **포트폴리오 탭 보유 종목 행에서 직접 매도 진입 버튼** (`index.html:395-401`, `app.js:holdings 렌더링 부분`): 현재 보유 종목 목록에서 매도하려면 하단 네비게이션 → 시장 탭 → 종목 검색 → 종목 탭 순서로 이동해야 함. 보유 종목 행 오른쪽에 "매도" 버튼을 추가하고 클릭 시 `openStockModal(symbol, price, cash, holding)` 를 직접 호출하면 탭 전환 없이 즉시 매도 가능. 게임 종료 직전 전량 매도 상황에서 학생 불편 해소 효과 크며 서버 변경 불필요.
+
+- **룰렛 트리거 임박(30초 전) 예고 배너** (`app.js:626-630`, `app.py:446-465`): 룰렛은 `remaining_seconds <= 5` 에서 자동 시작되어 예고 없이 게임이 멈추는 경험을 학생들이 혼란스러워함. `enterParticipantGame()` 의 폴링 블록 (`app.js:613-650`) 안에서 `r.remaining_seconds <= 30 && !r.minigame_available && r.status === 'active'` 조건일 때 "⚠️ 30초 후 룰렛이 시작됩니다 — 베팅금 준비!" 배너를 화면 상단에 5초간 표시하면 학생들이 사전 준비(예금 해지, 현금 확보) 가능. `showEndingSoonBanner()` 패턴을 그대로 재사용 가능하며 서버 변경 불필요.
+
+- **게임 종료 후 학생 개인 거래 요약 카드** (`index.html:596-637`, `app.py:829-847`): 결과 화면(`screen-results`)에는 `results-my-stats` div가 있지만 (`index.html:628`) 진입 시 총 자산/수익률 정도만 표시됨. 결과 화면 진입 시 `GET /api/rooms/<rid>/transactions` (기존 API) 를 호출해 매수/매도 횟수, 최다 거래 종목, 룰렛 결과, 복권 당첨 여부를 요약한 카드를 `results-my-stats` 에 추가하면 수업 후 개인 반성문 작성에 활용 가능. 서버 신규 엔드포인트 불필요.
+
+- **진행자 로비 화면에 게임 설정 요약 표시** (`index.html:79-112`, `app.js:186-193`): 호스트 로비 화면에는 방 코드·QR코드·참여자 목록만 있고 "시작 자금", "게임 시간", "예금 금리" 설정값이 노출되지 않음. 학생들이 입장할 때 진행자가 설정을 다시 확인하거나 구두로 안내할 수 없는 상태. `enterHostLobby()` 에서 `S.room.starting_cash`, `S.room.duration_minutes`, `S.room.deposit_rate` 를 QR코드 아래 소형 카드로 렌더링하는 5줄의 HTML 추가로 해결. 설정 수정 기능 없이 표시만으로도 수업 진행에 도움됨.
+
+- **호스트 순위 탭에 참가자 포트폴리오 미리보기(보유 종목 상위 3개) 표시** (`app.py:542-561`, `app.js:408-431`): 진행자는 현재 이름·수익률·총 자산·거래내역만 볼 수 있어 "이 학생은 지금 어느 종목을 들고 있나?" 를 파악하려면 '거래' 버튼을 눌러야 함. `host_members()` 응답에 각 멤버의 상위 3개 보유 종목(symbol + 비중%)을 포함하거나, 별도 `GET /api/rooms/<rid>/host/members/<uid>/holdings` 엔드포인트를 추가해 행 확장(accordion) 시 표시하면 실시간 교육 개입 포인트를 제공. `RoomHolding.query.filter_by(room_id=rid, user_id=uid).all()` 로 간단 구현.
+
+---
+
+### 제거/단순화할 것들
+
+- **`resume_room()` 에서 `_ending_soon` 집합 미정리 — 1분 카운트다운 후 재개하면 다음 종료 버튼 즉시 종료** (`app.py:503-517`, `app.py:527`): `end_room()` 에서 종료 카운트다운을 시작하면 `_ending_soon.add(rid)` 가 실행됨 (`app.py:532`). 이후 `pause_room()` + `resume_room()` 을 거쳐도 `_ending_soon` 에서 해당 `rid` 가 제거되지 않음. 결과적으로 재개 후 진행자가 다시 '종료' 버튼을 클릭하면 `app.py:527` 의 `rid not in _ending_soon` 조건을 통과하지 못해 1분 카운트다운 없이 즉시 `_end_room()` 이 호출됨. `resume_room()` 함수 내 `db.session.commit()` 직후에 `_ending_soon.discard(rid)` 한 줄만 추가하면 해결.
+
+- **`get_rankings()` 가 멤버 수 × 보유 종목 수만큼 DB 쿼리 발생** (`app.py:808-824`): `member_total_value(rid, m.user_id)` (`app.py:107-118`) 는 멤버별로 `RoomHolding.query.filter_by(...)`, `Deposit.query.filter_by(...)` 쿼리를 개별 실행. 학생 30명 × 평균 5종목 보유 = 폴링 1회당 최소 90+ DB 쿼리 발생. `RoomHolding.query.filter_by(room_id=rid).all()` 로 전체 보유 데이터를 한 번에 가져와 `user_id` 기준으로 Python dict에 집계하면 쿼리 수를 O(1)로 줄임. `Deposit` 도 동일하게 일괄 조회 가능. `host_members()` (`app.py:542`) 도 같은 패턴이므로 `member_total_value` 를 bulk 버전으로 리팩터링하면 두 엔드포인트 모두 개선.
+
+- **`get_history()` 가 캐시 만료(120초)마다 완전히 다른 랜덤 차트 생성** (`stock_service.py:281-309`): `random.gauss()` 로 매번 새 가격 경로를 생성하므로 두 학생이 다른 시점에 같은 종목 차트를 열면 전혀 다른 그래프를 봄. 수업 중 "이 종목 차트 봐봐" 발언이 의미 없어짐. 시드를 고정(`random.seed(f"{symbol}-{period}-{int(time.time()//120)}")`)해 동일 120초 윈도우 내 모든 요청이 동일한 시드로 생성된 차트를 반환하도록 수정하면 일관성 확보. 시드를 시간 블록 기반으로 하면 주기적으로 자연스럽게 갱신됨.
+
+- **룰렛 베팅 자금 마련 시 `h.shares = 0` 만 설정하고 `db.session.delete(h)` 미호출** (`app.py:1037`): 매도 로직(`app.py:762`)은 `holding.shares == 0` 이면 `db.session.delete(holding)` 을 실행하지만, 룰렛 베팅 자금 마련 코드(`app.py:1032-1044`)는 `h.shares = 0; h.avg_price = 0` 만 설정하고 레코드를 삭제하지 않음. 게임 진행 중 `get_portfolio()` (`app.py:781`) 가 `if h.shares <= 0: continue` 로 필터링하지만 `RoomHolding.query.filter_by(...).all()` 은 0주짜리 레코드도 조회해 불필요한 DB 로드 발생. `h.shares = 0` 설정 직후 `db.session.delete(h)` 를 추가하거나, 일반 매도와 동일한 `holding.shares -= shares; if holding.shares == 0: db.session.delete(holding)` 패턴으로 통일.
+
+- **`_quiz_settings` 및 `_roulette_config` 딕셔너리가 Render 재기동 시 초기화** (`app.py:1246-1247`, `app.py:250-251`): 두 딕셔너리 모두 인메모리 상태이므로 Render 무료 플랜의 슬립 재기동 시 진행자가 게임 전 설정한 퀴즈 보상/패널티 비율과 룰렛 확률이 기본값으로 초기화됨. `Room` 모델에 `quiz_reward_pct FLOAT DEFAULT 1.0`, `quiz_penalty_pct FLOAT DEFAULT 0.5`, `roulette_config VARCHAR(200) DEFAULT NULL` 컬럼을 추가하거나, 최소한 게임 시작(`start_room()`) 시점에 현재 인메모리 설정을 `Room` 테이블에 스냅샷하는 방식으로 재시작 후 복구 가능하게 개선 권장. ALTER TABLE 마이그레이션은 `app.py:31-40` 의 기존 패턴 그대로 사용 가능.
