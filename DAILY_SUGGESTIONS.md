@@ -2076,3 +2076,33 @@
 - **룰렛 베팅 자금 마련 시 `h.shares = 0` 만 설정하고 `db.session.delete(h)` 미호출** (`app.py:1037`): 매도 로직(`app.py:762`)은 `holding.shares == 0` 이면 `db.session.delete(holding)` 을 실행하지만, 룰렛 베팅 자금 마련 코드(`app.py:1032-1044`)는 `h.shares = 0; h.avg_price = 0` 만 설정하고 레코드를 삭제하지 않음. 게임 진행 중 `get_portfolio()` (`app.py:781`) 가 `if h.shares <= 0: continue` 로 필터링하지만 `RoomHolding.query.filter_by(...).all()` 은 0주짜리 레코드도 조회해 불필요한 DB 로드 발생. `h.shares = 0` 설정 직후 `db.session.delete(h)` 를 추가하거나, 일반 매도와 동일한 `holding.shares -= shares; if holding.shares == 0: db.session.delete(holding)` 패턴으로 통일.
 
 - **`_quiz_settings` 및 `_roulette_config` 딕셔너리가 Render 재기동 시 초기화** (`app.py:1246-1247`, `app.py:250-251`): 두 딕셔너리 모두 인메모리 상태이므로 Render 무료 플랜의 슬립 재기동 시 진행자가 게임 전 설정한 퀴즈 보상/패널티 비율과 룰렛 확률이 기본값으로 초기화됨. `Room` 모델에 `quiz_reward_pct FLOAT DEFAULT 1.0`, `quiz_penalty_pct FLOAT DEFAULT 0.5`, `roulette_config VARCHAR(200) DEFAULT NULL` 컬럼을 추가하거나, 최소한 게임 시작(`start_room()`) 시점에 현재 인메모리 설정을 `Room` 테이블에 스냅샷하는 방식으로 재시작 후 복구 가능하게 개선 권장. ALTER TABLE 마이그레이션은 `app.py:31-40` 의 기존 패턴 그대로 사용 가능.
+
+---
+
+## 2026-07-12
+
+### 추가하면 좋을 기능
+
+- **4xx 응답 본문 파싱 미흡 — 실제 오류 메시지 표시 안 됨** (`static/js/app.js:30-43`): `api.get()` / `api.post()` 에서 `if (!r.ok) return {error: 'HTTP ${r.status}'}` 패턴이 서버가 보내는 한국어 오류 본문 전체를 버림. 예를 들어 거래 시 잔액 부족이면 백엔드는 `{"error": "잔액 부족 — 필요: 1,000,000원 / 보유: 500,000원"}` (app.py:749)를 보내지만 학생 화면에는 "HTTP 400"만 뜸. `if (!r.ok) { try { return await r.json(); } catch { return {error: 'HTTP ' + r.status}; } }` 로 두 줄만 바꾸면 모든 거래·퀴즈·복권 오류 메시지가 정확히 표시됨. 가장 빠르게 교실 UX를 개선할 수 있는 수정.
+
+- **강퇴를 게임 진행 중에도 허용** (`app.py:564-575`): `kick_member()` 는 `room.status != 'waiting'` 이면 400을 반환(app.py:570). 게임 중 불공정 거래를 하는 학생을 제거하려면 교사가 게임 전체를 종료해야 함. `waiting` 상태 제한을 제거하고, 게임 중 강퇴 시 보유 주식 현재가 청산 후 `RoomMember`·`RoomHolding` 삭제, `_invalidate_room_cache()` 호출을 추가하면 수업 중 유연한 대처 가능.
+
+- **예금 건수 상한 추가** (`app.py:878-902`): `create_deposit()` 에 active 예금 건수 검사가 없어 학생 1명이 1원짜리 예금을 수만 건 생성해 서버 응답을 느리게 하거나 순위 계산(`member_total_value()` 의 Deposit 조회)에 부하를 줄 수 있음. `Deposit.query.filter_by(room_id=rid, user_id=user.id, status='active').count() >= 10` 조건을 app.py:887 직전에 추가해 건수를 제한하는 것으로 해결.
+
+- **차트가 실제 게임 가격 히스토리와 무관** (`stock_service.py:281-310`): `get_history()` 는 현재가에서 역방향 랜덤워크를 즉석 생성해 반환하므로 학생이 "1개월 차트"를 보면 게임 중 실제로 발생한 가격 변동이 아닌 매번 다른 임의 데이터가 표시됨. `StockService.__init__()` 에 `self._price_log: list = []` 를 추가하고 `get_price()` 내 가격 갱신 시 `(time.time(), new_price)` 를 기록해 `get_history()` 가 해당 로그를 반환하도록 수정하면, 학생들이 "뉴스 → 주가 반응"을 차트에서 직접 확인할 수 있어 교육 효과가 높아짐.
+
+- **결과 화면에서 새 게임 참여 경로 없음** (`app.js:99-112`, `static/index.html` `screen-results`): 게임이 끝나고 결과 화면을 본 뒤 로그아웃 없이 새 게임에 참여하는 버튼이 없음. 같은 수업 내 2회차 게임을 진행하려면 학생들이 각자 새로고침 후 재로그인해야 함. 결과 화면에 "새 게임 참여하기" 버튼을 추가해 `api.post('/api/auth/logout').then(() => { S.user=null; S.room=null; showLanding(); })` 로 이동하면 재로그인 없이 연속 진행 가능.
+
+---
+
+### 제거/단순화할 것들
+
+- **`host_members()`·`get_rankings()` N+1 쿼리** (`app.py:542-561`, `app.py:808-824`): 학생 30명 기준으로 순위 갱신 1회마다 `member_total_value()` 가 학생당 `RoomMember` + `RoomHolding` + `Deposit` 조회를 반복해 90회 이상 쿼리가 발생. `RoomHolding.query.filter_by(room_id=rid).all()` 와 `Deposit.query.filter_by(room_id=rid, status='active').all()` 로 전체를 한 번에 조회한 뒤 `{user_id: [rows]}` dict 로 그룹핑하면 총 쿼리를 3~4회로 줄임. Render 무료 티어에서 DB I/O 병목을 가장 크게 완화할 수 있는 수정.
+
+- **참가자 폴링(10초)과 뉴스 폴링(8초)이 별도 interval** (`app.js:613`, `app.js:810`): 두 `setInterval` 이 독립적으로 실행되어 참가자 1명당 평균 0.22 req/s(10초 룸 상태 + 8초 뉴스)가 발생. 뉴스 데이터를 `/api/rooms/<rid>` 응답(app.py:278-305, `room_dict()`)에 포함하거나, 뉴스 전용 폴링을 룸 상태 폴링 내부 조건으로 통합하면 API 호출 약 40% 절감. 학생 수가 많을수록 효과 큼.
+
+- **퀴즈·룰렛 설정·복권 진행 상태가 모두 서버 메모리에만 존재** (`app.py: _quiz_state`, `_quiz_settings`, `_roulette_config`, `_lots`): Render 무료 티어는 비활성 15분 후 인스턴스를 슬립시키는데, 재시작 시 진행 중인 복권 번호 입력 상태(`_lots[rid]['current']`)·학생별 퀴즈 쿨다운·룰렛 배율 설정이 모두 초기화됨(`_lots` 는 `lottery_rounds_done` 으로 부분 복구되지만 `current` 는 복구 불가). 가장 단순한 해결책: `_roulette_config` 와 `_quiz_settings` 를 Room 테이블에 JSON 컬럼으로 추가해 POST 시 DB에 저장.
+
+- **`Room.query.get_or_404(rid)` 전면 사용** (`app.py` 전반 36곳): Flask-SQLAlchemy 3.x 에서 레거시 `Query.get()` 은 deprecated. `db.get_or_404(Room, rid)` (Flask-SQLAlchemy ≥3.0) 또는 `db.session.get(Room, rid)` 로 순차 교체 필요. 기능 영향 없이 경고 제거 가능.
+
+- **룰렛 60초 자동 닫힘이 남은 스핀을 강제 소멸** (`app.js:972-997`, `openRouletteModal()`): 룰렛 모달이 열리면 60초 카운트다운 후 `closeRoulette()` 를 자동 호출. 스핀 3회 중 1회만 돌린 채 60초가 지나면 나머지 2회가 소멸되고, `closeRoulette()` 가 `minigame/close` 를 호출해 게임이 종료로 이어질 수 있음. 자동 닫힘을 제거하거나, 남은 스핀이 0이 될 때만 자동 닫힘을 트리거하도록 조건 추가 필요.
