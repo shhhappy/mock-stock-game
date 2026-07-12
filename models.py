@@ -87,5 +87,6 @@ class Deposit(db.Model):
     amount = db.Column(db.Float, nullable=False)
     rate = db.Column(db.Float, nullable=False)
     status = db.Column(db.String(20), default='active')  # active / withdrawn / matured
+    lock_type = db.Column(db.String(10), default='free')  # free(자유입출금) / fixed(정기예금, 중도해지 불가)
     interest_earned = db.Column(db.Float, default=0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)

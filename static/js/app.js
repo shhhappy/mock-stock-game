@@ -597,7 +597,7 @@ function enterParticipantGame() {
   _lotPickerSubmitted = false;
   _lotResultRound = null;
   S.depRate = S.room.deposit_rate;
-  document.getElementById('dep-rate-display').textContent = S.room.deposit_rate + '%';
+  setDepLockType('free');
   showScreen('screen-p-game');
 
   PAGE_ORDER.forEach(p => {
@@ -877,7 +877,7 @@ async function submitQuiz(answer) {
   result.style.display = '';
   if (answer === null) {
     result.innerHTML = `<div style="font-size:28px">⏰</div><div style="color:var(--muted);margin-top:8px">시간 초과!</div>`;
-    const td = await api.post(`/api/rooms/${S.room.id}/quiz`, { answer: false });
+    const td = await api.post(`/api/rooms/${S.room.id}/quiz`, { answer: false, timeout: true });
     if (td.penalty > 0) toast(`-${td.penalty.toLocaleString()}원 차감!`, 'error');
     return;
   }
@@ -895,6 +895,30 @@ async function submitQuiz(answer) {
 function closeQuiz() {
   if (_quizTimerTick) { clearInterval(_quizTimerTick); _quizTimerTick = null; }
   document.getElementById('quiz-overlay').style.display = 'none';
+}
+
+async function openQuizHistory() {
+  const list = document.getElementById('quiz-history-list');
+  list.innerHTML = `<div style="color:var(--muted);text-align:center;padding:20px 0">불러오는 중…</div>`;
+  document.getElementById('quiz-history-overlay').style.display = 'flex';
+  const hist = await api.get(`/api/rooms/${S.room.id}/quiz/history`);
+  if (!Array.isArray(hist) || hist.length === 0) {
+    list.innerHTML = `<div style="color:var(--muted);text-align:center;padding:20px 0">아직 푼 퀴즈가 없습니다.</div>`;
+    return;
+  }
+  list.innerHTML = hist.map(h => `
+    <div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;background:${h.correct ? 'var(--up-bg,rgba(0,180,100,.08))' : 'var(--down-bg,rgba(220,60,60,.08))'}">
+      <div style="display:flex;align-items:flex-start;gap:8px">
+        <span style="font-size:16px">${h.correct ? '⭕' : '❌'}</span>
+        <span style="font-size:14px;font-weight:600;line-height:1.4">${escHtml(h.question)}</span>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-top:6px;padding-left:24px">${escHtml(h.explanation)}</div>
+    </div>
+  `).join('');
+}
+
+function closeQuizHistory() {
+  document.getElementById('quiz-history-overlay').style.display = 'none';
 }
 
 function escHtml(s) {
@@ -1604,6 +1628,21 @@ function setDepPct(pct) {
   updateDepPreview();
 }
 
+function depEffectiveRate() {
+  return (S.depRate || 0) * (S.depLockType === 'fixed' ? 1.5 : 1);
+}
+
+function setDepLockType(type) {
+  S.depLockType = type;
+  document.getElementById('dep-type-free').className  = 'btn btn-sm ' + (type === 'free'  ? 'btn-warning' : 'btn-secondary');
+  document.getElementById('dep-type-fixed').className = 'btn btn-sm ' + (type === 'fixed' ? 'btn-warning' : 'btn-secondary');
+  document.getElementById('dep-type-desc').textContent = type === 'fixed'
+    ? `기본 금리의 1.5배(${depEffectiveRate().toFixed(1)}%), 게임 종료 전까지 중도해지 불가`
+    : '언제든 중도해지 가능 (중도해지 시 이자 없음)';
+  document.getElementById('dep-rate-display').textContent = depEffectiveRate().toFixed(1) + '%';
+  updateDepPreview();
+}
+
 function updateDepPreview() {
   const amount = parseFloat(document.getElementById('dep-amount').value) || 0;
   const preview = document.getElementById('dep-preview');
@@ -1611,8 +1650,9 @@ function updateDepPreview() {
     const totalSec   = (S.room?.duration_minutes || 30) * 60;
     const remaining  = S.room?.remaining_seconds ?? totalSec;
     const ratio      = totalSec > 0 ? Math.min(1, remaining / totalSec) : 1;
-    const interest   = amount * S.depRate / 100 * ratio;
-    const maxInterest = amount * S.depRate / 100;
+    const rate       = depEffectiveRate();
+    const interest   = amount * rate / 100 * ratio;
+    const maxInterest = amount * rate / 100;
     document.getElementById('dep-preview-interest').textContent = '+' + krw(interest);
     document.getElementById('dep-preview-total').textContent    = krw(amount + interest);
     document.getElementById('dep-preview-max').textContent      = krw(maxInterest);
@@ -1638,12 +1678,14 @@ async function loadDepositsPage() {
   list.innerHTML = active.map(d => `
     <div class="deposit-item">
       <div>
-        <div style="font-weight:600">${krw(d.amount)}</div>
+        <div style="font-weight:600">${krw(d.amount)} ${d.lock_type === 'fixed' ? '<span class="chip chip-blue" style="font-size:10px">정기예금</span>' : ''}</div>
         <div class="muted" style="font-size:11px">${d.created_at} · 금리 ${d.rate}%</div>
         <div style="color:var(--up);font-size:12px">현재 예상 이자 +${krw(d.expected_interest)}</div>
         <div style="color:var(--muted);font-size:11px">최대 이자 +${krw(d.max_interest)}</div>
       </div>
-      <button class="btn btn-secondary btn-sm" onclick="doWithdraw(${d.id})" style="color:var(--down)">해지</button>
+      ${d.lock_type === 'fixed'
+        ? '<span class="muted" style="font-size:11px">만기까지 보유</span>'
+        : `<button class="btn btn-secondary btn-sm" onclick="doWithdraw(${d.id})" style="color:var(--down)">해지</button>`}
     </div>`).join('');
 }
 
@@ -1652,7 +1694,7 @@ async function doDeposit() {
   const err = document.getElementById('dep-err');
   err.textContent = '';
   if (!amount || amount <= 0) { err.textContent = '금액을 입력하세요.'; return; }
-  const data = await api.post(`/api/rooms/${S.room.id}/deposits`, {amount});
+  const data = await api.post(`/api/rooms/${S.room.id}/deposits`, {amount, lock_type: S.depLockType || 'free'});
   if (data.error) { err.textContent = data.error; return; }
   toast(data.message, 'success');
   document.getElementById('dep-amount').value = '';

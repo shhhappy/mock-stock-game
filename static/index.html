@@ -420,6 +420,14 @@
         <button class="btn btn-secondary btn-sm" onclick="setDepPct(100)">전액</button>
       </div>
       <div class="form-group">
+        <label class="form-label">예금 상품</label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+          <button type="button" id="dep-type-free" class="btn btn-secondary btn-sm" onclick="setDepLockType('free')">자유입출금</button>
+          <button type="button" id="dep-type-fixed" class="btn btn-secondary btn-sm" onclick="setDepLockType('fixed')">정기예금 (1.5배)</button>
+        </div>
+        <div class="muted" style="font-size:11px;margin-top:4px" id="dep-type-desc">언제든 중도해지 가능 (중도해지 시 이자 없음)</div>
+      </div>
+      <div class="form-group">
         <label class="form-label">예금 금액 (원)</label>
         <input id="dep-amount" class="form-input" type="number" placeholder="예: 1000000" oninput="updateDepPreview()">
       </div>
@@ -568,7 +576,19 @@
       </div>
       <div id="quiz-result" style="display:none;margin-top:16px"></div>
       <div id="quiz-cooldown-msg" style="display:none;font-size:15px;color:var(--muted);padding:20px 0"></div>
-      <button class="btn btn-secondary btn-sm" onclick="closeQuiz()" style="margin-top:16px;width:100%">닫기</button>
+      <div style="display:flex;gap:8px;margin-top:16px">
+        <button class="btn btn-secondary btn-sm" onclick="openQuizHistory()" style="flex:1">📋 내 기록</button>
+        <button class="btn btn-secondary btn-sm" onclick="closeQuiz()" style="flex:1">닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quiz history overlay -->
+  <div id="quiz-history-overlay" class="quiz-overlay" style="display:none">
+    <div class="quiz-box">
+      <div style="font-size:16px;font-weight:700;margin-bottom:12px">📋 내 퀴즈 기록</div>
+      <div id="quiz-history-list" style="max-height:60vh;overflow-y:auto;display:flex;flex-direction:column;gap:10px;text-align:left"></div>
+      <button class="btn btn-secondary btn-sm" onclick="closeQuizHistory()" style="margin-top:16px;width:100%">닫기</button>
     </div>
   </div>
 
@@ -916,8 +936,15 @@
         </ul>
       </div>
       <div class="rules-card">
+        <div class="rules-card-title">🏷 상품 종류</div>
+        <ul class="rules-list">
+          <li><strong>자유입출금</strong>: 기본 금리, 언제든 중도해지 가능 (중도해지 시 이자 없음)</li>
+          <li><strong>정기예금</strong>: 기본 금리의 1.5배, 게임 종료 전까지 중도해지 불가 — 유동성을 포기하는 대신 더 높은 수익을 노리는 상품입니다.</li>
+        </ul>
+      </div>
+      <div class="rules-card">
         <div class="rules-card-title">⚠️ 주의사항</div>
-        <p>예금 중인 돈은 주식 매수에 사용할 수 없습니다. 예금 탭에서 <strong>중도해지</strong>하면 이자 없이 원금만 돌려받습니다.</p>
+        <p>예금 중인 돈은 주식 매수에 사용할 수 없습니다. 자유입출금 예금은 예금 탭에서 <strong>중도해지</strong>하면 이자 없이 원금만 돌려받습니다.</p>
       </div>
     </div>
 

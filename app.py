@@ -42,6 +42,7 @@ with app.app_context():
         "ALTER TABLE rooms ADD COLUMN rlt_triggered BOOLEAN DEFAULT 0",
         "ALTER TABLE rooms ADD COLUMN results_published BOOLEAN DEFAULT 0",
         "ALTER TABLE rooms ADD COLUMN lottery_rounds_done VARCHAR(50) DEFAULT ''",
+        "ALTER TABLE deposits ADD COLUMN lock_type VARCHAR(10) DEFAULT 'free'",
     ]:
         try:
             db.session.execute(_sa_text(_col_sql))
@@ -97,6 +98,19 @@ def _invalidate_news_cache(rid):
 _lottery_lock = threading.Lock()
 _rlt_lock = threading.Lock()
 
+# ── Per-member cash/asset mutation locks (매수·매도·예금 lost-update 방지) ──
+_member_locks: dict = {}
+_member_locks_meta = threading.Lock()
+
+def _get_member_lock(rid, uid):
+    key = (rid, uid)
+    with _member_locks_meta:
+        lock = _member_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _member_locks[key] = lock
+        return lock
+
 _ending_soon = set()    # room_ids whose host pressed end (1-min countdown active)
 
 KST = timezone(timedelta(hours=9))
@@ -126,6 +140,71 @@ def member_total_value(rid, uid):
     for d in Deposit.query.filter_by(room_id=rid, user_id=uid, status='active').all():
         total += d.amount
     return total
+
+def _compute_leaderboard(rid):
+    """방 참가자 전원의 순위표(총자산 내림차순, rank 부여)를 계산한다."""
+    room = db.session.get(Room, rid)
+    start = room.starting_cash if room else 0
+    members = RoomMember.query.filter_by(room_id=rid).all()
+    uids = [m.user_id for m in members]
+    user_map = {u.id: u for u in db.session.query(User).filter(User.id.in_(uids)).all()}
+    board = []
+    for m in members:
+        u = user_map.get(m.user_id)
+        total = member_total_value(rid, m.user_id)
+        board.append({
+            'user_id': m.user_id,
+            'username': u.username if u else str(m.user_id),
+            'cash': m.cash,
+            'total_value': round(total, 0),
+            'gain_pct': round((total - start) / start * 100 if start else 0, 2),
+        })
+    board.sort(key=lambda x: x['total_value'], reverse=True)
+    for i, e in enumerate(board): e['rank'] = i + 1
+    return board
+
+def _liquidate_shortfall(rid, uid, member, shortfall, stock_note, deposit_note, credit_cash):
+    """부족분(shortfall)을 보유 주식 → 예금 순으로 충당하고 남은 부족분을 반환한다.
+    credit_cash=True면 청산 금액을 member.cash에 더한다(룰렛처럼 즉시 쓸 현금을 마련하는 경우).
+    False면 이미 확정된 채무를 상계만 하고 cash는 건드리지 않는다(퀴즈 패널티처럼).
+    예금은 credit_cash=True일 때 전액 해지하고, False일 때는 필요한 만큼만 부분 차감한다."""
+    svc = get_room_service(rid)
+    holdings = RoomHolding.query.filter_by(room_id=rid, user_id=uid).all()
+    for h in sorted(holdings, key=lambda h: (svc.get_price(h.symbol) or h.avg_price) * h.shares, reverse=True):
+        if shortfall <= 0 or h.shares <= 0:
+            continue
+        price = svc.get_price(h.symbol) or h.avg_price
+        sell_value = price * h.shares
+        if sell_value <= shortfall:
+            shares_sold, actual = h.shares, sell_value
+            h.shares = 0; h.avg_price = 0
+        else:
+            shares_sold = max(1, int(shortfall / price))
+            actual = price * shares_sold
+            h.shares -= shares_sold
+        shortfall -= actual
+        if credit_cash:
+            member.cash += actual
+        db.session.add(RoomTransaction(room_id=rid, user_id=uid, symbol=h.symbol,
+            action='SELL', shares=shares_sold, price=price, amount=actual, note=stock_note))
+    if shortfall > 0:
+        for dep in Deposit.query.filter_by(room_id=rid, user_id=uid, status='active').all():
+            if shortfall <= 0:
+                break
+            if credit_cash:
+                take = dep.amount
+                dep.status = 'withdrawn'
+            else:
+                take = min(dep.amount, shortfall)
+                dep.amount -= take
+                if dep.amount <= 0:
+                    dep.status = 'withdrawn'
+            shortfall -= take
+            if credit_cash:
+                member.cash += take
+            db.session.add(RoomTransaction(room_id=rid, user_id=uid, symbol='DEPOSIT',
+                action='ADJ', shares=0, price=0, amount=take if credit_cash else -take, note=deposit_note))
+    return shortfall
 
 def _end_room(room):
     room.status = 'ended'
@@ -168,6 +247,11 @@ def _end_room(room):
     _roulette_config.pop(room.id, None)
     for k in [k for k in _quiz_state if k[0] == room.id]:
         del _quiz_state[k]
+    for k in [k for k in _quiz_history if k[0] == room.id]:
+        del _quiz_history[k]
+    with _member_locks_meta:
+        for k in [k for k in _member_locks if k[0] == room.id]:
+            del _member_locks[k]
     _ending_soon.discard(room.id)
     _invalidate_room_cache(room.id)
     _invalidate_news_cache(room.id)
@@ -555,21 +639,7 @@ def host_members(rid):
     room = Room.query.get_or_404(rid)
     user = cur_user()
     if room.host_id != user.id: return jsonify({'error': '권한 없음'}), 403
-    members = RoomMember.query.filter_by(room_id=rid).all()
-    uids = [m.user_id for m in members]
-    user_map = {u.id: u for u in db.session.query(User).filter(User.id.in_(uids)).all()}
-    result = []
-    for m in members:
-        u = user_map.get(m.user_id)
-        total = member_total_value(rid, m.user_id)
-        gain_pct = (total - room.starting_cash) / room.starting_cash * 100 if room.starting_cash else 0
-        result.append({
-            'user_id': m.user_id, 'username': u.username if u else str(m.user_id),
-            'cash': m.cash, 'total_value': round(total,0), 'gain_pct': round(gain_pct,2),
-        })
-    result.sort(key=lambda x: x['total_value'], reverse=True)
-    for i, r in enumerate(result): r['rank'] = i + 1
-    return jsonify(result)
+    return jsonify(_compute_leaderboard(rid))
 
 @app.route('/api/rooms/<int:rid>/host/members/<int:uid>', methods=['DELETE'])
 @login_required
@@ -759,27 +829,29 @@ def trade(rid):
     if shares <= 0: return jsonify({'error': '수량은 1 이상'}), 400
     price = get_room_service(rid).get_price(symbol)
     if not price: return jsonify({'error': '주가를 불러올 수 없습니다.'}), 500
-    holding = RoomHolding.query.filter_by(room_id=rid, user_id=user.id, symbol=symbol).first()
     amount = price * shares
-    if action == 'BUY':
-        if member.cash < amount:
-            return jsonify({'error': f'잔액 부족 — 필요: {amount:,.0f}원 / 보유: {member.cash:,.0f}원'}), 400
-        member.cash -= amount
-        if holding:
-            ns = holding.shares + shares
-            holding.avg_price = (holding.avg_price * holding.shares + amount) / ns
-            holding.shares = ns
+    with _get_member_lock(rid, user.id):
+        db.session.refresh(member)
+        holding = RoomHolding.query.filter_by(room_id=rid, user_id=user.id, symbol=symbol).first()
+        if action == 'BUY':
+            if member.cash < amount:
+                return jsonify({'error': f'잔액 부족 — 필요: {amount:,.0f}원 / 보유: {member.cash:,.0f}원'}), 400
+            member.cash -= amount
+            if holding:
+                ns = holding.shares + shares
+                holding.avg_price = (holding.avg_price * holding.shares + amount) / ns
+                holding.shares = ns
+            else:
+                db.session.add(RoomHolding(room_id=rid, user_id=user.id, symbol=symbol, shares=shares, avg_price=price))
         else:
-            db.session.add(RoomHolding(room_id=rid, user_id=user.id, symbol=symbol, shares=shares, avg_price=price))
-    else:
-        if not holding or holding.shares < shares:
-            return jsonify({'error': f'보유 수량 부족 — 보유: {holding.shares if holding else 0}주'}), 400
-        member.cash += amount
-        holding.shares -= shares
-        if holding.shares == 0: db.session.delete(holding)
-    db.session.add(RoomTransaction(room_id=rid, user_id=user.id, symbol=symbol,
-                                   action=action, shares=shares, price=price, amount=amount))
-    db.session.commit()
+            if not holding or holding.shares < shares:
+                return jsonify({'error': f'보유 수량 부족 — 보유: {holding.shares if holding else 0}주'}), 400
+            member.cash += amount
+            holding.shares -= shares
+            if holding.shares == 0: db.session.delete(holding)
+        db.session.add(RoomTransaction(room_id=rid, user_id=user.id, symbol=symbol,
+                                       action=action, shares=shares, price=price, amount=amount))
+        db.session.commit()
     return jsonify({'message': f'{STOCKS[symbol]["name"]} {shares}주 {"매수" if action=="BUY" else "매도"} 완료!',
                     'cash': member.cash})
 
@@ -825,19 +897,11 @@ def get_portfolio(rid):
 @app.route('/api/rooms/<int:rid>/rankings')
 @login_required
 def get_rankings(rid):
-    room = Room.query.get_or_404(rid)
+    Room.query.get_or_404(rid)
     user = cur_user()
-    start = room.starting_cash
-    board = []
-    for m in RoomMember.query.filter_by(room_id=rid).all():
-        u = db.session.get(User, m.user_id)
-        total = member_total_value(rid, m.user_id)
-        board.append({'user_id': m.user_id, 'username': u.username,
-                      'total_value': round(total,0),
-                      'gain_pct': round((total-start)/start*100 if start else 0, 2),
-                      'is_me': m.user_id == user.id})
-    board.sort(key=lambda x: x['total_value'], reverse=True)
-    for i, e in enumerate(board): e['rank'] = i + 1
+    board = _compute_leaderboard(rid)
+    for e in board:
+        e['is_me'] = e['user_id'] == user.id
     return jsonify(board)
 
 
@@ -885,6 +949,7 @@ def get_deposits(rid):
             expected_interest = d.interest_earned or 0
         result.append({
             'id': d.id, 'amount': d.amount, 'rate': d.rate, 'status': d.status,
+            'lock_type': d.lock_type or 'free',
             'interest_earned': d.interest_earned,
             'expected_interest': expected_interest,
             'max_interest': round(max_interest, 0),
@@ -904,18 +969,24 @@ def create_deposit(rid):
     try: amount = float((request.json or {}).get('amount', 0))
     except: return jsonify({'error': '금액 오류'}), 400
     if not (0 < amount < float('inf')): return jsonify({'error': '금액은 0보다 커야 합니다.'}), 400
-    if m.cash < amount: return jsonify({'error': f'잔액 부족 — 보유: {m.cash:,.0f}원'}), 400
-    m.cash -= amount
-    dep = Deposit(room_id=rid, user_id=user.id, amount=amount, rate=room.deposit_rate)
-    db.session.add(dep)
-    db.session.commit()
+    lock_type = (request.json or {}).get('lock_type', 'free')
+    if lock_type not in ('free', 'fixed'): return jsonify({'error': '잘못된 예금 상품'}), 400
+    rate = room.deposit_rate * (1.5 if lock_type == 'fixed' else 1)
+    with _get_member_lock(rid, user.id):
+        db.session.refresh(m)
+        if m.cash < amount: return jsonify({'error': f'잔액 부족 — 보유: {m.cash:,.0f}원'}), 400
+        m.cash -= amount
+        dep = Deposit(room_id=rid, user_id=user.id, amount=amount, rate=rate, lock_type=lock_type)
+        db.session.add(dep)
+        db.session.commit()
     total_seconds = room.duration_minutes * 60
     remaining = max(0.0, (room.end_time - datetime.utcnow()).total_seconds()) if room.end_time else total_seconds
     ratio = min(1.0, remaining / total_seconds) if total_seconds > 0 else 1.0
-    expected_interest = round(amount * room.deposit_rate / 100 * ratio, 0)
-    max_interest = round(amount * room.deposit_rate / 100, 0)
-    return jsonify({'message': f'{amount:,.0f}원 예금! 예상 이자 {expected_interest:,.0f}원 (보유 시간 비례 지급).',
-                    'cash': m.cash, 'deposit': {'id': dep.id, 'amount': dep.amount,
+    expected_interest = round(amount * rate / 100 * ratio, 0)
+    max_interest = round(amount * rate / 100, 0)
+    label = '정기예금(중도해지 불가)' if lock_type == 'fixed' else '자유입출금'
+    return jsonify({'message': f'{amount:,.0f}원 {label} 예금! 예상 이자 {expected_interest:,.0f}원 (보유 시간 비례 지급).',
+                    'cash': m.cash, 'deposit': {'id': dep.id, 'amount': dep.amount, 'lock_type': dep.lock_type,
                     'expected_interest': expected_interest, 'max_interest': max_interest, 'rate': dep.rate}})
 
 @app.route('/api/rooms/<int:rid>/deposits/<int:did>', methods=['DELETE'])
@@ -925,11 +996,16 @@ def withdraw_deposit(rid, did):
     if not dep: return jsonify({'error': '예금을 찾을 수 없습니다.'}), 404
     user = cur_user()
     if dep.room_id != rid or dep.user_id != user.id: return jsonify({'error': '권한 없음'}), 403
-    if dep.status != 'active': return jsonify({'error': '이미 처리된 예금'}), 400
-    m = RoomMember.query.filter_by(room_id=rid, user_id=user.id).first()
-    dep.status = 'withdrawn'
-    m.cash += dep.amount
-    db.session.commit()
+    if dep.lock_type == 'fixed': return jsonify({'error': '정기예금은 중도해지할 수 없습니다.'}), 400
+    with _get_member_lock(rid, user.id):
+        updated = db.session.query(Deposit).filter_by(id=did, status='active').update({'status': 'withdrawn'})
+        if not updated:
+            db.session.rollback()
+            return jsonify({'error': '이미 처리된 예금'}), 400
+        m = RoomMember.query.filter_by(room_id=rid, user_id=user.id).first()
+        db.session.refresh(m)
+        m.cash += dep.amount
+        db.session.commit()
     return jsonify({'message': f'예금 해지 — {dep.amount:,.0f}원 반환 (이자 없음)', 'cash': m.cash})
 
 
@@ -1034,48 +1110,14 @@ def minigame_spin(rid):
     if not math.isfinite(bet):
         return jsonify({'error': '금액 오류'}), 400
     # 총자산(현금+보유주식+예금) 기준으로 베팅 한도 계산
-    svc = get_room_service(rid)
-    holdings = RoomHolding.query.filter_by(room_id=rid, user_id=user.id).all()
     total_assets = member_total_value(rid, user.id)
     if bet <= 0 or bet > total_assets:
         return jsonify({'error': '베팅 금액이 올바르지 않습니다.'}), 400
-    # 현금이 부족하면 보유 주식을 청산해 충당
+    # 현금이 부족하면 보유 주식 → 예금 순으로 청산해 충당
     shortfall = bet - m.cash
     if shortfall > 0:
-        # 1) 보유 주식 청산 (가치 높은 순)
-        for h in sorted(holdings, key=lambda h: (svc.get_price(h.symbol) or h.avg_price) * h.shares, reverse=True):
-            if shortfall <= 0 or h.shares <= 0:
-                continue
-            price = svc.get_price(h.symbol) or h.avg_price
-            sell_value = price * h.shares
-            if sell_value <= shortfall:
-                m.cash += sell_value
-                shortfall -= sell_value
-                db.session.add(RoomTransaction(room_id=rid, user_id=user.id, symbol=h.symbol,
-                    action='SELL', shares=h.shares, price=price, amount=sell_value,
-                    note='룰렛 베팅 자금 마련'))
-                h.shares = 0
-                h.avg_price = 0
-            else:
-                shares_to_sell = max(1, int(shortfall / price))
-                actual_value = price * shares_to_sell
-                m.cash += actual_value
-                shortfall -= actual_value
-                h.shares -= shares_to_sell
-                db.session.add(RoomTransaction(room_id=rid, user_id=user.id, symbol=h.symbol,
-                    action='SELL', shares=shares_to_sell, price=price, amount=actual_value,
-                    note='룰렛 베팅 자금 마련'))
-        # 2) 주식 청산 후에도 부족하면 예금 인출
-        if shortfall > 0:
-            for d in Deposit.query.filter_by(room_id=rid, user_id=user.id, status='active').all():
-                if shortfall <= 0:
-                    break
-                m.cash += d.amount
-                shortfall -= d.amount
-                d.status = 'withdrawn'
-                db.session.add(RoomTransaction(room_id=rid, user_id=user.id, symbol='DEPOSIT',
-                    action='ADJ', shares=0, price=0, amount=d.amount,
-                    note='룰렛 베팅 자금 마련 (예금 인출)'))
+        _liquidate_shortfall(rid, user.id, m, shortfall,
+            '룰렛 베팅 자금 마련', '룰렛 베팅 자금 마련 (예금 인출)', credit_cash=True)
     outcomes = _rlt_outcomes(rid)
     outcome = _random.choices(outcomes, weights=[o['weight'] for o in outcomes])[0]
     winnings = round(bet * outcome['multiplier'])
@@ -1264,6 +1306,7 @@ def get_tips():
 
 _quiz_state: dict = {}
 _quiz_settings: dict = {}
+_quiz_history: dict = {}  # (room_id, user_id) -> [{question, correct, explanation, ts}, ...]
 
 @app.route('/api/rooms/<int:rid>/quiz', methods=['GET'])
 @login_required
@@ -1299,11 +1342,11 @@ def submit_quiz(rid):
     if not state or state.get('cooldown_until', 0) > time.time():
         return jsonify({'error': '퀴즈를 먼저 시작하세요'}), 400
     d = request.json or {}
-    user_answer = bool(d.get('answer'))
+    user_answer = False if d.get('timeout') else bool(d.get('answer'))
     q = next((x for x in QUIZ_QUESTIONS if x['id'] == state['qid']), None)
     if not q:
         return jsonify({'error': '잘못된 요청'}), 400
-    correct = user_answer == q['a']
+    correct = (not d.get('timeout')) and user_answer == q['a']
     settings = _quiz_settings.get(rid, {})
     reward_pct = settings.get('reward_pct', 1.0)
     penalty_pct = settings.get('penalty_pct', 0.5)
@@ -1311,55 +1354,40 @@ def submit_quiz(rid):
     penalty = 0
     member = RoomMember.query.filter_by(room_id=rid, user_id=user.id).first()
     if member:
-        if correct:
-            reward = max(10000, int(room.starting_cash * reward_pct / 100))
-            member.cash += reward
-        else:
-            penalty = max(5000, int(room.starting_cash * penalty_pct / 100))
-            shortfall = penalty - member.cash
-            member.cash = max(0, member.cash - penalty)
-            # 현금 부족 시 보유 주식 → 예금 순서로 추가 차감
-            if shortfall > 0:
-                svc = get_room_service(rid)
-                for h in sorted(
-                    RoomHolding.query.filter_by(room_id=rid, user_id=user.id).all(),
-                    key=lambda h: (svc.get_price(h.symbol) or h.avg_price) * h.shares,
-                    reverse=True
-                ):
-                    if shortfall <= 0 or h.shares <= 0:
-                        continue
-                    price = svc.get_price(h.symbol) or h.avg_price
-                    sell_value = price * h.shares
-                    if sell_value <= shortfall:
-                        shortfall -= sell_value
-                        db.session.add(RoomTransaction(room_id=rid, user_id=user.id, symbol=h.symbol,
-                            action='SELL', shares=h.shares, price=price, amount=sell_value,
-                            note='퀴즈 오답 패널티'))
-                        h.shares = 0; h.avg_price = 0
-                    else:
-                        shares_to_sell = max(1, int(shortfall / price))
-                        actual = price * shares_to_sell
-                        shortfall -= actual
-                        h.shares -= shares_to_sell
-                        db.session.add(RoomTransaction(room_id=rid, user_id=user.id, symbol=h.symbol,
-                            action='SELL', shares=shares_to_sell, price=price, amount=actual,
-                            note='퀴즈 오답 패널티'))
+        with _get_member_lock(rid, user.id):
+            db.session.refresh(member)
+            if correct:
+                reward = max(10000, int(room.starting_cash * reward_pct / 100))
+                member.cash += reward
+                db.session.add(RoomTransaction(room_id=rid, user_id=user.id, symbol='QUIZ',
+                    action='ADJ', shares=0, price=0, amount=reward, note='퀴즈 정답 보상'))
+            else:
+                penalty = max(5000, int(room.starting_cash * penalty_pct / 100))
+                shortfall = penalty - member.cash
+                cash_deducted = penalty - max(shortfall, 0)
+                member.cash = max(0, member.cash - penalty)
+                if cash_deducted > 0:
+                    db.session.add(RoomTransaction(room_id=rid, user_id=user.id, symbol='QUIZ',
+                        action='ADJ', shares=0, price=0, amount=-cash_deducted, note='퀴즈 오답 패널티'))
+                # 현금 부족 시 보유 주식 → 예금 순서로 추가 차감
                 if shortfall > 0:
-                    for dep in Deposit.query.filter_by(room_id=rid, user_id=user.id, status='active').all():
-                        if shortfall <= 0:
-                            break
-                        take = min(dep.amount, shortfall)
-                        dep.amount -= take
-                        shortfall -= take
-                        if dep.amount <= 0:
-                            dep.status = 'withdrawn'
-                        db.session.add(RoomTransaction(room_id=rid, user_id=user.id, symbol='DEPOSIT',
-                            action='ADJ', shares=0, price=0, amount=-take,
-                            note='퀴즈 오답 패널티 (예금 차감)'))
-        db.session.commit()
+                    _liquidate_shortfall(rid, user.id, member, shortfall,
+                        '퀴즈 오답 패널티', '퀴즈 오답 패널티 (예금 차감)', credit_cash=False)
+            db.session.commit()
     prev_seen = (_quiz_state.get(key) or {}).get('seen', set())
     _quiz_state[key] = {'qid': None, 'cooldown_until': time.time() + 60, 'seen': prev_seen}
+    hist = _quiz_history.setdefault(key, [])
+    hist.append({'question': q['q'], 'correct': correct, 'explanation': q['ex'], 'ts': time.time()})
+    del hist[:-50]
     return jsonify({'correct': correct, 'reward': reward, 'penalty': penalty, 'explanation': q['ex']})
+
+@app.route('/api/rooms/<int:rid>/quiz/history')
+@login_required
+def get_quiz_history(rid):
+    Room.query.get_or_404(rid)
+    user = cur_user()
+    hist = _quiz_history.get((rid, user.id), [])
+    return jsonify(list(reversed(hist)))
 
 
 @app.route('/api/rooms/<int:rid>/host/market-event', methods=['POST'])
@@ -1451,16 +1479,12 @@ def export_rankings(rid):
         return jsonify({'error': '진행자만 다운로드할 수 있습니다.'}), 403
     start = room.starting_cash
     board = []
-    for m in RoomMember.query.filter_by(room_id=rid).all():
-        u = db.session.get(User, m.user_id)
-        total = member_total_value(rid, m.user_id)
-        gain_pct = (total - start) / start * 100 if start else 0
-        parts = u.username.split(' ', 1)
+    for e in _compute_leaderboard(rid):
+        parts = e['username'].split(' ', 1)
         sid  = parts[0] if len(parts) > 1 else ''
-        name = parts[1] if len(parts) > 1 else u.username
-        board.append({'name': name, 'sid': sid, 'total_value': round(total),
-                      'gain_pct': round(gain_pct, 2), 'gain_amount': round(total - start)})
-    board.sort(key=lambda x: x['total_value'], reverse=True)
+        name = parts[1] if len(parts) > 1 else e['username']
+        board.append({'name': name, 'sid': sid, 'total_value': e['total_value'],
+                      'gain_pct': e['gain_pct'], 'gain_amount': round(e['total_value'] - start)})
 
     wb = openpyxl.Workbook()
     ws = wb.active
