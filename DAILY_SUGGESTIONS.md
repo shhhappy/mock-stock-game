@@ -2106,3 +2106,35 @@
 - **`Room.query.get_or_404(rid)` 전면 사용** (`app.py` 전반 36곳): Flask-SQLAlchemy 3.x 에서 레거시 `Query.get()` 은 deprecated. `db.get_or_404(Room, rid)` (Flask-SQLAlchemy ≥3.0) 또는 `db.session.get(Room, rid)` 로 순차 교체 필요. 기능 영향 없이 경고 제거 가능.
 
 - **룰렛 60초 자동 닫힘이 남은 스핀을 강제 소멸** (`app.js:972-997`, `openRouletteModal()`): 룰렛 모달이 열리면 60초 카운트다운 후 `closeRoulette()` 를 자동 호출. 스핀 3회 중 1회만 돌린 채 60초가 지나면 나머지 2회가 소멸되고, `closeRoulette()` 가 `minigame/close` 를 호출해 게임이 종료로 이어질 수 있음. 자동 닫힘을 제거하거나, 남은 스핀이 0이 될 때만 자동 닫힘을 트리거하도록 조건 추가 필요.
+
+---
+
+## 2026-07-12 (2차)
+
+### 추가하면 좋을 기능
+
+- **시장 탭 종목 정렬 기준 선택 UI** (`app.js:1257-1270`, `filterStocks()`): 현재 종목은 서버 `STOCKS` dict 삽입 순서 그대로 표시되며 정렬 컨트롤이 없음. `<select>`로 "변동률 높은 순 / 낮은 순 / 현재가 높은 순 / 이름 순" 옵션을 추가하고 `renderGrid()` 직전에 `filtered.sort((a,b) => ...)` 를 적용하면 학생이 급락 종목을 바로 찾을 수 있음. 서버 변경 불필요, 클라이언트 전용 수정.
+
+- **포트폴리오 자산 변화 차트에 시작 자금 기준선 추가** (`app.js:1505-1540`, `loadPortfolio()`): `assetLineChart` 에 손익 기준선이 없어 학생이 수익 여부를 시각적으로 파악하기 어려움. `datasets` 에 `{ data: S.assetHistory.map(() => starting), borderColor:'rgba(239,68,68,0.4)', borderDash:[5,5], borderWidth:1, pointRadius:0, fill:false, label:'시작 자금' }` 를 추가하면 break-even 라인이 표시되어 수익/손실 구간이 즉시 구분됨.
+
+- **게임 방 최대 인원 제한 설정** (`models.py:25-44`, `app.py:392-406`): `Room` 모델에 `max_members` 컬럼이 없어 방 생성 후 학생이 무제한으로 입장 가능. `max_members = db.Column(db.Integer, default=100)` 를 추가하고, 스타트업 마이그레이션 블록에 `ALTER TABLE rooms ADD COLUMN max_members INTEGER DEFAULT 100` 을 포함. `join_room()` 에서 `RoomMember.query.filter_by(room_id=room.id).count() >= room.max_members` 검사 추가. 방 생성 UI에는 기본값 35 입력란 추가.
+
+- **학생 이름 입장 후 수정 기능** (`app.py:329-342`): 학생이 이름을 오입력한 경우 로그아웃 후 재입장 외에 수정 방법이 없음. `PATCH /api/auth/username` 엔드포인트를 추가해 `user.username = new_username; db.session.commit()` 처리하고 `IntegrityError` 시 400 반환. 모든 게임 데이터는 `user_id` 기준이므로 이름 변경이 기존 포지션·거래 내역에 영향을 주지 않음.
+
+- **룰렛 꽝 확률 0% 방지** (`app.py:1372-1383`, `app.js:956-969`): `host_roulette_config()` 는 `sum(weights) != 0` 만 검사하므로 `weights[0]=0` 설정이 가능. 꽝이 사라지면 모든 학생이 반드시 배수 수익을 얻어 게임 밸런스가 무너짐. 서버에 `if weights[0] < 1: return jsonify({'error': '꽝 확률은 최소 1 이상이어야 합니다.'}), 400` 추가, UI 의 `rlt-w-0` 입력에 `min="1"` 속성 추가.
+
+- **게임 방 안내사항(description) 필드 추가** (`models.py:25-44`, `app.py:363-390`): 교사가 오늘 세션 규칙("분산 투자 필수", "공매도 금지")을 학생에게 전달할 방법이 없어 구두 설명에 의존. `Room` 에 `description = db.Column(db.String(300), nullable=True)` 추가, `create_room()` 에서 파싱, `room_dict()` 에 포함, 참가자 로비 및 게임 헤더에 표시.
+
+### 제거/단순화할 것들
+
+- **`doSetRltConfig()` 저장 후 룰렛 휠 시각 미갱신** (`app.js:956-969`): `api.post(.../roulette-config, ...)` 성공 시 `_rltMults = data.multipliers; _rltWeights = data.weights` 를 갱신하지만 `updateRltLegend(data.multipliers, data.weights)` 를 호출하지 않아 호스트 화면의 conic-gradient 휠이 이전 확률로 유지됨. `doSetRltConfig()` 의 성공 분기 마지막에 `updateRltLegend(data.multipliers, data.weights)` 한 줄 추가로 해결 가능.
+
+- **`enterParticipantGame()` 에서 `S.assetHistory` 미초기화** (`app.js:593`): `showLanding()` (line 94) 에서는 `S.assetHistory = []` 를 초기화하지만, 새로고침 후 `resumeRoom()` (lines 171-181) 이 `showLanding()` 을 거치지 않고 `enterParticipantGame()` 을 직접 호출. 이전 세션에서 쌓인 `assetHistory` 배열이 남아 있어 포트폴리오 차트에 이전 세션 데이터가 앞에 붙음. `enterParticipantGame()` 시작 지점에 `S.assetHistory = [];` 를 추가하면 재진입 시에도 항상 클린 상태 보장.
+
+- **`force_sector_event()` 가 `_current_biases` 갱신 없음** (`stock_service.py:244-276`): 호스트가 섹터 이벤트를 트리거하면 해당 종목의 가격과 뉴스는 즉시 변동되지만 `_current_biases` 는 이전 값 그대로. 이후 자동 price tick 이 이전 방향 bias 로 움직여 이벤트 방향과 역행할 수 있음. `return affected` (line 275) 직전에 `for sym in affected: self._current_biases[sym] = direction` 을 추가해 다음 tick 방향을 이벤트와 일치시킴.
+
+- **`host_adjust()` 에 `room.status` 검증 없음** (`app.py:587-603`): `room.host_id != user.id` 만 검사하므로 게임 종료 후에도 교사가 `POST /api/rooms/<rid>/host/adjust` 를 호출해 학생 현금을 수정할 수 있음. 수정 후 결과 엑셀을 다시 내려받으면 변조된 수치가 반영됨. `app.py:592` 에 `if room.status == 'ended': return jsonify({'error': '종료된 게임은 조정할 수 없습니다.'}), 400` 추가.
+
+- **`refreshMyRank()` 에 fetch 예외 미처리** (`app.js:735-753`): `await api.get(...)` 에서 네트워크 단절 시 `fetch()` 가 throw하는데 `setInterval` 콜백 내에 try/catch 가 없어 unhandled rejection 이 발생. 이후 같은 콜백 내의 `loadMarket()` · `loadParticipantRankings()` 호출도 건너뜀. `api.get(...)` 호출을 `await api.get(...).catch(() => null)` 로 바꾸고 결과가 null 이면 즉시 return 처리.
+
+- **`minigame_open()` 에서 `_rlt_lock` 보유 중 `db.session.commit()` 호출** (`app.py:948-955`): `with _rlt_lock:` 블록 내부(line 952-954)에서 `room.status='paused'; db.session.commit()` 을 실행. SQLite busy_timeout(5000ms)만큼 DB I/O 가 지연될 경우 `_rlt_lock` 을 기다리는 다른 스레드(`minigame_close()` 등)가 5초 블로킹됨. lock 블록 안에서는 `should_pause` 불리언만 판별하고, lock 종료 후 `room.status='paused'; db.session.commit()` 을 실행하도록 리팩터링.
