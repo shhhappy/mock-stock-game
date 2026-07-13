@@ -2138,3 +2138,33 @@
 - **`refreshMyRank()` 에 fetch 예외 미처리** (`app.js:735-753`): `await api.get(...)` 에서 네트워크 단절 시 `fetch()` 가 throw하는데 `setInterval` 콜백 내에 try/catch 가 없어 unhandled rejection 이 발생. 이후 같은 콜백 내의 `loadMarket()` · `loadParticipantRankings()` 호출도 건너뜀. `api.get(...)` 호출을 `await api.get(...).catch(() => null)` 로 바꾸고 결과가 null 이면 즉시 return 처리.
 
 - **`minigame_open()` 에서 `_rlt_lock` 보유 중 `db.session.commit()` 호출** (`app.py:948-955`): `with _rlt_lock:` 블록 내부(line 952-954)에서 `room.status='paused'; db.session.commit()` 을 실행. SQLite busy_timeout(5000ms)만큼 DB I/O 가 지연될 경우 `_rlt_lock` 을 기다리는 다른 스레드(`minigame_close()` 등)가 5초 블로킹됨. lock 블록 안에서는 `should_pause` 불리언만 판별하고, lock 종료 후 `room.status='paused'; db.session.commit()` 을 실행하도록 리팩터링.
+
+## 2026-07-13
+
+### 추가하면 좋을 기능
+
+- **QR 스캔 후 방 코드 자동 입력** (`app.js:195-206`, `index.html:319-321`): `_makeQR()`에서 URL에 `?code=XXXXXX` 쿼리 파라미터를 포함하지만 (`app.js:197`), 페이지 로드 시 해당 파라미터를 파싱해 `join-code` 입력 필드에 자동으로 채우는 로직이 없음. `DOMContentLoaded` 이벤트에 `const c = new URLSearchParams(location.search).get('code'); if(c) document.getElementById('join-code').value = c.toUpperCase(); showScreen('screen-join');` 추가 시 QR 스캔 즉시 입장 화면으로 이동하고 코드가 자동 입력됨.
+
+- **호스트가 복권 전체 결과를 게임 종료 후에도 조회 가능하도록** (`app.py:1113-1147`): 복권 결과(`_lots[rid]['current']['results']`)가 in-memory에만 존재해 모달 닫으면 사라짐. 게임 종료 시 `_end_room()`에서 복권 결과를 `RoomTransaction`에 'LOTTO_SUMMARY' 노트로 저장(`app.py:120-163`)하거나, 호스트 결과 화면에 복권 당첨자 요약 섹션을 추가하면 수업 후 피드백에 활용 가능.
+
+- **`host/adjust` 엔드포인트에 게임 종료 후 잠금** (`app.py:587-603`): `room.host_id != user.id` 만 검사하므로 `room.status == 'ended'` 인 방에도 `POST /api/rooms/<rid>/host/adjust` 호출이 허용됨. 조정 후 엑셀 재다운로드 시 변조된 순위가 반영될 수 있음. `app.py:593` 직후에 `if room.status == 'ended': return jsonify({'error': '종료된 게임은 자산 조정이 불가합니다.'}), 400` 추가.
+
+- **`_quiz_settings` · `_roulette_config` 데이터베이스 영속화** (`app.py:250-252, 1245-1246`): Render free tier는 15분 무활동 시 프로세스가 종료(spin-down)되어 in-memory dict 전체 초기화. 게임 도중 설정한 퀴즈 보상률·룰렛 확률이 서버 재시작 후 기본값으로 복귀. `Room` 테이블에 `quiz_reward_pct FLOAT`, `quiz_penalty_pct FLOAT`, `rlt_config JSON(String)` 컬럼 추가 후 마이그레이션 블록(`app.py:31-40`)에 ALTER 문 추가, `quiz_settings()`·`host_roulette_config()` 에서 DB 읽기/쓰기로 변경.
+
+- **참가자 게임 진입 시 URL 기반 방 직접 접속 지원** (`app.js:82-90`): 현재 `resumeRoom()`이 `session`에 저장된 방을 자동 복원하지만, 새 시크릿 브라우저에서 QR로 접속 시 로그인→코드 입력 두 단계가 필요. `/join?code=XXXX` 경로를 처리하는 로직에서 코드가 있으면 로그인 화면 건너뛰고 방 참가 화면 선표시(`showScreen('screen-join')`)하면 스마트폰에서 원클릭 입장 가능.
+
+- **호스트 대시보드에 참가자 접속 현황 실시간 표시** (`app.py:542-562`, `app.js:408-431`): 게임 중 탭 전환 없이 참가자 수 및 최근 접속 시각을 순위 탭에 함께 표시하면 학생이 게임에서 이탈(탭 닫기 등)했는지 파악 가능. `RoomMember`에 `last_seen_at` 컬럼 추가, `/api/rooms/<rid>/portfolio` 또는 `/api/rooms/<rid>` 호출 시 갱신, 호스트 멤버 목록에 "(5분 전 접속)" 표시 추가.
+
+### 제거/단순화할 것들
+
+- **`_set_sqlite_pragmas` PostgreSQL 환경 오류 가능성** (`app.py:18-29`): `_sa_event.listen(db.engine, "connect", _set_sqlite_pragmas)` 가 DB 종류 무관하게 등록됨. `DATABASE_URL` 환경변수가 `postgresql://`로 시작하면 `PRAGMA journal_mode=WAL` 등이 PostgreSQL에서 오류를 발생시킴. `app.py:29` 를 `if 'sqlite' in app.config['SQLALCHEMY_DATABASE_URI']: _sa_event.listen(db.engine, "connect", _set_sqlite_pragmas)` 로 변경해 조건 분기 필요.
+
+- **`member_total_value()` 반복 호출 N+1 쿼리** (`app.py:107-118`): `get_rankings()` (line 815), `host_members()` (line 554), `export_rankings()` (line 1432)에서 모든 멤버에 대해 각각 `RoomHolding.query.filter_by(room_id=rid, user_id=uid)` + `Deposit.query.filter_by(room_id=rid, user_id=uid)` 를 실행. 30명 방 기준 ranking 요청 한 번에 60개 이상 쿼리 발생. `RoomHolding.query.filter_by(room_id=rid).all()` 과 `Deposit.query.filter_by(room_id=rid, status='active').all()` 을 방 전체에 대해 한 번씩 조회하고, `user_id` 기준으로 파이썬에서 집계하면 쿼리 수를 2-3개로 줄일 수 있음.
+
+- **`_ending_soon` set 서버 재시작 시 소실** (`app.py:90, 527-535`): 호스트가 종료 요청 시 `room.end_time`이 `now + 60초`로 단축되지만 이 정보가 DB에는 반영됨. 그러나 `rid`를 `_ending_soon` set에만 추가하므로 서버 재시작 시 set이 초기화되어 `end_time`이 60초 이내임에도 `ending_soon` 플래그가 내려가지 않음. `room_dict()`에서 `_ending_soon`을 참조하는 대신 `room.end_time` vs `datetime.utcnow() + timedelta(seconds=70)` 비교로 대체하면 서버 재시작 내성 확보 가능.
+
+- **`find_active_room()` 추가 쿼리 낭비** (`app.py:307-313`): `RoomMember.query.join(Room).filter(...).first()` 로 멤버를 찾은 뒤 `db.session.get(Room, m.room_id)` 로 Room을 다시 조회. `join()` 시 이미 `Room` 인스턴스를 로드하므로 `RoomMember.query.join(Room, ...).with_entities(Room).filter(...).first()` 패턴으로 Room을 바로 반환하면 왕복 쿼리 1회 절약.
+
+- **룰렛 설정 테이블 칸 색상과 실제 휠 색상 불일치** (`index.html:276-300`, `app.js:905`): 호스트 설정 UI의 "2칸"은 `#e67e22`(주황), "3칸"은 `#f1c40f`(노랑)인데, `_RLT_COLORS = ['#e74c3c','#3498db','#f39c12','#2ecc71','#9b59b6']` 에서 인덱스 1이 파란색(`#3498db`)으로 매핑됨. 교사가 확률 편집 시 색상 기준으로 결과 구분 불가. `index.html`의 인라인 색상을 `_RLT_COLORS` 값과 맞추거나 `_RLT_COLORS` 배열을 HTML 색상과 통일.
+
+- **`loadDepositsPage()` 에서 portfolio API 중복 호출** (`app.js:1621-1644`): `showPage('deposit')` 시 `loadDepositsPage()` 가 `api.get('/portfolio')` 와 `api.get('/deposits')` 를 순차 호출. 같은 폴링 사이클에서 이미 portfolio를 가져온 경우에도 재호출. `S.depCash` 를 `refreshMyRank()` 의 `total_value` 기반 데이터에서 업데이트하거나, portfolio 응답 캐시를 활용하면 예금 탭 진입마다 발생하는 불필요한 portfolio 요청 1건 제거.
