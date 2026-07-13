@@ -2168,3 +2168,35 @@
 - **룰렛 설정 테이블 칸 색상과 실제 휠 색상 불일치** (`index.html:276-300`, `app.js:905`): 호스트 설정 UI의 "2칸"은 `#e67e22`(주황), "3칸"은 `#f1c40f`(노랑)인데, `_RLT_COLORS = ['#e74c3c','#3498db','#f39c12','#2ecc71','#9b59b6']` 에서 인덱스 1이 파란색(`#3498db`)으로 매핑됨. 교사가 확률 편집 시 색상 기준으로 결과 구분 불가. `index.html`의 인라인 색상을 `_RLT_COLORS` 값과 맞추거나 `_RLT_COLORS` 배열을 HTML 색상과 통일.
 
 - **`loadDepositsPage()` 에서 portfolio API 중복 호출** (`app.js:1621-1644`): `showPage('deposit')` 시 `loadDepositsPage()` 가 `api.get('/portfolio')` 와 `api.get('/deposits')` 를 순차 호출. 같은 폴링 사이클에서 이미 portfolio를 가져온 경우에도 재호출. `S.depCash` 를 `refreshMyRank()` 의 `total_value` 기반 데이터에서 업데이트하거나, portfolio 응답 캐시를 활용하면 예금 탭 진입마다 발생하는 불필요한 portfolio 요청 1건 제거.
+
+---
+
+## 2026-07-13 (2차)
+
+### 추가하면 좋을 기능
+
+- **호스트가 학생별 포트폴리오 직접 조회** (`app.py:772-803`, `app.js:408-431`): 호스트 순위 탭에서 학생 자산 총액만 보이고, 어느 종목에 얼마나 투자했는지는 표시되지 않아 "왜 순위가 이렇게 됐는가"를 수업에서 설명하기 어려움. `GET /api/rooms/<rid>/host/members/<uid>/portfolio` 엔드포인트를 추가하고(호스트 권한 체크 후 `get_portfolio()` 로직 그대로 재사용), 호스트 멤버 행 클릭 시 해당 학생의 보유 종목·수익률 모달을 표시하면 수업 시연에 활용 가능.
+
+- **종목 카드에 전체 참여자 보유 인원 표시** (`app.py:651-671`, `app.js:1287-1311`): 특정 종목에 몇 명이 투자 중인지 알 수 없어 교사가 군집 투자(쏠림 현상)를 파악하기 어려움. `get_stocks()` 응답에 각 종목별 `holder_count` 필드를 추가(`RoomHolding.query.filter_by(room_id=rid, symbol=sym).count()` 집계)하고 `stock-card` 하단에 "👥 3명 보유" 표시를 추가하면 분산 투자 토론 시 교육 자료로 활용 가능.
+
+- **포트폴리오 탭에 분산 투자 집중도 지표 표시** (`app.js:1456-1566`): 학생이 한 종목에 전 자산을 몰아넣어도 시각적으로 인지하기 어려움. `loadPortfolio()` 내에서 `max_pct = Math.max(...data.holdings.map(h => h.current_value / data.total_value * 100))` 를 계산한 뒤, 60% 이상이면 "🔴 집중 위험", 30~60%면 "🟡 보통", 30% 미만이면 "🟢 분산 양호" 배지를 포트폴리오 상단 요약에 추가. 서버 변경 없이 클라이언트 전용으로 구현 가능.
+
+- **게임 방 설정 복사 기능** (`app.js:121-140`, `app.py:363-390`): 교사가 동일 설정(시간, 시작 자금, 금리)으로 여러 반을 연속 운영할 때 매번 입력값을 다시 채워야 함. 결과 화면(screen-results)에 "같은 설정으로 새 방 만들기" 버튼을 추가해 `S.room.duration_minutes`, `S.room.starting_cash`, `S.room.deposit_rate` 를 URL 파라미터 또는 localStorage 에 저장 후 방 생성 화면으로 이동할 때 자동 입력하면 재사용이 편리함.
+
+- **포트폴리오 탭 폴링 미구현** (`app.js:613-650`): `enterParticipantGame()` 의 10초 폴링 루프(line 648)에서 `if (S.currentPage === 'market') loadMarket()` 은 있지만 `portfolio` 탭에 대한 자동 갱신이 없음. 학생이 포트폴리오 탭을 열어 놓은 상태에서 호스트가 강제 가격 변동을 발생시켜도 보유 종목 평가 금액이 갱신되지 않음. `if (S.currentPage === 'portfolio') loadPortfolio()` 를 같은 폴링 블록에 추가해 10초마다 실시간 갱신.
+
+- **퀴즈 결과 교사 화면 실시간 집계** (`app.py:1270-1342`, `app.js:828-895`): 교사(호스트) 화면에 퀴즈 정답률·오답자 명단이 표시되지 않아 수업 중 학생 이해도 파악이 불가. `_quiz_state` 딕셔너리를 순회해 퀴즈 결과 요약(`GET /api/rooms/<rid>/host/quiz-stats`)을 제공하거나, `RoomTransaction` 에 기록된 퀴즈 보상/패널티 ADJ 거래 내역을 집계하면 교사 화면에 "정답 12명 / 오답 5명" 형태로 표시 가능.
+
+### 제거/단순화할 것들
+
+- **`get_rankings()` 에서 User None 시 AttributeError 충돌** (`app.py:818`): `u = db.session.get(User, m.user_id)` 후 `'username': u.username` 을 바로 사용. 사용자가 DB에서 삭제된 경우 `NoneType has no attribute 'username'` 로 500 오류 발생. 동일 파일의 `host_members()` (line 557)에는 `u.username if u else str(m.user_id)` 가드가 있으나 `get_rankings()` 에는 누락됨. `'username': u.username if u else str(m.user_id)` 로 통일.
+
+- **`export_rankings()` 에서도 User None 가드 누락** (`app.py:1435`): `u = db.session.get(User, m.user_id)` 후 `parts = u.username.split(' ', 1)` 를 직접 호출. `u` 가 None 이면 `AttributeError` 로 500 응답이 반환되어 Excel 다운로드 실패. `username = u.username if u else str(m.user_id); parts = username.split(' ', 1)` 으로 수정.
+
+- **`create_room()` 에서 int/float 변환 예외 미처리** (`app.py:384-386`): `int(d.get('duration_minutes', 30))`, `float(d.get('starting_cash', 10_000_000))`, `float(d.get('deposit_rate', 3.0))` 가 모두 try/except 없이 실행됨. API를 직접 호출할 때 `duration_minutes: "abc"` 와 같은 비정상 값이 들어오면 `ValueError` 로 500 오류. `try: ... except (TypeError, ValueError): return jsonify({'error': '잘못된 입력값 형식'}), 400` 으로 각각 감싸거나 일괄 처리.
+
+- **`force_price()` 가 `_current_biases` 갱신하지 않음** (`stock_service.py:231-241`): 호스트가 종목을 강제로 상승/하락시키면 뉴스와 가격은 즉시 반영되지만 `self._current_biases[symbol]` 는 갱신되지 않음. 이후 자동 가격 tick 시 이전 bias 방향으로 움직여 강제 이벤트와 반대 방향으로 가격이 역행할 수 있음. `return new_price` 직전에 `self._current_biases[symbol] = 'up' if pct > 0 else 'down'` 한 줄 추가로 해결 가능. (유사한 `force_sector_event()` 문제는 2026-07-12(2차)에 보고됨; `force_price()` 만 미수정.)
+
+- **`get_quiz()` 및 `submit_quiz()` 에 참여자 검증 없음** (`app.py:1248-1268`, `app.py:1270-1342`): `@login_required` 만 있고 `RoomMember` 체크가 없어 방 ID를 아는 사람이면 누구나 퀴즈 보상을 받을 수 있음. 호스트도 퀴즈를 사용해 자신의 자산을 늘릴 수 있음(호스트는 `RoomMember` 가 아니므로 `member.cash` 갱신 시 `None` 이 반환되어 실제로는 영향 없지만, `_quiz_state` 에 불필요한 상태가 쌓임). `app.py:1254` (get_quiz)와 `app.py:1278` (submit_quiz) 직후에 `member = RoomMember.query.filter_by(room_id=rid, user_id=user.id).first(); if not member: return jsonify({'error': '참여자가 아닙니다.'}), 403` 추가.
+
+- **`withdraw_deposit()` 에서 RoomTransaction 미기록** (`app.py:904-916`): 예금 조기 해지 시 `dep.status = 'withdrawn'; m.cash += dep.amount` 는 처리되지만 `RoomTransaction` 레코드가 없음. 교사가 `host/members/<uid>/transactions` 에서 특정 학생의 거래 내역을 확인할 때 예금 해지 이벤트가 보이지 않아 자산 이력 추적에 공백이 생김. `db.session.add(RoomTransaction(room_id=rid, user_id=user.id, symbol='DEPOSIT', action='ADJ', shares=0, price=0, amount=dep.amount, note='예금 조기 해지 — 이자 없이 원금 반환'))` 를 `db.session.commit()` 직전에 추가.
