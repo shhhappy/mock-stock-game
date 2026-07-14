@@ -2233,3 +2233,33 @@
 
 - **참가자 로비 화면 규칙 안내 부재** (index.html:340~352, screen-p-lobby): 학생들이 진행자 시작을 대기하는 동안 게임 규칙을 볼 방법이 없음. 로비 하단에 "❓ 규칙 보기" 버튼 하나를 추가해 `openRules()` 호출하면 됨(`modal-rules`는 이미 존재, index.html:837). 코드 3줄.
 
+---
+
+## 2026-07-14 (2차)
+
+### 추가하면 좋을 기능
+
+- **예금 이자 예상액이 일시정지 시간을 반영하지 않는 표시 버그** (`app.py:858-876`): `get_deposits()` 에서 `expected_interest` 를 계산할 때 `held = (now - d.created_at).total_seconds()` 로 벽시계 기준 경과 시간을 사용함. 복권(~1.5분)·룰렛(~2분)·호스트 수동 일시정지가 누적되면 game_end 기반의 `_end_room()` 정산(line 138)보다 높은 이자가 학생 화면에 표시됨. 예컨대 총 5분 정지가 발생하면 30분 게임에서 약 17% 과대 표시. 단순 수정: `ratio` 계산을 `remaining_seconds / total_seconds` 방식(게임에 남은 시간 기반)으로 변경하면 현재 `create_deposit()` 응답(line 897)과 동일한 방식으로 통일되고 일시정지 시간이 자동 보정됨.
+
+- **모바일 숫자 입력 키패드 최적화** (`index.html` 숫자 입력 필드 전반): `trade-qty`(거래 수량), `dep-amount`(예금 금액), `rlt-bet`(룰렛 베팅), `adj-delta`(자산 조정), `lot-prize`(복권 상금) 등 `<input type="number">` 필드에 `inputmode="numeric"` 속성이 없어 모바일에서 전체 문자 키보드가 펼쳐짐. `inputmode="numeric" pattern="[0-9]*"` 속성을 각 숫자 입력 필드에 추가하면 iOS·Android에서 숫자 전용 키패드가 열려 교실 스마트폰 사용 학생의 거래 속도와 오타 감소에 직접 기여. 서버 변경 불필요, `index.html` 8~10 곳의 1줄 수정.
+
+- **시장 탭 종목 카드에 "내가 보유 중" 뱃지 표시** (`app.js:1287-1330 renderGrid()`): 현재 시장 탭 종목 카드에는 내가 이미 보유 중인 종목인지 시각적으로 표시되지 않아, 확인을 위해 포트폴리오 탭으로 이동해야 함. `loadPortfolio()` 완료 시 `S.myHoldings = Object.fromEntries(data.holdings.map(h => [h.symbol, h.shares]))` 를 캐시하고, `renderGrid()` 내 카드 생성 시 `if (S.myHoldings?.[st.symbol] > 0)` 이면 카드 우상단에 `<span class="owned-badge">보유 ${n}주</span>` 뱃지를 추가. `execTrade()` 성공 후 `loadPortfolio()` 호출 시 자동 갱신. 서버 신규 API 불필요, 클라이언트 전용 구현.
+
+- **배당금 시뮬레이션 기능** (신규 `stock_service.py` + `app.py`): 현재 수익 경로가 주가 상승·룰렛·복권으로 한정되어 있어 "배당주 vs 성장주" 개념 수업이 어려움. 금융(`KBFIN`, `SHFIN` 등)·통신(`SKTEL`, `KTCOR`)·에너지 섹터 종목 보유자에게 게임 경과 시간 비례 배당금을 지급하는 기능 추가. `StockService` 에 `_dividend_last_ts: dict` 추가, `get_room()` 폴링 시 일정 간격(예: 게임 시간의 1/6) 초과 시 해당 섹터 보유 `RoomMember` 에 `RoomTransaction(action='ADJ', note='분기 배당금')` 생성. `Room` 모델에 `dividend_enabled BOOLEAN DEFAULT FALSE` 컬럼으로 교사가 수업 목적에 따라 활성화 제어.
+
+- **학생 자기 탈퇴(Leave Room) API 추가** (`app.py` 신규 엔드포인트): 학생이 QR 코드를 잘못 스캔해 엉뚱한 방에 입장했을 때 나갈 방법이 없음. 진행자 강퇴(`kick_member`, `app.py:564-575`)는 호스트만 가능하고 `waiting` 상태로 제한됨. `DELETE /api/rooms/<int:rid>/leave` 엔드포인트를 추가해 `room.status == 'waiting'` 에서만 `RoomMember.query.filter_by(room_id=rid, user_id=user.id).delete()` 를 허용하면 됨. `active`·`paused` 상태 이탈은 막아 진행 중 무단 탈퇴 방지. 프론트엔드는 참가자 로비 화면에 "나가기" 버튼 1개 추가로 연결.
+
+---
+
+### 제거/단순화할 것들
+
+- **`app.py:38-40` 마이그레이션 블록의 `except Exception` 이 치명적 오류를 무음 처리**: `ALTER TABLE` 실패를 수용하기 위해 `except Exception: db.session.rollback()` 으로 모든 예외를 삼키지만, DB 연결 실패·파일시스템 오류·권한 문제 등 실제로 대응이 필요한 오류도 같은 코드 경로로 들어와 배포 직후 마이그레이션 실패를 탐지할 수 없음. `from sqlalchemy.exc import OperationalError` 로 import 후 `except OperationalError` 로 범위를 좁히고, `app.logger.warning(f"DB migration skip (likely already exists): {e}")` 로그 한 줄 추가 권장. 그 외 예외는 재발생(`raise`)시켜 배포 실패를 즉시 알 수 있게 함.
+
+- **`app.py:595` `host_adjust()` `delta` 파라미터에 NaN·Infinity 허용**: `delta = float(d.get('delta', 0))` 에서 Python `float()` 는 문자열 `'nan'`, `'inf'`, `'-inf'` 를 예외 없이 변환. 악의적 API 호출로 `{"delta": "nan"}` 을 보내면 `m.cash = max(0, m.cash + float('nan'))` → `float('nan')` 이 되어 학생 자산이 NaN으로 오염됨. 이후 `get_rankings()` 정렬(`sort(key=lambda x: x['total_value'], reverse=True)`)에서 NaN 비교 오류, `export_rankings()` 엑셀 숫자 서식에서 오류가 전파됨. `from math import isfinite; if not isfinite(delta): return jsonify({'error': '잘못된 값'}), 400` 한 줄 추가 또는 `delta = max(-500_000_000, min(500_000_000, delta))` 클램핑으로 방어.
+
+- **`stock_service.py:285-309` `get_history()` 동시 호출 시 TOCTOU 패턴으로 차트 불일치**: lock 해제 후 `bars` 를 랜덤 생성하고 다시 lock 취득 후 저장하는 구조(`stock_service.py:285-288`에서 캐시 확인, 289에서 lock 해제, 292~306 루프, 308-309에서 저장). 두 스레드가 동시에 캐시 미스를 확인하면 각각 다른 `random.gauss()` 시퀀스로 bars를 생성해 하나가 다른 것을 덮어씀. 결과적으로 두 학생이 동시에 같은 종목 차트를 열면 이전 버전이 남은 학생이 발생. 해결책: `bars` 생성 루프 전체를 `with self._lock:` 블록 안으로 이동하거나, `random.seed(f"{symbol}-{period}-{int(time.time()//120)}")` 로 시드를 시간 블록 기반으로 고정해 동일 120초 창 내 요청이 항상 동일한 차트를 반환하도록 보장.
+
+- **`app.py:653-654` `get_stocks()` 에서 `Room.query.get_or_404(rid)` 반환값 미사용**: `get_stocks()` 첫 줄 `Room.query.get_or_404(rid)` 가 반환값 없이 호출됨. 방 유효성 검증 의도는 명확하나, 반환 `room` 객체를 변수에 담지 않아 코드 리뷰어에게 사용 목적이 불투명함. 동일 패턴이 `get_room_news()` (line 705-706)에도 반복됨. `db.get_or_404(Room, rid)` (Flask-SQLAlchemy 3.x 권장) 또는 최소한 `_ = Room.query.get_or_404(rid)` 형태로 의도를 명시. 나아가 두 엔드포인트 모두 `room.status` 가 `ended` 인 경우 `StockService` 가 존재하지 않을 수 있어(cleanup 이후) `get_room_service(rid)` 가 새 인스턴스를 생성하는 부작용도 병행 점검 권장.
+
+- **`app.py:977` `minigame_close()` 내 `Room.query.get(rid)` deprecated 패턴 미수정**: 2026-06-23(2차) 분석에서 지적됐으나 이 한 줄만 남아있음. `with _rlt_lock:` 블록 내에서 `room = Room.query.get(rid)` 를 사용해 SQLAlchemy 2.x deprecated 경고 발생. `db.session.get(Room, rid)` 로 교체하고, `if not room: state['auto_paused'] = False; return jsonify({'ok': True})` 조기 반환을 추가하면 방이 이미 삭제된 엣지 케이스도 방어됨. `_rlt_lock` 보유 중 DB 조회를 수행하는 구조적 문제(07-12(2차)에서 지적)의 부분 개선으로도 연결됨.
+
