@@ -2200,3 +2200,36 @@
 - **`get_quiz()` 및 `submit_quiz()` 에 참여자 검증 없음** (`app.py:1248-1268`, `app.py:1270-1342`): `@login_required` 만 있고 `RoomMember` 체크가 없어 방 ID를 아는 사람이면 누구나 퀴즈 보상을 받을 수 있음. 호스트도 퀴즈를 사용해 자신의 자산을 늘릴 수 있음(호스트는 `RoomMember` 가 아니므로 `member.cash` 갱신 시 `None` 이 반환되어 실제로는 영향 없지만, `_quiz_state` 에 불필요한 상태가 쌓임). `app.py:1254` (get_quiz)와 `app.py:1278` (submit_quiz) 직후에 `member = RoomMember.query.filter_by(room_id=rid, user_id=user.id).first(); if not member: return jsonify({'error': '참여자가 아닙니다.'}), 403` 추가.
 
 - **`withdraw_deposit()` 에서 RoomTransaction 미기록** (`app.py:904-916`): 예금 조기 해지 시 `dep.status = 'withdrawn'; m.cash += dep.amount` 는 처리되지만 `RoomTransaction` 레코드가 없음. 교사가 `host/members/<uid>/transactions` 에서 특정 학생의 거래 내역을 확인할 때 예금 해지 이벤트가 보이지 않아 자산 이력 추적에 공백이 생김. `db.session.add(RoomTransaction(room_id=rid, user_id=user.id, symbol='DEPOSIT', action='ADJ', shares=0, price=0, amount=dep.amount, note='예금 조기 해지 — 이자 없이 원금 반환'))` 를 `db.session.commit()` 직전에 추가.
+
+---
+
+## 2026-07-14
+
+### 추가하면 좋을 기능
+
+- **복권 번호 자동 선택 버튼** (index.html:484, app.js `doSubmitLotteryPick` 관련): 참가자 복권 UI(`lottery-picker-section`)에 "자동 선택" 버튼이 없어 학생들이 60초 타이머 내에 손으로 6개 숫자를 고르다 시간 초과가 빈번함. `Array.from({length:45},(_,i)=>i+1).sort(()=>Math.random()-0.5).slice(0,6).sort((a,b)=>a-b)` 로 랜덤 번호 채운 뒤 `_lotParticipantPicks`에 바로 넣는 버튼 한 개로 해결. 서버 변경 불필요, JS 10줄 이내. 이전 분석(2026-06-23)에서도 지적됐으나 여전히 미구현 — 파급 효과가 가장 큰 미해결 항목.
+
+- **방 코드 URL 파라미터 자동 입력** (app.js:196, index.html:319): QR 코드 생성 시 `?code=${S.room.code}` 파라미터를 붙이지만 (app.js:196 `joinUrl = ${location.origin}${location.pathname}?code=${S.room.code}`), join 화면 진입 시 `new URLSearchParams(location.search).get('code')`로 `join-code` 필드를 자동 채우는 코드가 없음. QR 스캔 후에도 학생이 코드를 다시 입력해야 하는 불편함. `DOMContentLoaded` 또는 `showScreen('screen-join')` 직전에 5줄 추가로 해결.
+
+- **진행자용 텍스트 공지 방송 기능** (app.py 신규 엔드포인트, index.html 설정 탭): 진행자가 폭탄뉴스(주가 연동)와 별개로 자유로운 텍스트 공지를 전체 참가자에게 보낼 방법이 없음. `Room` 모델에 `notice_text` + `notice_ts` 컬럼 추가, `GET /api/rooms/<rid>` 응답에 포함, 클라이언트 폴링에서 `notice_ts` 변화 감지 시 배너 표시. 수업 중 "지금 삼성전자 주목!", "3분 후 복권 시작" 등 실시간 안내에 활용 가능.
+
+- **진행자 퀴즈 답변 통계 표시** (app.py `_quiz_state`, 진행자 설정 탭): `_quiz_state` 딕셔너리에 `(rid, uid)` 별 결과가 메모리에 있지만, 진행자가 "방 전체 정답률"을 볼 방법이 없음. `GET /api/rooms/<rid>/host/quiz-stats` 엔드포인트로 `{correct: N, wrong: N, unanswered: N}` 반환하고 설정 탭 하단에 간단 표시. 수업 토론 포인트 생성에 유용.
+
+- **관심종목 가격 급변 토스트 알림** (app.js:1257~1324 `filterStocks`, `renderGrid`): 현재 `S.watchlist`에 등록한 종목이 있어도 가격 급등락 알림이 없음. `renderGrid()` 내 flash 애니메이션 로직(app.js:1312~1323) 실행 시 `S.watchlist.has(st.symbol) && Math.abs(st.change_pct) > 5` 조건이면 `toast('⭐ ${st.name} ${pct(st.change_pct)}', 'info')` 추가. 서버 변경 불필요.
+
+- **결과 화면 개인 거래 내역 섹션** (app.js `loadResults()`, screen-results): 게임 종료 후 결과 화면(screen-results)에 순위표와 차트만 있고 본인의 거래 내역이 없어 학생이 "내가 무슨 거래를 했는지" 복기 불가. `GET /api/rooms/<rid>/transactions?page=1`를 결과 화면 진입 시 호출해 최근 10건 표시하면 수업 마무리 토론 소재가 됨. 엔드포인트는 이미 존재(app.py:829).
+
+### 제거/단순화할 것들
+
+- **`startNewsPolling` 폴링 주기 하드코딩** (app.js:810): 뉴스를 무조건 8초(`setInterval(..., 8000)`)마다 폴링하지만, 진행자가 `news_seconds=5`로 줄이면 클라이언트는 여전히 8초마다 확인해 뉴스를 최대 3초 늦게 보여줌. `loadNewsInterval()` 반환값을 사용해 `Math.min(8000, data.news_seconds * 1000)` 으로 동적 조정하거나, 서버에서 `news_seconds`가 8초 이하일 때 경고 표시. 간단한 1줄 수정.
+
+- **`get_history()` '1년' 기간 bar 수 누락** (stock_service.py:292~293): `n_bars` 딕셔너리에 `'1y'` 키가 없어 `default=30`이 적용됨. '1달(30개)'과 '1년(30개)'이 동일한 bar 수를 사용해 두 차트가 사실상 같은 밀도로 표시됨. `'1y': 52` 추가(주봉 52주)하거나, index.html:683 '1년' 탭을 제거해 혼란 방지.
+
+- **`member_total_value()` N+1 쿼리** (app.py:107~118, get_rankings:815, host_members:542): `get_rankings()`, `host_members()` 모두 참가자 수만큼 루프 안에서 `member_total_value(rid, uid)` 호출 → 각 호출마다 `RoomHolding.query.filter_by()` + `Deposit.query.filter_by()` 실행. 30명 기준 ~60 추가 쿼리. `RoomHolding.query.filter_by(room_id=rid).all()` 한 번으로 전원 holdings를 미리 로드한 뒤 `uid` 기준 dict로 분류하면 쿼리 수를 2~3개로 줄임. Render 무료 플랜의 SQLite 환경에서 응답 지연 원인.
+
+- **`gen_code()` 10회 시도 후 중복 코드 반환 가능** (models.py:8~13): 10회 모두 충돌 시 마지막 코드를 `unique=True` 검증 없이 반환. 실제 충돌 확률은 낮지만, 마지막 `return` 전 `if Room.query.filter_by(code=code).first(): raise RuntimeError('코드 생성 실패')` 한 줄로 무결성 보장.
+
+- **`api.get/post` 실패 시 무음 처리** (app.js:29~45): `if (!r.ok) return {error: \`HTTP ${r.status}\`}` 후 대부분의 호출자가 `if (data.error) return;`로 조용히 종료. 네트워크 오류 시 UI가 멈춘 상태로 보여도 사용자는 원인을 모름. `console.error` 한 줄 + 중요 폴링(`pollInterval`, `newsInterval`) 실패 시 `toast('서버 연결 오류', 'error')` 추가로 교실 내 트러블슈팅 시간 단축.
+
+- **참가자 로비 화면 규칙 안내 부재** (index.html:340~352, screen-p-lobby): 학생들이 진행자 시작을 대기하는 동안 게임 규칙을 볼 방법이 없음. 로비 하단에 "❓ 규칙 보기" 버튼 하나를 추가해 `openRules()` 호출하면 됨(`modal-rules`는 이미 존재, index.html:837). 코드 3줄.
+
