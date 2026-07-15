@@ -2291,3 +2291,35 @@
 - **`create_deposit()` 에서 `amount` 상한 검증 없음** (`app.py:887-889`): `if not (0 < amount < float('inf'))` 만 체크. 실질적으로 `m.cash < amount` 잔액 검증이 막아주지만, `host_adjust()` 에 NaN·Infinity 버그(이전 분석 2026-07-14(2차) 참조)로 `m.cash` 가 오염된 상태라면 이 방어막이 무력화됨. `if amount > 10_000_000_000: return jsonify({'error': '예금 한도 초과'}), 400` 상한선 추가로 방어 계층 추가.
 
 - **`refreshMyRank()` 에서 rankings API를 단독 호출해 불필요한 중복 쿼리 발생** (`app.js:735-753`, `app.py:808-824`): `enterParticipantGame()` 의 10초 폴링 블록 안에서 `refreshMyRank()` (line 647)와 `if (S.currentPage === 'market') loadMarket()` (line 648)이 별개로 실행됨. `refreshMyRank()` 는 `GET /api/rooms/<rid>/rankings` 를 호출해 전원 순위를 불러오고, 그 중 `is_me: true` 인 항목만 사용. 이미 같은 폴링 루프에서 `api.get('/api/rooms/<rid>')` 를 통해 `remaining_seconds` 등 방 상태를 받는데, 개인 순위를 `room` 응답에 포함하거나 `portfolio` 응답의 `total_value` 를 재활용하면 랭킹 API 추가 호출 1회를 줄일 수 있음. 참가자 30명 기준 10초마다 30번의 중복 rankings 쿼리가 Render 무료 플랜 DB에 부담.
+
+---
+
+## 2026-07-15 (2차)
+
+### 추가하면 좋을 기능
+
+- **종목 모달에 현재 보유 종목 수익/손실 표시 없음** (`app.js:1344-1357`, `openStockModal()`): 종목 카드 클릭 시 `openStockModal()` 이 `/portfolio` 를 호출해 `cash` 와 보유 주식 수(`S.tradeHolding`)를 표시하지만, 동일 응답에 포함된 `h.avg_price`, `h.gain`, `h.gain_pct` 는 화면에 렌더링하지 않음. 이미 조회한 데이터를 버리는 셈. `document.getElementById('ms-holding').textContent = S.tradeHolding + '주'` 코드 아래에 `if (h) { document.getElementById('ms-holding-gain').textContent = pct(h.gain_pct) + ' / ' + krw(h.gain); }` 형태로 추가하면 학생이 매도 타이밍을 모달 안에서 즉시 판단 가능. 서버 변경 불필요.
+
+- **교육 탭 가이드·팁 응답을 캐시하지 않아 탭 전환마다 재요청** (`app.js:1899-1901`, `switchEduTab()`): `glossary` 탭은 `if (!S.glossaryData.length)` 조건으로 한 번만 API를 호출하지만, `guides` 와 `tips` 는 `loadGuides()` / `loadTips()` 가 탭 전환마다 무조건 호출됨. 이 데이터는 게임 중 서버에서 절대 변하지 않는 정적 콘텐츠. `S` 객체에 `guidesData: []` 와 `tipsData: []` 를 추가하고 첫 로드 후 저장, 이후 탭 전환 시 캐시된 값으로 `renderGuides(S.guidesData)` / `renderTips(S.tipsData)` 를 직접 호출하도록 수정. 탭 전환 속도 즉시화, 서버 API 호출 감소.
+
+- **복권 당첨 결과가 진행자 화면에만 표시되고 전체 참가자 공지 기능 없음** (`app.py:1130-1147`, `app.js:_checkLotteryStatus`): `get_lottery()` 응답에서 `all_results` 는 `room.host_id == user.id` 일 때만 반환됨. 일반 참가자는 `my_result` 만 볼 수 있어, 당첨자 발표가 진행자 화면에서만 이뤄지고 나머지 학생은 결과 화면을 스크롤해 확인해야 함. `POST /api/rooms/<rid>/lottery/broadcast` 엔드포인트를 추가해 당첨자 목록을 `Room.notice_text` 필드(2026-07-14 제안)에 저장하거나, 복권 결과 요약을 `/api/rooms/<rid>/news` 형식으로 감싸 폭탄뉴스 팝업으로 표시하면 수업 현장에서 환호감 효과 극대화.
+
+- **진행자 이벤트 이력(audit log)이 전혀 기록되지 않음** (`app.py:673-700`, `app.py:1345-1360`): 진행자가 특정 종목 강제 조정(`force_price`), 섹터 이벤트(`market_event`), 퀴즈 설정 변경(`quiz_settings`) 등을 언제 발동했는지 서버 어디에도 기록되지 않음. 수업 후 "3시에 삼성전자를 -20% 조정했을 때 학생들이 어떻게 반응했는가"를 복기할 자료가 없음. `RoomTransaction` 에 `action='EVT'` 타입으로 `(room_id, user_id=host_id, symbol=대상, note=이벤트 설명, amount=pct)` 를 기록하거나, 별도 `RoomEvent` 모델을 최소화해 추가하면 호스트 결과 화면의 타임라인으로 활용 가능. 서버 측 3개 엔드포인트에 `db.session.add(RoomTransaction(...))` 한 줄씩이면 구현 완료.
+
+- **타이머가 클라이언트 로컬 시계에만 의존해 누적 오차 발생** (`app.js:756-776`, `startTimer()`): `setInterval(tick, 1000)` 으로 매 초마다 `new Date(S.room.end_time) - new Date()` 를 계산하지만, 10초 폴링이 `S.room.end_time` 을 갱신하기 전까지는 서버의 pause·resume 상태 변화를 타이머에 즉시 반영할 수 없음. 또한 JS 이벤트 루프 지연으로 `setInterval` 콜백이 실제 1000ms보다 수십ms 늦게 실행되어 누적 오차가 발생, 10분 게임에서 ~5초 차이가 생길 수 있음. 해결책: 매 `tick()` 에서 `S.room.remaining_seconds - (Date.now() - lastPollTs) / 1000` 형태로 서버 기준 잔여 시간에 클라이언트 경과 시간을 보정해 표시, 10초 폴링 수신 시 `lastPollTs = Date.now()` 를 갱신하는 방식으로 누적 오차 제거.
+
+---
+
+### 제거/단순화할 것들
+
+- **로비 참가자 목록에서 `m.username` 이 `innerHTML` 에 직접 삽입 — XSS 취약** (`app.js:224-231`, `app.js:582-585`): `loadLobbyMembers()` 의 `${m.username}` 과 `loadPLobbyMembers()` 의 `${m.username}` 이 모두 HTML 문자열 내 `innerHTML` 에 이스케이프 없이 삽입됨. `<img src=x onerror=alert(document.cookie)>` 같은 이름의 학생이 입장하면 같은 방의 진행자·참가자 브라우저에서 JS가 실행됨. `escHtml()` 함수(`app.js:897`)가 이미 코드베이스에 존재하고, 결과 화면(`app.js:1748`)에는 이미 적용돼 있으므로 로비 멤버 렌더링 두 곳에 `escHtml(m.username)` 으로 교체만 하면 됨. 진행자 멤버 행의 onclick attribute injection (`app.js:229, 426`)도 동일한 패턴으로 취약.
+
+- **`minigame_spin()` 에서 스핀 횟수 검사와 레코드 삽입 사이 동시성 취약** (`app.py:1009-1067`): `spins_used = RoomTransaction.query.filter_by(room_id=rid, user_id=user.id, action='RLT').count()` 후 `if spins_used >= 3:` 체크와 실제 `db.session.add(RoomTransaction(action='RLT', ...))` 사이에 아무런 락이 없음. 동일 사용자의 두 HTTP 요청이 거의 동시에 도달하면 둘 다 `count() == 2` 를 확인하고 통과해 룰렛을 4회 이상 돌릴 수 있음. `_rlt_lock` 으로 감싸거나, 최소한 커밋 후 `spins_used` 를 재확인해 초과 시 롤백하는 guard를 추가해야 함. `trade()` 의 TOCTOU (2026-07-14 2차 참조)와 동일한 패턴이 스핀에도 존재.
+
+- **`get_room()` 핸들러에서 `cur_user()` 를 반복 호출해 DB 조회 낭비** (`app.py:432-473`): `cur_user()` 는 `db.session.get(User, session['user_id'])` 를 실행하는 DB 조회. `get_room()` 내에서 line 439 (`cur_user().id`), line 444 (`cur_user().id`), line 465 (`cur_user().id`), line 473 (`cur_user().id`) 까지 최대 4회 중복 호출됨. 함수 진입부에 `user = cur_user(); uid = user.id` 로 한 번만 가져와 재사용하면 동일 요청 당 DB 조회 3회 절약. 10초 폴링 시 참가자 30명 기준 분당 90회의 불필요한 User SELECT 제거 가능.
+
+- **`host_member_transactions()` · `get_transactions()` 에서 특수 심볼 이름 오표시** (`app.py:619-622`, `app.py:840-842`): `STOCKS.get(t.symbol, {}).get('name', '자산조정')` 패턴이 `'ROULETTE'`, `'LOTTO'`, `'DEPOSIT'` 심볼을 모두 `'자산조정'` 으로 표시. 학생이 거래 내역을 보면 룰렛·복권·예금 해지 이벤트가 모두 '자산조정'으로 보여 원인 파악이 어려움. `SPECIAL_SYMBOLS = {'ROULETTE': '룰렛', 'LOTTO': '복권', 'DEPOSIT': '예금'}` dict를 `app.py` 상단에 정의하고, 이름 조회 로직을 `SPECIAL_SYMBOLS.get(t.symbol) or STOCKS.get(t.symbol, {}).get('name', '자산조정')` 으로 교체하면 두 엔드포인트 모두 즉시 개선.
+
+- **`trade()` · `create_deposit()` · `host_market_event()` 에서 `bare except` 사용** (`app.py:738-739`, `app.py:887-888`, `app.py:1353`): 세 곳 모두 `try: ... except: return jsonify(...)` 형태로 예외를 잡음. `bare except:` 는 `Exception` 외에 `SystemExit`, `KeyboardInterrupt`, `GeneratorExit` 까지 포획해 프로세스 종료 신호를 삼킬 수 있음. `except (TypeError, ValueError):` 로 범위를 좁혀야 의도치 않은 시스템 예외가 묻히지 않고 정상적으로 전파됨. `except Exception` 으로 넓게 잡을 경우에도 `app.logger.warning(f"parse error: {e}")` 로그를 남겨 Render 대시보드에서 이상 입력을 탐지할 수 있도록 해야 함.
+
+---
