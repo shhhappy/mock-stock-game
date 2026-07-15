@@ -2263,3 +2263,31 @@
 
 - **`app.py:977` `minigame_close()` 내 `Room.query.get(rid)` deprecated 패턴 미수정**: 2026-06-23(2차) 분석에서 지적됐으나 이 한 줄만 남아있음. `with _rlt_lock:` 블록 내에서 `room = Room.query.get(rid)` 를 사용해 SQLAlchemy 2.x deprecated 경고 발생. `db.session.get(Room, rid)` 로 교체하고, `if not room: state['auto_paused'] = False; return jsonify({'ok': True})` 조기 반환을 추가하면 방이 이미 삭제된 엣지 케이스도 방어됨. `_rlt_lock` 보유 중 DB 조회를 수행하는 구조적 문제(07-12(2차)에서 지적)의 부분 개선으로도 연결됨.
 
+
+---
+
+## 2026-07-15
+
+### 추가하면 좋을 기능
+
+- **`get_history()` 가 실제 게임 내 가격 이력이 아닌 랜덤 워크 데이터 반환** (`stock_service.py:281-309`): 종목 상세 모달에서 "1달" 차트를 보면 과거 30일치 가격 데이터가 표시되지만, 이는 현재 가격에서 역산한 `random.gauss()` 기반 가상 데이터임. 게임 중 실제 발생한 가격 변동(호스트 강제 조정·뉴스 이벤트 효과 포함)이 차트에 전혀 반영되지 않아 "내가 샀을 때보다 얼마나 올랐는가"를 시각적으로 확인 불가. `get_price()` 가 가격을 업데이트할 때(`stock_service.py:185`) `self._price_history.setdefault(sym, []).append({'ts': now, 'price': new_price})` 로 이력을 누적하고, `get_history()` 가 이 게임 내 실제 이력을 반환하도록 변경하면 수업 복기에 직접 활용 가능. 기존 `_history_cache` 무효화 로직은 그대로 재사용 가능.
+
+- **게임 종료 후 같은 방 코드로 재시작 기능 없음** (`app.py:363-390`, `models.py:25-41`): 수업에서 "1라운드 끝나고 한 번 더"를 원할 때 새 방을 만들면 코드가 바뀌어 학생 전원이 QR을 다시 스캔해야 함. `POST /api/rooms/<rid>/restart` 엔드포인트를 추가해 `room.status = 'waiting'`, `RoomMember.cash = room.starting_cash` 리셋, `RoomHolding` + `Deposit` 삭제, `room.code` 유지 — 학생들은 이미 이 방의 멤버이므로 기존 폴링(`enterParticipantLobby`, `app.js:562-576`)에서 status 변화만 감지하면 자동 로비 복귀 가능. 서버 재시작 없이 연속 라운드 진행 가능.
+
+- **진행자가 개별 학생의 현재 포트폴리오를 볼 수 없음** (`app.py:542-562`): 호스트 순위 탭에서 거래 내역은 확인 가능하지만 "지금 이 학생이 어떤 주식을 얼마나 보유 중인가"를 실시간으로 볼 방법이 없음. `GET /api/rooms/<rid>/host/members/<int:uid>/portfolio` 엔드포인트를 추가하고 기존 `get_portfolio()` 로직(`app.py:772-803`)을 `user_id` 파라미터만 교체해 재사용. 거래 조정 모달(`modal-adjust`) 열기 전 포트폴리오 요약을 노출하면 교사가 학생 투자 전략을 즉석에서 파악 가능.
+
+- **결과 화면 username을 `innerHTML`에 직접 삽입 — XSS 취약** (`app.js` `loadResults()` 결과 목록 렌더링): 게임 결과 화면 `screen-results`에서 참가자 이름(`username`)을 `innerHTML` 에 직접 삽입할 경우, `<img src=x onerror=alert(1)>` 같은 이름을 입력한 학생이 같은 방의 다른 학생 화면에서 JS를 실행시킬 수 있음. `escHtml()` 함수가 이미 `app.js:897-900`에 정의되어 있으므로, 결과 목록·우승자 카드·퀴즈/복권 결과 등 이름 삽입 부분에 `escHtml(m.username)` 를 일관되게 적용하는 것으로 해결. 서버 변경 불필요.
+
+- **`goHome()` 호출 시 항상 로그아웃 처리 — 재참여 불편** (`app.js:108-112`): 결과 화면의 "홈으로" 버튼과 게임 중 "나가기" 버튼 모두 `goHome()` 을 통해 `api.post('/api/auth/logout', {})` 를 호출함. 교실에서 같은 기기로 다음 라운드에 재참여하려면 학번·이름을 다시 입력해야 해 불편. 결과 화면 "홈으로"는 로그아웃 없이 `showLanding()` 만 호출하고, 로그아웃은 랜딩 화면의 별도 명시적 버튼에서만 실행하도록 분리 권장. `confirmLeaveGame()` 도 진행 중 탈퇴이므로 로그아웃 여부를 별도 선택지로 제공하면 다중 라운드 수업에서 세션 관리가 편해짐.
+
+### 제거/단순화할 것들
+
+- **`_rlt_active`, `_quiz_settings`, `_roulette_config` 가 서버 재시작 시 초기화** (`app.py:250-252, 1246, 1363`): `_lots` (복권)는 `room.lottery_rounds_done` DB 컬럼으로 복구 로직이 존재하지만(`app.py:174-179`), 룰렛 설정(`_roulette_config`), 퀴즈 보상 설정(`_quiz_settings`), 진행 중 룰렛 카운터(`_rlt_active`)는 모두 in-memory dict이고 복구 로직이 없음. Render 무료 플랜은 비활성 시 컨테이너를 내리므로 수업 중간 재시작이 발생하면 룰렛 배율이 기본값으로 초기화되고, 이미 룰렛을 열었던 학생 카운터가 0으로 리셋되어 동일 게임에서 추가 스핀이 가능해지는 버그 발생. `roulette_config` 와 `quiz_settings` 는 `Room` 테이블 JSON 컬럼으로 저장하거나, `_rlt_active[rid]` 상태는 `get_room()` 에서 `RoomTransaction.query.filter_by(action='RLT')` 집계로 복구하는 방식 권장.
+
+- **`trade()` 에서 현금 검증-차감 사이 TOCTOU race condition** (`app.py:747-753`): `if member.cash < amount: return ...` 체크 직후 `member.cash -= amount` 사이에 동일 사용자의 두 번째 요청이 도달하면 양쪽 모두 잔액 검증을 통과해 음수 현금이 발생 가능. 현재 SQLite + WAL 환경에서는 Python GIL이 대부분 보호하지만 `DATABASE_URL` 을 PostgreSQL로 교체하면 실제 race condition이 됨. `db.session.refresh(member, lockmode='update')` 를 체크 직전에 추가하거나, 최소한 `member.cash = max(0, member.cash - amount)` 후 음수 여부를 재확인해 롤백하는 패턴 적용.
+
+- **`lobby_members()` 가 진행자 멤버 여부를 필터링하지 않음** (`app.py:577-585`): `host/lobby-members` 엔드포인트는 `RoomMember.query.filter_by(room_id=rid).all()` 로 전체를 반환. `join_room()` 내 `if room.host_id != user.id` 조건(`app.py:400`)이 있어 일반적으로 진행자는 `RoomMember` 에 추가되지 않지만, 진행자 본인이 QR 코드를 스캔해 실수로 참가한 경우 참가자 목록에 진행자 이름이 포함됨. 진행자가 복권·룰렛 상금을 수령하는 부작용도 함께 발생. `host/lobby-members` 반환 시 `[m for m in members if m.user_id != room.host_id]` 필터 한 줄 추가 권장.
+
+- **`create_deposit()` 에서 `amount` 상한 검증 없음** (`app.py:887-889`): `if not (0 < amount < float('inf'))` 만 체크. 실질적으로 `m.cash < amount` 잔액 검증이 막아주지만, `host_adjust()` 에 NaN·Infinity 버그(이전 분석 2026-07-14(2차) 참조)로 `m.cash` 가 오염된 상태라면 이 방어막이 무력화됨. `if amount > 10_000_000_000: return jsonify({'error': '예금 한도 초과'}), 400` 상한선 추가로 방어 계층 추가.
+
+- **`refreshMyRank()` 에서 rankings API를 단독 호출해 불필요한 중복 쿼리 발생** (`app.js:735-753`, `app.py:808-824`): `enterParticipantGame()` 의 10초 폴링 블록 안에서 `refreshMyRank()` (line 647)와 `if (S.currentPage === 'market') loadMarket()` (line 648)이 별개로 실행됨. `refreshMyRank()` 는 `GET /api/rooms/<rid>/rankings` 를 호출해 전원 순위를 불러오고, 그 중 `is_me: true` 인 항목만 사용. 이미 같은 폴링 루프에서 `api.get('/api/rooms/<rid>')` 를 통해 `remaining_seconds` 등 방 상태를 받는데, 개인 순위를 `room` 응답에 포함하거나 `portfolio` 응답의 `total_value` 를 재활용하면 랭킹 API 추가 호출 1회를 줄일 수 있음. 참가자 30명 기준 10초마다 30번의 중복 rankings 쿼리가 Render 무료 플랜 DB에 부담.
