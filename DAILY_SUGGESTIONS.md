@@ -2353,3 +2353,37 @@
 - **참여자 폴링 주기(10초)와 뉴스 폴링 주기(8초)의 불규칙 중복 호출** (`app.js:611-650`, `app.js:810-819`): 참여자 게임에서 10초마다 `/api/rooms/<rid>` GET 1회 + 조건부 `loadMarket()` 1회 + `refreshMyRank()` 1회(→ `/rankings` GET)가 실행됨. 여기에 8초 뉴스 폴링까지 더해지면 분당 최대 ~20건의 API 요청이 단일 탭에서 발생. Render free tier의 콜드스타트 이후 초반 급증 시 병목이 됨. `refreshMyRank()` 호출을 폴링 사이클 안으로 편입해 `/rankings` 호출을 `/api/rooms/<rid>` 응답에 순위 정보를 포함시키는 방향으로 통합하거나, 뉴스와 게임 상태를 단일 엔드포인트에서 받아오는 식으로 합치면 요청 수가 절반 이하로 줄어듦.
 
 ---
+
+---
+
+## 2026-07-16 (2차)
+
+### 추가하면 좋을 기능
+
+- **뉴스 이력 조회 기능** (`stock_service.py:110-113`, `app.js:807-826`): `StockService._news` 는 최신 뉴스 한 건만 보관해 3초 팝업이 사라진 후 다시 볼 방법이 없음. 수업 중 학생이 팝업을 놓치면 주가 변동 이유를 알 수 없어 교육적 불이익 발생. `self._news_history: list = []` (최대 10개 deque)를 `StockService`에 추가하고 `_generate_news()` / `trigger_news()` 호출 시 append, `GET /api/rooms/<rid>/news/history` 엔드포인트를 노출하면 참가자 화면에 "🗞 뉴스 기록" 버튼 하나로 재열람 가능. 서버 15줄, 프론트 25줄 수준의 변경.
+
+- **진행자 일시정지 시 이유 메시지 브로드캐스트** (`app.py:490-501`, `pause_room()`): 현재 참가자는 일시정지 배너에서 "⏸ 게임이 일시정지되었습니다"만 볼 수 있어 왜 멈췄는지 알 수 없음. `pause_room()` 요청 바디에 `reason` 파라미터를 추가하고 `room_dict()` 에 `pause_reason` 필드를 포함하면(`app.py:278-305`), `showPausedBanner()` (`app.js:653`)에서 "⏸ 일시정지 — 퀴즈 풀 시간입니다!" 식으로 이유를 표시 가능. `Room` 테이블 컬럼 추가 없이 in-memory dict(`_pause_reasons = {}`)로 구현해도 충분. 교실 진행 속도 향상.
+
+- **참여자별 섹터 집중도 히트맵 (진행자용)** (`app.py:542-562`, `host_members()`): 진행자 rank 탭에서는 학생의 총 자산만 볼 수 있고, 어떤 섹터에 집중 투자했는지 알 수 없음. `GET /api/rooms/<rid>/host/sector-heatmap` 엔드포인트를 추가해 `RoomHolding.query.filter_by(room_id=rid).all()` 결과를 `섹터 × 학생` 2차원으로 집계하고, 프론트에서 CSS 배경색 강도로 시각화하면 "배터리 섹터에 절반이 몰렸네요"와 같은 수업 토론 소재가 즉시 생김. 기존 `loadHostMembers()` (`app.js:408`) 폴링에 히트맵 데이터를 함께 받는 파라미터 하나 추가로 구현 가능.
+
+- **다중 예금 이율 — 단기/장기 분리** (`app.py:878-903`, `create_deposit()`): 현재 방 생성 시 단일 `deposit_rate`만 설정되어 모든 예금에 동일 이율 적용. "게임 종료까지 남은 시간 1/3 이상 유지 시 장기 이율 2배" 구조를 지원하면 학생이 유동성과 금리의 트레이드오프를 직접 체험 가능. `Room` 에 `deposit_rate_long` 컬럼(`app.py:31-40`의 ALTER TABLE 패턴 재활용)을 추가하고, `_end_room()` 이자 정산 시(`app.py:134-143`) 보유 기간 비율에 따라 이율을 분기하면 됨. `create_deposit()` 응답에 예상 장기/단기 이자를 함께 반환해 학생이 비교 가능.
+
+- **게임 방 리셋 기능 (진행자)** (`app.py:519-537`, `_end_room()`): 같은 반을 대상으로 2라운드를 진행하려면 방을 새로 만들고 학생들이 QR을 다시 스캔해야 함. `POST /api/rooms/<rid>/reset` 엔드포인트를 추가해 `_end_room()` 과 유사하게 자산·보유·거래 기록을 초기화하되 `RoomMember` 는 유지하고 `room.status = 'waiting'`, `room.starting_cash` 로 현금 재지급하면 2라운드를 바로 시작 가능. 진행자만 호출 가능하고 `room.status == 'ended'` 인 경우에만 허용하도록 가드. 같은 코드 `room_code`를 유지하므로 학생들이 재접속 불필요.
+
+- **개인 목표 수익률 달성 알림** (`app.js:735-753`, `refreshMyRank()`): `refreshMyRank()` 에서 매 10초마다 `me.total_value` 를 갱신하는 데이터를 이미 받고 있음. 학생이 게임 진입 직후 목표 수익률(예: +10%)을 입력하면 `localStorage`에 저장하고, 이후 폴링에서 달성 시 `navigator.vibrate([200,100,200])` + `new Notification('🎯 목표 달성!')` 을 발동할 수 있음. 브라우저 Notification API 퍼미션은 게임 진입 시 1회 요청. 화면을 다른 탭으로 전환한 학생도 결과를 즉시 인지 가능. 서버 변경 불필요, 프론트 20줄.
+
+### 제거/단순화할 것들
+
+- **`Room.query.get_or_404(rid)` deprecated 패턴 23곳 이상** (`app.py:435, 478, 493, 503, 519, 545, 568, 580, 589, 609, 631, 654, 673, 692, 727, 775, 809, 856, 878, 921, 939, 965, 998` 외): Flask-SQLAlchemy 3.x + SQLAlchemy 2.x 조합에서 `Model.query.get_or_404()` 는 내부적으로 LegacyQuery를 경유해 `SAWarning: Query.get() is deprecated` 경고를 발생시킴. `db.get_or_404(Room, rid)` (Flask-SQLAlchemy 3.0+ 신규 API)로 일괄 교체하면 경고 없이 동일 동작 유지. `sed -i 's/Room\.query\.get_or_404(rid)/db.get_or_404(Room, rid)/g' app.py` 수준의 기계적 변경 가능.
+
+- **`withdraw_deposit()` 에서 `RoomMember` None 체크 누락 → AttributeError 500** (`app.py:912-916`): `m = RoomMember.query.filter_by(room_id=rid, user_id=user.id).first()` 후 곧바로 `m.cash += dep.amount` 실행. DB 데이터 불일치나 예외적인 강퇴 이후 상태에서 `m` 이 `None` 이면 `AttributeError: 'NoneType' object has no attribute 'cash'` 로 500 반환. `dep` 조회 직후(`app.py:907-908`) 동일 패턴으로 `if not m: return jsonify({'error': '참여자를 찾을 수 없습니다.'}), 403` 한 줄 추가로 해결.
+
+- **`_do_reveal()` 에서 DB commit 이후에 in-memory 상태 설정 — 중복 상금 지급 위험** (`app.py:201-240`): `db.session.commit()` (line 221) 이후에 `cur['state'] = 'revealed'` (line 222) 를 설정하는 순서로 인해, commit 성공 후 서버 예외/재시작이 발생하면 in-memory 상태는 여전히 `'drawing'`으로 남음. 다음 `get_lottery()` 폴링에서 `_lottery_lock` 내부의 `if cur['state'] == 'drawing'` 조건을 재충족해 `_do_reveal()` 이 재호출되고, 이미 상금이 지급된 참가자에게 두 번째 상금이 지급됨. `cur['state'] = 'revealed'` 를 `db.session.commit()` 직전으로 이동해 commit 실패 시 `'drawing'` 상태를 유지, commit 성공 시 `'revealed'` 보장.
+
+- **`get_history()` 에서 캐시 만료 후 차트 데이터가 완전히 재생성 — 교육 UX 심각 문제** (`stock_service.py:281-310`): `HISTORY_CACHE_TTL = 120` 초 만료 후 같은 종목·기간을 재요청하면 `random.gauss()` 로 처음부터 다른 히스토리를 생성하므로, 학생이 2분 간격으로 1달 차트를 보면 차트 모양이 완전히 달라져 투자 판단 근거가 사라짐. `_history_cache` TTL을 제거하고(`cached['ts']` 기준 비교 로직 삭제), 가격 변경 시(`get_price()`, `force_price()`) 해당 종목 캐시만 무효화하는 현재 패턴(`app.py line 187-189`)이 이미 있으므로 이를 확장해 "가격 변동이 없는 한 같은 히스토리 유지" 방식으로 전환하면 충분.
+
+- **`_next_price()` 클램핑 범위와 `force_price()` 허용 범위 불일치** (`stock_service.py:139`, `stock_service.py:225`): 자연 변동은 `max(base * 0.6, min(base * 1.4, new_price))` — 기준가 ±40% 제한. `force_price()` 는 `max(base * 0.3, min(base * 3.0, new_price))` — 기준가 +200%/-70% 허용. 진행자가 강제로 +100% 올린 직후 (현재가 = `base * 2.0`) 다음 자연 변동 사이클에서 `_next_price()` 가 `current * (1 + drift)` 계산 후 `min(base * 1.4, ...)` 로 스냅해 한 틱 만에 -30% 폭락처럼 보이는 현상 발생. 클램프 기준을 `base` 대신 `current_price` 로 변경하거나(`current * 0.80, current * 1.20`), 최소한 자연 변동 클램프 범위를 `force_price()` 와 동일하게 확장해야 함.
+
+- **`export_rankings()` 에서 `openpyxl` 를 함수 내 지연 import** (`app.py:1422-1424`): `import openpyxl`, `from io import BytesIO`, `from openpyxl.styles import Font, PatternFill, Alignment, Border, Side` 가 함수 바디 첫 줄에 위치. `openpyxl` 미설치 시 엔드포인트 호출 시점에 `ImportError` → 500 Internal Server Error 반환. 상단 모듈 수준 import로 이동하면 앱 기동 시 즉시 오류를 감지할 수 있어 Render 배포 후 첫 번째 Excel 다운로드에서 폭탄 맞는 상황 방지. `BytesIO` 는 표준 라이브러리이므로 항상 사용 가능하지만 `openpyxl` 은 선택 의존성이므로 `requirements.txt` 포함 여부도 CI에서 검증 필요.
+
+---
