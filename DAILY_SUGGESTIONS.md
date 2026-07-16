@@ -2323,3 +2323,33 @@
 - **`trade()` · `create_deposit()` · `host_market_event()` 에서 `bare except` 사용** (`app.py:738-739`, `app.py:887-888`, `app.py:1353`): 세 곳 모두 `try: ... except: return jsonify(...)` 형태로 예외를 잡음. `bare except:` 는 `Exception` 외에 `SystemExit`, `KeyboardInterrupt`, `GeneratorExit` 까지 포획해 프로세스 종료 신호를 삼킬 수 있음. `except (TypeError, ValueError):` 로 범위를 좁혀야 의도치 않은 시스템 예외가 묻히지 않고 정상적으로 전파됨. `except Exception` 으로 넓게 잡을 경우에도 `app.logger.warning(f"parse error: {e}")` 로그를 남겨 Render 대시보드에서 이상 입력을 탐지할 수 있도록 해야 함.
 
 ---
+
+## 2026-07-16
+
+### 추가하면 좋을 기능
+
+- **QR 스캔 후 방 코드 자동 입력** (`app.js:197-198`, `static/index.html:318-321`): `_makeQR()`이 생성하는 URL이 `?code=XXXXXX` 쿼리 파라미터를 포함하는데, 참여자는 QR 스캔 후에도 방 코드 입력란에 여전히 코드를 직접 타이핑해야 함. `DOMContentLoaded` 이벤트에서 `const c = new URLSearchParams(location.search).get('code'); if (c) document.getElementById('join-code').value = c;` 5줄을 추가하고, `showScreen('screen-join')`까지 자동 이동하면 QR 스캔→입장 흐름이 원클릭으로 완성됨. 서버 변경 전혀 불필요.
+
+- **복권 비활성화 옵션(진행자)** (`app.py:408-430`, `models.py:25-42`): 현재 게임 시간에 따라 2회~6회 복권이 자동 트리거되는데, 교사가 복권 없이 순수 주식 투자만 진행하고 싶을 경우 끌 방법이 없음. `Room` 모델에 `lottery_enabled = db.Column(db.Boolean, default=True)` 컬럼을 추가하고, `_lot_round_due()`(`app.py:171`) 상단에 `if not room.lottery_enabled: return None` 한 줄과, 방 생성 폼(`index.html:62-76`)에 토글 체크박스를 추가하면 해결. 마이그레이션은 기존 ALTER TABLE 패턴(`app.py:31-40`)으로 안전하게 처리 가능.
+
+- **진행자 대시보드에서 종목별 매수/매도 압력 표시** (`app.py:806-824`, `app.js:408-431`): 랭킹 탭에 학생 자산 순위만 있고, 지금 어떤 종목이 가장 많이 거래되는지 교사가 파악할 방법이 없음. `GET /api/rooms/<rid>/host/hot-stocks` 엔드포인트를 추가해 `RoomTransaction.query.filter_by(room_id=rid).filter(~RoomTransaction.action.in_(['ADJ','RLT'])).order_by(RoomTransaction.timestamp.desc()).limit(50)` 에서 종목별 BUY/SELL 빈도를 집계하면 "지금 가장 많이 매수: 삼성전자 12건"처럼 표시 가능. 교사의 수업 개입 타이밍(해당 종목 뉴스 이벤트 발동 등)을 안내하는 데 유용.
+
+- **게임 종료 후 개인 거래 통계 요약** (`app.py:1417-1488`, `app.js:loadResults()` 주변): 현재 결과 화면은 최종 순위와 자산 차트만 보여줌. 개별 학생에게 "총 거래 횟수, 최고 수익 종목, 최대 손실 종목" 요약을 함께 보여주면 수업 후 토론("왜 이 종목에 집중했나요?")의 소재가 생김. `RoomTransaction` 집계(`group by symbol`)는 `get_portfolio()`나 `export_rankings()` 근방에 헬퍼 함수를 추가하는 수준으로 구현 가능. 결과 화면의 `div#results-my-stats` (`index.html:628`)가 이미 자리를 잡아두고 있어 UI 변경도 최소화됨.
+
+- **복권 진행 중 참가자 제출 현황 진행자에게 노출** (`app.py:1114-1147`): 진행자가 복권 대기 모달을 보는 동안 몇 명이 번호를 제출했는지 알 방법이 없음. `get_lottery()` 응답에 호스트 전용으로 `submitted_count: int` 와 `total_eligible: int` 필드를 추가(`cur.get('picks',{})` 길이와 `eligible` 계산을 재활용)하면 "12명 중 8명 제출" 식의 텍스트를 진행자 복권 모달(`index.html:744-748`)에 표시 가능. 서버 20줄, 프론트 5줄.
+
+- **기본 secret key 노출 위험 경고 로그** (`app.py:13`): `app.secret_key`에 `'mock-stock-game-secret-2024'` 하드코딩된 기본값이 사용됨. Render에서 `SECRET_KEY` 환경변수를 설정하지 않으면 이 값이 그대로 쓰임. 앱 시작 시 `if app.secret_key == 'mock-stock-game-secret-2024': import warnings; warnings.warn('SECRET_KEY가 기본값! 반드시 환경변수를 설정하세요.')` 한 줄을 추가하면 배포 설정 누락을 조기에 발견 가능.
+
+### 제거/단순화할 것들
+
+- **`username` = `"학번 이름"` 단일 필드 합산 구조의 취약성** (`app.js:75`, `app.py:1435`): `doAuth()`에서 `${sid} ${name}` 형태로 합쳐 서버에 전달하고, 엑셀 export에서 `u.username.split(' ', 1)`로 다시 분리함. 학번에 공백이 들어가거나(`"20 715"`), 진행자가 학번 없이 이름만 입력하면(`"홍길동"`) export 시 `sid=''`, `name='홍길동'`으로 처리되어 학번 컬럼이 비어버림. `User` 모델에 `student_id` 컬럼을 분리하거나, 최소한 클라이언트 입력 유효성 검사(`학번에 공백 금지`)를 강화해 파싱 실패를 예방해야 함.
+
+- **메모리 전용 게임 설정의 Render 재시작 손실** (`app.py:250-251`, `1246-1247`): `_roulette_config`와 `_quiz_settings`가 프로세스 메모리에만 존재해, Render free tier의 15분 비활성화 재시작 시 진행자가 설정한 룰렛 배율·퀴즈 보상/패널티가 초기화됨. `Room` 모델에 `roulette_config_json`·`quiz_settings_json` 텍스트 컬럼을 추가하거나(기존 ALTER TABLE 패턴 재활용), 최소한 설정 API 응답에 "서버 재시작 시 초기화됨" 주의 문구를 추가해 교사가 혼란을 겪지 않도록 해야 함.
+
+- **참여자가 `/host/lobby-members` 엔드포인트 직접 호출** (`app.js:579`): `loadPLobbyMembers()`에서 참여자가 `/api/rooms/${rid}/host/lobby-members`를 폴링함. URL에 'host'가 포함되어 있지만 서버(`app.py:577-585`)는 방 ID만 검증하고 호스트 여부를 확인하지 않아 누구나 접근 가능. `lobby_members()` 엔드포인트의 `@login_required` 이후에 역할 구분 없이 전원 허용하는 건 의도적 설계로 보이지만, URL이 혼동을 줌. 참여자용 `/api/rooms/<rid>/members`로 분리하거나 동일 엔드포인트에서 경로만 `/api/rooms/<rid>/lobby-members`로 변경해 직관성을 높이는 게 좋음.
+
+- **`loadMarket()` 내 `prevPrices` 초기화 방식이 매 호출마다 전체 배열 순회** (`app.js:1229-1241`): `const prev = Object.fromEntries(S.stocks.map(s => [s.symbol, s.price]))` 패턴이 10초마다 실행됨. 46개 종목이므로 성능 영향은 미미하지만, `S.stocks`를 Map으로 관리하면 `prev.get(sym)` 조회가 O(1)로 일관됨. 학생 수가 많은 교실에서 브라우저 부하를 줄이는 데 기여하며 코드 의도도 명확해짐.
+
+- **참여자 폴링 주기(10초)와 뉴스 폴링 주기(8초)의 불규칙 중복 호출** (`app.js:611-650`, `app.js:810-819`): 참여자 게임에서 10초마다 `/api/rooms/<rid>` GET 1회 + 조건부 `loadMarket()` 1회 + `refreshMyRank()` 1회(→ `/rankings` GET)가 실행됨. 여기에 8초 뉴스 폴링까지 더해지면 분당 최대 ~20건의 API 요청이 단일 탭에서 발생. Render free tier의 콜드스타트 이후 초반 급증 시 병목이 됨. `refreshMyRank()` 호출을 폴링 사이클 안으로 편입해 `/rankings` 호출을 `/api/rooms/<rid>` 응답에 순위 정보를 포함시키는 방향으로 통합하거나, 뉴스와 게임 상태를 단일 엔드포인트에서 받아오는 식으로 합치면 요청 수가 절반 이하로 줄어듦.
+
+---
