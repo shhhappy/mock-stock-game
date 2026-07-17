@@ -2,6 +2,40 @@
 
 ---
 
+## 2026-07-17 (2차)
+
+### 추가하면 좋을 기능
+
+- **QR 코드 `?code=` 파라미터 자동 입력 처리** (`app.js:194-198`, `window.onload`): QR 코드가 `?code=XXXXXX` URL을 인코딩하지만 랜딩 페이지의 `window.onload`가 URL 파라미터를 읽지 않아 학생이 수동으로 방 코드를 다시 입력해야 함. `window.onload` 진입 시 `new URLSearchParams(location.search).get('code')`로 값을 읽어 joinCode input에 자동 채우고 바로 `joinRoom()`을 호출하면 QR 스캔 → 자동 입장으로 UX가 크게 개선됨.
+
+- **퀴즈 문제별 정답률 집계 및 진행자 표시** (`app.py:1245`, `_quiz_state`): 현재 퀴즈 결과는 누가 맞췄는지는 알 수 있지만 어떤 문제에서 많이 틀렸는지 집계가 없음. `_quiz_state[rid]`에 `per_question_results: {q_idx: {correct: int, wrong: int}}` 키를 추가해 퀴즈 종료 후 진행자 화면에 "3번 문제 정답률 23%" 식의 교수법적 피드백을 제공하면 수업 개선에 활용 가능.
+
+- **"거래 동결" 모드 (타이머 유지, 주가만 고정)** (`app.py:490-501`, `pause_room()`): 현재 일시정지는 타이머까지 멈춰 실질적으로 게임이 중단됨. 진행자가 설명을 하는 동안 주가 변동만 막고 타이머는 계속 흐르게 하는 `freeze_trading` 상태를 별도로 추가하면 수업 흐름을 끊지 않고 시장을 안정시킬 수 있음. `Room.status` 또는 별도 in-memory 플래그로 구현 가능.
+
+- **종목별 일중 최고/최저가 표시** (`app.py:658-671`, `get_stocks()`): 현재 응답이 `price`와 `change_pct`만 반환함. `StockService`에 `_high: dict`, `_low: dict`를 추가해 세션 중 기록된 고/저가를 함께 반환하면, 학생이 "지금이 오늘 최고가인가?" 판단을 내릴 수 있어 투자 전략 교육에 유용.
+
+- **호스트 게임 통계 요약 카드** (`app.py:542-561`, `host_members()`): 총 거래 건수, 가장 활발한 학생, 가장 많이 거래된 종목을 `/api/room/<rid>/stats` 별도 엔드포인트로 제공하고 호스트 대시보드 상단에 카드로 표시하면, 진행자가 게임 중 학생 참여도를 한눈에 파악할 수 있음. `RoomTransaction` 테이블 집계 쿼리로 구현 가능.
+
+- **수익률 마일스톤 달성 시 시각적 축하 효과** (`app.js:735-752`, `refreshMyRank()`): `refreshMyRank()`가 매 폴링마다 총자산을 갱신하지만 특정 수익률(+50%, +100%)을 처음 달성할 때 특별한 피드백이 없음. 로컬 `_milestones` Set을 유지해 처음 임계값을 넘는 순간 confetti 또는 토스트 알림을 표시하면 게임적 동기 부여 효과를 높일 수 있음.
+
+### 제거/단순화할 것들
+
+- **`m.username` innerHTML 직접 삽입으로 XSS 취약점** (`app.js:223`, `app.js:417,425`): `loadLobbyMembers()`(223줄)와 `loadHostMembers()`(417줄)가 `${m.username}`을 innerHTML에 그대로 삽입함. `escHtml()` 함수(`app.js:897`)가 이미 정의되어 있지만 username에는 호출되지 않음. 학생이 `<img src=x onerror=alert(1)>` 형태의 이름으로 가입하면 진행자 브라우저에서 임의 JS를 실행할 수 있음. 모든 `${m.username}` 삽입을 `${escHtml(m.username)}`으로 교체해야 함.
+
+- **`host_market_event()` 후 뉴스 캐시 무효화 누락** (`app.py:1357`): `force_sector_event()`가 `self._news`를 업데이트하지만 앱 레벨 `_news_cache`(2초 TTL)가 무효화되지 않음. 진행자가 섹터 이벤트를 발동해도 참여자는 최대 2초간 구 뉴스를 수신함. `host_force_price()`에는 1351줄에서 `_invalidate_news_cache(rid)`를 호출하는 기존 패턴이 있으므로, 1357줄 `svc.force_sector_event()` 직후에도 동일하게 호출해야 함.
+
+- **`create_room()` 숫자 파라미터 파싱 예외 처리 누락** (`app.py:384-386`): `int(d.get('duration_minutes', 30))`와 `float(d.get('starting_cash', ...))` 변환에 try-except가 없어 비숫자 입력 시 ValueError → 500 HTML 반환. `trade()` 등 다른 엔드포인트가 사용하는 패턴처럼 try-except로 감싸고 `{"error": "invalid parameter"}` + 400을 반환해야 함.
+
+- **`get_lottery()` 방 소속 검증 없음** (`app.py:1114`): `@login_required`만 있고 요청자가 해당 방의 멤버 또는 호스트인지 확인하지 않음. 로그인된 임의 사용자가 `rid`를 추측해 다른 방의 복권 상태를 조회할 수 있음. `get_stocks()`나 `trade()` 처럼 `RoomMember.query.filter_by(room_id=rid, user_id=uid).first()` 검증을 추가해야 함.
+
+- **`_do_reveal()` `_lottery_lock` 보유 중 다중 DB commit** (`app.py:201-221`): `_lottery_lock` 내부에서 복수의 `db.session.commit()`을 실행함. DB가 느리면 락을 오래 점유해 다른 스레드의 복권 상태 조회를 블록함. 락 범위를 in-memory 상태 변경으로만 제한하고, commit은 락 해제 후 실행하거나 단일 commit으로 합쳐야 함.
+
+- **`startNewsPolling()` 폴링 주기 8초 하드코딩** (`app.js:810`): `setInterval(..., 8000)`이 서버 뉴스 주기 설정과 무관하게 고정됨. 진행자가 뉴스 주기를 길게 설정해도 참여자 30명 기준 분당 225회 요청이 발생함. 서버 `/api/room/<rid>/info` 또는 폴링 응답에 `news_interval_ms`를 포함해 클라이언트가 동적으로 주기를 조정하도록 개선해야 함.
+
+- **`get_stocks()` 방 소속 검증 없음** (`app.py:654`): 방 존재 여부(`Room.query.get(rid)`)만 확인하고 요청자가 해당 방 멤버인지 확인하지 않음. 로그인된 사용자가 임의 `rid`로 다른 방의 실시간 주가를 조회할 수 있음. `get_lottery()`와 동일한 방식으로 멤버십 검증을 추가해야 함.
+
+---
+
 ## 2026-07-17
 
 ### 추가하면 좋을 기능
