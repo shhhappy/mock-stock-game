@@ -2,6 +2,40 @@
 
 ---
 
+## 2026-07-17
+
+### 추가하면 좋을 기능
+
+- **게임 내 실제 가격 이력 기록 및 차트 표시** (`stock_service.py:281-310`, `StockService.get_history()`): 현재 차트는 현재가에서 역방향으로 랜덤 워크를 생성해 완전히 허구의 데이터를 표시함. 학생이 실제로 목격한 "삼성전자 72,000원 → 85,000원" 흐름이 차트에는 반영되지 않음. `StockService.__init__()`에 `_price_log: dict = {sym: [] for sym in STOCKS}` 링 버퍼(최대 120틱)를 추가하고 `get_price()` 호출 시 새 가격을 기록하면, 실제 게임 내 가격 변동을 차트로 보여줄 수 있어 수업 중 "왜 이 종목이 올랐을까" 토론의 근거로 활용 가능. 서버 DB 변경 불필요.
+
+- **진행자 화면에서 종목별 보유 집계 표시** (`app.py:542-561`, `host_members()`, `RoomHolding` 모델): 현재 진행자는 학생별 총 자산만 보고 "누가 어떤 종목에 집중 투자했는지"는 알 수 없음. `GET /api/rooms/<rid>/host/holdings-summary` 엔드포인트를 신규 추가해 `RoomHolding.query.filter_by(room_id=rid)`를 종목별로 집계(`symbol → {holders: int, total_shares: int, total_value: float}`)하여 반환하면, 진행자 시장 탭에 "삼성전자 — 6명 보유 / 합계 350주" 형태로 표시 가능. 무리 행동(herd behavior) 개념 교육에 즉각 활용 가능.
+
+- **학생별 마지막 활동 시각 표시 (미활동 감지)** (`models.py:47-54`, `RoomMember`, `app.py:724-767`, `trade()`): 진행자가 화면을 보고 있어도 실제로 어떤 학생이 아무것도 하지 않고 있는지 파악 불가. `RoomMember`에 `last_active_at = db.Column(db.DateTime, nullable=True)` 컬럼을 추가하고 `trade()`, `create_deposit()`, `submit_quiz()` 등에서 갱신하면, `host_members()` 응답에 `idle_seconds` 를 포함할 수 있어 "5분 이상 거래 없음 ⚠️" 경고를 진행자 순위표에 표시 가능. 수업 중 소극적 참여자 조기 개입에 직접 기여.
+
+- **복권 번호 자동 선택 버튼 (참여자)** (`app.js` 복권 오버레이, `index.html:484-509`): 복권 참가자 UI에서 학생이 60초 안에 1~45 숫자 6개를 직접 클릭해야 하는데, 화면이 작거나 손이 느린 학생은 시간 초과 빈발. 번호 선택 영역 하단에 `<button onclick="autoPickLottery()">자동 선택</button>` 하나와 `function autoPickLottery() { const nums = [...Array(45)].map((_,i)=>i+1).sort(()=>Math.random()-.5).slice(0,6).sort((a,b)=>a-b); /* 기존 picks 배열에 반영 */ }` 약 10줄 추가로 구현. 서버 변경 불필요.
+
+- **참여자 로비에서 게임 설정 미리보기 개선** (`app.js:555-586`, `enterParticipantLobby()`, `index.html:340-352`): 현재 로비 대기 화면은 "시작 자금 · 게임 시간 · 예금 금리" 세 줄만 한 줄로 표시. 복권/룰렛 등장 주기, 퀴즈 유무 등 핵심 규칙을 작은 카드 형태로 미리 표시하면 게임 시작 전 학생들이 전략을 세울 수 있음. `plobby-settings` 요소(`index.html:350`)의 단순 텍스트를 카드 그리드로 교체하는 것만으로 완성. 서버 변경 불필요, CSS/HTML 수정만 필요.
+
+- **퀴즈 집계 통계 (진행자용)** (`app.py:1244-1342`, `_quiz_state`): 진행자가 퀴즈를 세팅했어도 어떤 문제에서 많이 틀렸는지 파악 불가. `_quiz_state`에 현재 개인 쿨다운만 저장되므로 `_quiz_stats` 글로벌 딕셔너리 `{rid: {qid: {correct: int, wrong: int}}}` 를 추가하고 `submit_quiz()` 응답 처리 시 카운트를 갱신. `GET /api/rooms/<rid>/host/quiz-stats` 엔드포인트를 신규 추가해 진행자에게 문제별 정답률을 표시하면 수업 후 복습 포인트 파악에 활용 가능.
+
+---
+
+### 제거/단순화할 것들
+
+- **`get_history()` 차트가 실제 게임 가격을 반영하지 않는 근본적 불일치** (`stock_service.py:281-310`): `force_price()` 호출 시 `_history_cache` 무효화(`stock_service.py:227-229`)가 있지만, 재생성 시 여전히 완전 랜덤 데이터를 만들어냄. "강제 상승" 직후 차트가 오히려 하락세로 보이는 상황이 발생할 수 있음. 단기적으로는 차트 기간 탭에서 "1일" 탭에 게임 내 실제 가격(위 제안 참고)을 표시하고, 나머지 기간 탭은 숨기거나 "게임 중에는 실시간 차트만 제공됩니다" 문구로 교체하는 것이 학생 혼란을 줄이는 현실적 개선.
+
+- **`_room_cache` TTL(1.5초) 대비 폴링 간격(10초) 불일치로 사실상 캐시 무용** (`app.py:42-64`, `app.js:269`): 참여자 폴링은 10초 간격, 진행자 폴링도 10초 간격인데 캐시 TTL은 1.5초. 10초 간격으로 도착하는 요청들이 1.5초 캐시를 활용할 확률은 거의 0에 가까움(복수 사용자가 동시에 폴링하는 순간 외). TTL을 8~9초로 늘리거나(`ROOM_CACHE_TTL = 8`), Render 무료 티어 DB 부담 감소를 위해 캐시를 유지한다면 TTL을 의미 있게 늘려야 효과 발생.
+
+- **학번+이름 공백 결합 방식이 이름에 공백 포함 시 엑셀 파싱 오류** (`app.js:73-79`, `app.py:1435`): `doAuth()`에서 `"${sid} ${name}"`으로 결합하고 `export_rankings()`에서 `u.username.split(' ', 1)`로 분리. "김 철수"처럼 이름에 공백이 있으면 학번=`김`, 이름=`철수`로 잘못 분리되어 엑셀 학번 열이 오염됨. 구분자를 `|`(파이프)나 `\t`(탭)으로 변경하고 `split('|', 1)` 또는 `split('\t', 1)`으로 분리하면 해결. `app.js:75`와 `app.py:1435` 두 곳만 수정하면 됨.
+
+- **`_quiz_settings` 서버 재시작 시 초기화** (`app.py:1246`, `_quiz_settings: dict = {}`): 진행자가 퀴즈 보상률을 3%로 올려놓았더라도 Render 무료 티어 dyno가 재시작되면 기본값(1%/0.5%)으로 리셋됨. 게임 중 이런 일이 발생하면 학생이 예상치 못한 낮은 보상을 받게 됨. `Room` 모델에 `quiz_reward_pct = db.Column(db.Float, default=1.0)`, `quiz_penalty_pct = db.Column(db.Float, default=0.5)` 컬럼을 추가하고 `quiz_settings()` 엔드포인트에서 DB에 저장·조회하면 재시작에도 설정 유지. `models.py`에 컬럼 2개, `app.py` 수정 약 10줄.
+
+- **`lobby_members()` 엔드포인트 접근 제한 부재** (`app.py:577-585`): `@login_required`와 404 처리만 있고, 요청자가 해당 방의 호스트이거나 멤버인지 확인하지 않음. 로그인된 임의 사용자가 방 ID만 알면 다른 방 참가자 학생 이름 목록을 열람 가능. `app.py:581`에 `room = Room.query.get_or_404(rid); user = cur_user(); if user.id != room.host_id and not RoomMember.query.filter_by(room_id=rid, user_id=user.id).first(): return jsonify({'error':'권한 없음'}), 403` 를 추가하면 해결. (이 항목은 이전 분석에서도 지적됐으나 아직 미반영 상태임을 재확인.)
+
+
+
+---
+
 ## 2026-06-23 (2차)
 
 ### 추가하면 좋을 기능
