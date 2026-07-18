@@ -2455,3 +2455,31 @@
 - **`export_rankings()` 에서 `openpyxl` 를 함수 내 지연 import** (`app.py:1422-1424`): `import openpyxl`, `from io import BytesIO`, `from openpyxl.styles import Font, PatternFill, Alignment, Border, Side` 가 함수 바디 첫 줄에 위치. `openpyxl` 미설치 시 엔드포인트 호출 시점에 `ImportError` → 500 Internal Server Error 반환. 상단 모듈 수준 import로 이동하면 앱 기동 시 즉시 오류를 감지할 수 있어 Render 배포 후 첫 번째 Excel 다운로드에서 폭탄 맞는 상황 방지. `BytesIO` 는 표준 라이브러리이므로 항상 사용 가능하지만 `openpyxl` 은 선택 의존성이므로 `requirements.txt` 포함 여부도 CI에서 검증 필요.
 
 ---
+
+## 2026-07-18
+
+### 추가하면 좋을 기능
+
+- **엑셀 결과 파일에 거래 내역 시트 추가** (`app.py:1419-1488`, `export_rankings()`): 현재 export는 최종 순위 단일 시트만 생성해 교사가 수업 후 "왜 이 학생이 1등을 했는지" 리뷰가 불가능. `openpyxl.Workbook()`에 두 번째 워크시트를 추가하고 `RoomTransaction.query.filter_by(room_id=rid).order_by(RoomTransaction.user_id, RoomTransaction.timestamp)` 결과를 삽입하면 학생별 의사결정 과정을 회고 수업에 활용할 수 있음. 기존 순위 시트에는 영향 없고 `export_rankings()` 함수 안에서 약 25줄 추가로 구현 가능.
+
+- **게임 진행 중 참여자 강퇴 기능** (`app.py:564-575`, `kick_member()`): 현재 `room.status != 'waiting'`인 경우 강퇴 요청에 400을 반환해 수업 중 기기 오작동·중도 퇴장 학생을 제거할 방법이 없음. 별도 `POST /api/rooms/<rid>/host/members/<uid>/force-remove` 엔드포인트를 추가해 진행 중에도 `RoomMember` 삭제를 허용하고, 해당 학생의 보유 주식·예금을 현금으로 환원 처리해 순위에서 제외하면 됨.
+
+- **퀴즈 쿨다운 남은 시간 카운트다운 표시 (참여자)** (`app.py:1257-1268`, `get_quiz()`): 퀴즈 제출 후 서버가 `cooldown` 초를 반환하고 있지만 참여자 UI에 "다음 퀴즈까지 N초" 타이머가 없어 학생이 반복 버튼을 누르거나 언제 재시도할 수 있는지 모름. `submit_quiz()` 응답의 `cooldown` 값을 받아 `setInterval`로 UI 카운트다운을 표시하는 프론트 20줄 이하 변경으로 UX가 크게 개선됨. 서버 변경 불필요.
+
+- **자동 복권 발동 일정을 진행자 UI에 표시** (`app.py:171-199`, `_lot_round_due()`): 30분 게임에서 1/3·2/3 지점에 2회, 90분 게임에서 4회 자동 복권이 발동되는 규칙이 코드에만 존재하고 진행자에게 노출되지 않음. `room_dict()` (`app.py:278-305`)에 `lottery_schedule` 필드를 추가해 예상 발동 경과 시간 목록(예: `[600, 1200]`초)을 반환하거나, 설정 탭에 "예상 복권 발동: 10분·20분" 안내를 추가하면 교사가 수업 계획을 세우기 용이해짐.
+
+- **파산 위기 참여자 진행자 화면 경고 표시** (`app.py:552-562`, `host_members()`): 참여자 총자산이 시작 자금의 5% 미만으로 떨어져도 진행자 순위표에 아무런 시각적 구분이 없음. `host_members()` 응답의 각 항목에 `at_risk: bool` 플래그(예: `total < room.starting_cash * 0.05`)를 추가하고 `app.js:417` 의 순위표 렌더링에서 `⚠️` 아이콘을 붙이면 교사가 해당 학생에게 즉시 개입 가능. 서버 3줄·프론트 5줄 수준.
+
+### 제거/단순화할 것들
+
+- **`member_total_value()` N+1 쿼리 구조** (`app.py:107-118`): `get_rankings()` (`app.py:815`)와 `host_members()` (`app.py:552`)가 멤버 루프 안에서 각각 `member_total_value()`를 호출하고, `member_total_value()` 내부에서 `RoomHolding`·`Deposit` 쿼리를 개별 실행함. 30명 참여 시 순위 조회 1회에 최소 61개 SQL이 발생. `RoomHolding.query.filter_by(room_id=rid).all()`과 `Deposit.query.filter_by(room_id=rid, status='active').all()`을 루프 밖에서 한 번씩 조회해 `user_id → list` 딕셔너리로 그룹핑하면 쿼리 수가 3개 고정으로 감소함.
+
+- **`S.assetHistory` 배열 무제한 증가 (메모리 누수)** (`app.js:19`, `S.assetHistory = []`): 참여자 게임에서 10초마다 `refreshMyRank()`가 `S.assetHistory.push(entry)`를 실행해 배열이 끝없이 커짐. 60분 게임에서 360개이지만 180분·일시정지 반복 시 수천 개로 증가해 자산 그래프 렌더링이 느려짐. `S.assetHistory.push(entry); if (S.assetHistory.length > 200) S.assetHistory.shift();` 한 줄로 최근 200틱만 유지하는 환형 버퍼로 전환하면 충분.
+
+- **`get_chart()` 의 `interval` 파라미터가 `StockService.get_history()`에서 완전 미사용** (`app.py:715-719`, `stock_service.py:292`): `get_chart()`에서 `(yp, yi)`를 추출해 `get_history(symbol, period=yp, interval=yi)`에 전달하지만, `get_history()`는 `interval` 인자를 받되 `n_bars` 결정에 `period`만 사용하고 `interval`은 무시함. 추후 구현 계획이 없다면 `get_history()` 시그니처에서 `interval` 파라미터를 제거하고, `get_chart()` 에서도 `interval` 변수를 삭제해 호출 의도를 명확히 해야 함.
+
+- **`minigame_close()` 에서 `_rlt_lock` 보유 중 `_end_room()` 호출** (`app.py:965-994`): `_rlt_lock` 내부(`with _rlt_lock:` 블록 안)에서 `_end_room(room)`이 호출되는데, `_end_room()`은 DB commit, `cleanup_room_service()`, `_invalidate_room_cache()` 등 무거운 작업을 포함함. 락 점유 시간이 길어지면 동시에 `/minigame/open`을 호출하는 학생이 블록됨. `should_end = True` 플래그를 락 내부에서 결정하고 `_end_room()`은 락 블록 바깥(`with` 블록 이후)에서 호출하도록 리팩터링해야 함.
+
+- **`Room.code` 충돌 재시도 소진 후 중복 코드 반환** (`models.py:8-13`): `gen_code()`가 10회 재시도 후에도 충돌하면 중복 코드를 그대로 반환하고, `create_room()`(`app.py:388`)의 `db.session.commit()` 시점에 `IntegrityError`가 발생해 500 오류가 반환됨. `Room.query.filter_by(code=code).first()` 체크가 이미 있으므로 재시도 횟수를 50으로 늘리거나 코드 길이를 8자로 확장해 충돌 확률(`62^6 ≈ 5.6억` → `62^8 ≈ 2,183억`)을 대폭 낮추는 것이 근본 해결책. 최소한 `create_room()`에서 `IntegrityError`를 잡아 사용자 친화 메시지로 반환해야 함.
+
+---
