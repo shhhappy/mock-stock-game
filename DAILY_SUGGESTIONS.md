@@ -2,6 +2,38 @@
 
 ---
 
+## 2026-07-18
+
+### 추가하면 좋을 기능
+
+- **진행자에서 학생별 포트폴리오 열람 기능** (`app.py:542-561`, `app.js:408-431`): 현재 진행자는 학생의 총 자산·수익률만 볼 수 있고 어떤 종목을 얼마나 보유하는지 알 수 없음. `GET /api/rooms/<rid>/host/members/<uid>/portfolio` 엔드포인트를 추가하고, 진행자 멤버 목록의 "거래" 버튼 옆에 "포트폴리오" 버튼을 추가하면 "이 학생은 왜 이런 수익률이 나왔을까?" 즉각적인 교육 개입이 가능. 기존 `get_portfolio()` 로직(`app.py:772-803`)을 공통 함수로 추출해 host용 엔드포인트에서 재사용 가능.
+
+- **주식 모달에 보유 종목의 개인 수익률 표시** (`app.js:1344-1356`, `openStockModal()`): 모달에 시장 기준 `change_pct`만 있고, 내가 산 평균가 대비 현재 손익이 표시되지 않음. `port.holdings`에서 이미 `avg_price`, `gain_pct`를 받아오므로 `app.js:1350` 직후에 보유 중인 경우 "내 수익: +5.2% (+120,000원)" 한 줄 추가로 구현. 실제 증권 앱과 유사해져 매수·매도 판단 근거를 직관적으로 제공.
+
+- **진행자 커스텀 뉴스 헤드라인 직접 입력** (`app.py:690-701`, `host_send_news()`): "폭탄뉴스 발송"이 미리 정의된 템플릿에서 랜덤 선택되어 수업 내용과 연계하기 어려움. `d.get('custom_headline')`을 받아 `items = [{'headline': custom_headline, 'direction': d.get('direction', 'up')}]`로 override하면 교사가 "삼성전자 AI 칩 수출 규제 발표!"처럼 실제 시사를 반영한 이벤트를 만들 수 있음. 서버 5줄, 클라이언트 `<input>` + `<select>` 추가로 구현 가능.
+
+- **복권 당첨 결과 진행자 발표 모드** (`app.py:1141-1147`, `get_lottery()`): 복권 `revealed` 상태에서 `all_results`가 반환되지만 진행자 모달에 당첨자가 시각적으로 강조 표시되지 않음. 당첨자 상위 3명을 큰 폰트로 표시하고 6개 일치(잭팟)가 있으면 confetti 효과를 추가하면 수업 하이라이트로 활용 가능. `_lots[rid]['current']['results']` 데이터를 이미 프론트에 반환하므로 서버 변경 없이 `app.js` 복권 모달 UI 수정만으로 구현 가능.
+
+- **거래 내역에서 종목별 필터 기능** (`app.py:829-847`, `get_transactions()`, `app.js:1569-1593`, `loadTxn()`): 현재 전체 거래 내역을 시간 역순으로만 제공. URL 파라미터 `?symbol=SMSNG`를 추가해 `app.py:836`에 `if sym_filter: q = q.filter(RoomTransaction.symbol == sym_filter)` 한 줄 추가하고, 포트폴리오 보유 종목 카드에 "내역" 버튼을 추가하면 종목별 매매 전략 분석 교육에 활용 가능. `app.js:1558-1560`의 보유 종목 버튼 그룹에 "📋 내역" 버튼 추가로 UI 완성.
+
+- **게임 시작 전 학생 "준비 완료" 투표** (`app.py:475-488`, `start_room()`, `app.js:enterParticipantLobby()`): 진행자가 시작 버튼을 누르면 즉시 게임이 시작되어 로딩 중인 학생이 첫 10~20초를 놓칠 수 있음. `RoomMember`에 `is_ready = db.Column(db.Boolean, default=False)` 컬럼을 추가하고, 로비에서 학생이 "준비!" 버튼을 누르면 진행자 로비에 "N/M명 준비 완료"로 실시간 반영. `lobby_members()` 응답에 `is_ready` 필드 추가, 클라이언트 버튼 하나로 구현 가능. 시작 조건은 진행자 재량이므로 게임 흐름 변경 없음.
+
+### 제거/단순화할 것들
+
+- **`lottery_draw()` Lock 없이 `_do_reveal()` 직접 호출 — 이중 상금 지급 위험** (`app.py:1206`): `lottery_draw()`가 `_lottery_lock` 없이 `_do_reveal(rid, cur)`을 직접 호출함. `get_lottery()`는 `app.py:1123`에서 동일 함수를 `_lottery_lock` 내에서 자동 호출. 드로우 마감시간(`draw_dl`)이 정확히 지나는 순간 진행자가 직접 추첨을 누르면 두 요청이 `_do_reveal()`을 중복 실행해 당첨자 전원에게 상금이 두 번 지급될 수 있음. `app.py:1203-1206`을 `with _lottery_lock: if cur.get('state') != 'revealed': _do_reveal(rid, cur)` 패턴으로 감싸야 함.
+
+- **`host_adjust()` delta 금액 범위 미검증** (`app.py:595-596`): `delta = float(d.get('delta', 0))`에 상한/하한 검증이 없어 입력 실수 또는 API 직접 호출로 수십억 원을 한 번에 지급하거나 거액을 차감할 수 있음. `m.cash = max(0, m.cash + delta)` 덕분에 현금이 음수로 내려가지는 않지만 비정상적으로 큰 금액을 막을 수단이 없음. `app.py:597` 직후에 `if abs(delta) > room.starting_cash * 5: return jsonify({'error': '조정 금액이 너무 큽니다'}), 400`를 추가하면 수업 중 실수 방지.
+
+- **`get_rankings()` / `host_members()` N+1 쿼리로 과도한 DB 부하** (`app.py:815-823`, `app.py:548-558`): 멤버 수만큼 `member_total_value()`를 반복 호출하며, 각 호출은 `RoomHolding.query.filter_by(room_id=rid, user_id=uid)` + `Deposit.query.filter_by(room_id=rid, user_id=uid)` 2회 DB 쿼리를 발생. 학생 30명 방에서 GET /rankings + GET /host/members 합산 10초마다 최소 120회 DB 쿼리 발생. `RoomHolding.query.filter_by(room_id=rid).all()`과 `Deposit.query.filter_by(room_id=rid, status='active').all()`로 전체 일괄 조회 후 메모리에서 uid별 집계하면 2 쿼리로 줄일 수 있음.
+
+- **`loadDepositsPage()` 만기·해지 예금 숨겨 이자 학습 효과 저하** (`app.js:1629`): `const active = (data || []).filter(d => d.status === 'active')`로 활성 예금만 표시해, 게임 종료 후 만기된 예금이나 게임 중 해지한 예금의 이자 내역을 확인할 수 없음. 서버 `get_deposits()`는 이미 모든 상태를 반환하므로 클라이언트만 수정하면 됨. `app.js:1629-1643` 렌더링 로직을 활성·만기·해지 세 섹션으로 나누면 "해지했을 때와 만기 때 이자가 얼마 달랐나?" 직접 비교 교육이 가능.
+
+- **`trade()` 응답에 체결 가격 누락 — 슬리피지 불투명** (`app.py:766`): `return jsonify({'message': ..., 'cash': member.cash})`에 `price`가 없음. `PRICE_TTL=20초` 이내에서도 가격이 갱신될 수 있어 모달 표시 가격과 실제 체결 가격이 다를 수 있으나 학생이 인지할 방법이 없음. `app.py:766` 응답에 `'price': price`를 추가하고, `app.js:1435-1436` `execTrade()` 성공 핸들러에서 체결가를 표시하면 시장가 매매의 가격 불확실성 개념 교육에 활용 가능.
+
+- **`get_quiz()` 방 멤버 여부 미확인 — 타 방 문제 미리 열람 가능** (`app.py:1248-1268`): `@login_required`와 `room.status != 'active'` 체크만 있고 `RoomMember` 검증이 없음. 로그인된 사용자가 임의 `rid`로 `GET /api/rooms/{rid}/quiz`를 호출해 다른 방의 퀴즈 문제를 미리 확인 가능. `get_portfolio()` (`app.py:775-778`)와 동일한 패턴으로 `app.py:1255` 직후에 `member = RoomMember.query.filter_by(room_id=rid, user_id=user.id).first(); if not member: return jsonify({'error': '참여자가 아닙니다.'}), 403`를 추가해야 함.
+
+---
+
 ## 2026-07-17 (2차)
 
 ### 추가하면 좋을 기능
