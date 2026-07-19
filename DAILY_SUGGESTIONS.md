@@ -2543,3 +2543,33 @@
 - **호스트 게임 화면에서 룰렛 설정(`loadRltConfig()`)을 불필요하게 항상 호출** (`app.js:267`, `enterHostGame()`): `enterHostGame()`은 항상 `loadRltConfig()`를 호출하며, 이는 `/api/rooms/<rid>/host/roulette-config` GET 요청을 발생시킴. 하지만 룰렛 설정 탭은 진행자가 명시적으로 "설정" 탭을 선택해야 보임. `loadRltConfig()`를 `enterHostGame()` 진입 시가 아닌 `switchHostTab('settings')` 진입 시(`app.js:303-312`의 `if (tab === 'settings')` 분기)로 이동하면 불필요한 초기 API 호출 1회를 줄일 수 있음.
 
 ---
+
+## 2026-07-19 (2차)
+
+### 추가하면 좋을 기능
+
+- **게임 내 실시간 가격 히스토리 기록 및 차트 반영** (`stock_service.py:174-190`, `get_price()`): 현재 `get_history()`(`stock_service.py:281-310`)는 가격 조회 시마다 랜덤워크로 차트 데이터를 새로 생성해 게임 중 실제 변동한 주가와 전혀 무관한 차트가 표시됨. `StockService.__init__()`에 `self._price_history: dict = {sym: [] for sym in STOCKS}` 추가, `get_price()`의 가격 갱신 시(`stock_service.py:185`) `self._price_history[sym].append((now, new_price))` + 최대 500개 유지 로직을 추가하고, `get_history()`에서 내부 히스토리가 충분할 때 우선 반환하도록 수정. 학생이 실제 게임 가격 흐름을 차트로 보며 매수 타이밍을 분석할 수 있어 교육적 가치가 크게 향상됨.
+
+- **호스트 전체 참가자 공지 브로드캐스트 기능** (신규 `app.py` 엔드포인트 2개, `app.js:613`): 진행자가 수업 중 모든 참여자 화면에 텍스트 공지를 즉시 띄우는 기능. `POST /api/rooms/<rid>/host/broadcast`(메시지 저장) + `GET /api/rooms/<rid>/broadcast`(타임스탬프+메시지 반환) 추가 후, 참여자 10초 폴링(`app.js:613`) 내에서 타임스탬프 비교해 새 메시지 도착 시 5초 배너 표시. 현재는 뉴스 헤드라인(섹터 방향 힌트)만 전송 가능해 교사가 학생에게 직접 전략 힌트("지금 분산투자를 시도해보세요!")를 전달할 방법이 없음. `Room` 테이블에 `broadcast_msg VARCHAR(200)`, `broadcast_ts FLOAT` 컬럼 추가로 구현 가능.
+
+- **Watchlist 관심 종목 급등락 자동 토스트 알림** (`app.js:1257-1285`, `filterStocks()`, `S.watchlist`): 현재 Watchlist(`app.js:17`)는 시장 탭 필터링에만 사용됨. `filterStocks()` 내부에서 watchlist 종목의 `change_pct`가 ±5% 초과 시 자동 toast 알림을 발송하는 로직(15줄 내외)을 추가하고 `S.watchlistAlerted = new Set()`으로 중복 방지. 서버 변경 없이 클라이언트 전용 구현. 학생이 포트폴리오나 예금 탭에 있을 때도 관심 종목의 큰 움직임을 놓치지 않아 능동적 투자 결정을 유도하는 UX 개선 효과.
+
+- **게임 종료 결과 화면에 섹터별 수익 기여 분석** (`app.py:808-823`, `screen-results`, `loadResults()`): 최종 결과 화면에 "어느 섹터 투자가 수익을 냈는가" 집계 표시. `GET /api/rooms/<rid>/results/analytics` 신규 엔드포인트에서 `RoomTransaction.query.filter_by(room_id=rid, action='SELL')` 결과에 `STOCKS[t.symbol]['sector']`를 조인해 섹터별 실현손익 합계를 반환(약 25줄). 호스트 결과 화면의 `loadResults()`에서 호출해 Chart.js 도넛으로 렌더링. "IT 섹터 투자가 평균 +18%" 같은 통계로 수업 후 전략 리뷰 토론을 구조화 가능.
+
+- **진행자 로비 예상 인원 기반 접속 완료 감지** (`app.js:186-232`, `enterHostLobby()`): 교사가 로비에서 예상 학생 수를 입력하는 `<input type="number" id="expected-count">` 필드 추가, `loadLobbyMembers()` 완료 후 `data.length >= expectedCount`이면 "✅ 모든 학생 접속 완료!" 강조 표시 + Web Audio API 비프음 1회(3줄). 현재는 교사가 학생을 눈으로 세거나 구두로 확인해야 하는 불편이 있음. `enterHostLobby()`에 필드 추가와 `loadLobbyMembers()` 하단 조건문 5줄로 구현 가능하며 서버 변경 불필요.
+
+### 제거/단순화할 것들
+
+- **`datetime.utcnow()` Python 3.12 deprecation 경고 전체 미대응** (`app.py:125, 279, 437, 458, 497, 511, 1102`): Python 3.12부터 `datetime.utcnow()`는 DeprecationWarning을 발생시키고 Python 3.14에서 제거 예정. `app.py` 전체에서 17회 이상 사용됨. `from datetime import timezone`이 이미 `app.py:3`에 import되어 있으므로 DB 저장용 naive datetime이 필요한 곳은 `datetime.now(timezone.utc).replace(tzinfo=None)`으로, 순수 비교·연산은 `datetime.now(timezone.utc)`로 일괄 교체 가능. 특히 `_end_room()`(`app.py:125`)·`room_dict()`(`app.py:279`) 처럼 `now = datetime.utcnow()`로 시작하는 함수들이 주요 교체 대상.
+
+- **`RoomMember.cash` · `Deposit.amount` · `RoomTransaction.amount` Float 타입의 부동소수점 누적 오차** (`models.py:52, 77, 87`): 원화(정수)를 `db.Column(db.Float)` (IEEE 754 배정밀도)로 저장하면 `10_000_000 * 0.025 = 250000.00000000003` 같은 미세 오차가 거래마다 누적됨. 30회 거래 후 `member.cash`가 `9,998,721.999999998` 같은 값이 될 수 있고, `krw()` 함수(`app.js:48`)의 `Math.round()` 처리로 화면은 괜찮지만 `member.cash < amount` 비교(`app.py:748`) 등에서 경계값 오류가 발생 가능. `db.Column(db.Numeric(precision=15, scale=0))` 또는 `Integer`(원 단위 정수 저장)로 교체하고 마이그레이션 블록(`app.py:31-40`)에 ALTER 문 추가 권장.
+
+- **`get_room()` 에서 `cur_user()` 최대 4회 중복 호출** (`app.py:439, 444, 464, 473`): `get_room(rid)` 함수 내부에서 `cur_user()`(`= db.session.get(User, session['user_id'])`)가 조건 분기에 따라 최대 4회 호출됨. SQLAlchemy identity map이 두 번째 이후를 캐싱하지만 `cur_user().id`는 `session['user_id']`로 직접 대체 가능하고, 함수 진입부에서 `uid = session['user_id']`(또는 `user = cur_user()`) 1회 선언 후 재사용하는 것이 코드 의도를 명확히 함. `room_dict(room, cur_user().id)` 패턴을 `room_dict(room, uid)`로 통일하면 가독성과 함께 identity map 미초기화 엣지케이스도 방지됨.
+
+- **룰렛 트리거 시 `has_spins` 체크가 참여자 수만큼 COUNT 쿼리 실행** (`app.py:450-455`): `any(RoomTransaction.query.filter_by(room_id=rid, user_id=m.user_id, action='RLT').count() < 3 for m in non_host)`는 참여자 수 N만큼 개별 `COUNT(*)` SQL을 발행함. 게임 종료 5초 전 30명 클라이언트가 동시에 `/api/rooms/<rid>`를 폴링하면 한 요청당 30개 COUNT + 30 요청 = 최대 900개 동시 COUNT 쿼리 가능. `db.session.query(db.func.count(RoomTransaction.id)).filter(RoomTransaction.room_id == rid, RoomTransaction.action == 'RLT').group_by(RoomTransaction.user_id).all()` 단일 쿼리로 집계 후 `any(cnt[0] < 3 for cnt in result)` 판단으로 교체하면 쿼리 수가 1개로 고정.
+
+- **`loadLobbyMembers()` · `loadPLobbyMembers()` username을 HTML escaping 없이 innerHTML에 삽입** (`app.js:224-231, 582-585`): `${m.username}` 그대로 innerHTML에 삽입하고, onclick 속성에서 작은따옴표만 `replace(/'/g,"\\'")`로 처리. `<img src=x onerror=alert(document.cookie)>` 같은 username이 등록되면 호스트·참가자 로비에서 XSS 공격 가능(`app.py:332`의 username 유효성 검사는 길이 2-30자만 확인). `app.js:897`에 이미 `escHtml()` 헬퍼가 정의되어 있으므로 username 출력 전 `escHtml(m.username)` 적용으로 즉시 해결 가능. onclick 속성 내 username은 `data-uid` 속성으로 이동하거나 user_id 만으로 대체하는 방향이 근본 해결.
+
+- **`_do_reveal()` 에서 동일 `Room` 객체를 중복 DB 조회** (`app.py:226-233`): `_room_lot = db.session.get(Room, rid)` 로 조회 후 `auto_paused` 블록에서 `room = db.session.get(Room, rid) if _room_lot is None else _room_lot`를 실행. `_room_lot`이 None인 경우 두 번째 `db.session.get(Room, rid)`도 identity map에서 None을 반환하므로 무의미한 중복 조회. `room = _room_lot`으로 단순화하고 `if room and room.status == 'paused' and room.paused_at:` 가드만 유지하면 코드 의도가 명확해지고 비정상 상황에서의 불필요한 DB 왕복도 제거됨.
+
+---
