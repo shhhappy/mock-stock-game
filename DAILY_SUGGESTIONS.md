@@ -2515,3 +2515,31 @@
 - **`Room.code` 충돌 재시도 소진 후 중복 코드 반환** (`models.py:8-13`): `gen_code()`가 10회 재시도 후에도 충돌하면 중복 코드를 그대로 반환하고, `create_room()`(`app.py:388`)의 `db.session.commit()` 시점에 `IntegrityError`가 발생해 500 오류가 반환됨. `Room.query.filter_by(code=code).first()` 체크가 이미 있으므로 재시도 횟수를 50으로 늘리거나 코드 길이를 8자로 확장해 충돌 확률(`62^6 ≈ 5.6억` → `62^8 ≈ 2,183억`)을 대폭 낮추는 것이 근본 해결책. 최소한 `create_room()`에서 `IntegrityError`를 잡아 사용자 친화 메시지로 반환해야 함.
 
 ---
+
+## 2026-07-19
+
+### 추가하면 좋을 기능
+
+- **포트폴리오 보유 종목 카드에서 직접 매도 버튼** (`app.js:1481+`, `pg-portfolio` → `holdings-list`): 현재 보유 종목을 팔려면 포트폴리오 탭 → 시장 탭으로 이동 → 종목 검색 → 모달 열기 → 매도 순서를 거쳐야 함. `loadPortfolio()` 내 보유 종목 카드 렌더링에서 각 항목에 `onclick="openStockModal('${h.symbol}', h)"` 버튼을 추가하면 2탭 이동 없이 즉시 매도 가능. `openStockModal()`의 두 번째 인수(fallback)는 이미 구현되어 있음(`app.js:1327`). 서버 변경 없이 프론트 수정만으로 구현.
+
+- **Render 서버 재시작 후 진행자 설정 소실 방지** (`app.py:1245-1246`, `app.py:250`, `app.py:1246`): `_quiz_settings`, `_roulette_config`, `_quiz_state` 세 딕셔너리가 모두 in-memory 전역 변수로 존재. Render free tier는 30분 비활성 후 컨테이너를 재시작하므로 게임 도중 cold start 발생 시 진행자가 설정한 퀴즈 보상%, 룰렛 배율/확률이 모두 기본값으로 초기화됨. `_lottery_rounds_done`처럼 `Room` 테이블에 `quiz_reward_pct`, `quiz_penalty_pct`, `rlt_config JSON` 컬럼을 추가하거나, 별도 `RoomSettings` 모델로 DB에 영속화해야 수업 중 서버 재시작에도 설정이 유지됨.
+
+- **자동 복권 기본 상금 과대 설정 조정 가능하게** (`app.py:419`): 자동 복권 발동 시 `default_prize = member_count * 30_000_000` 으로 고정됨. 30명 학급에서 1회당 9억 원 상금이 자동 배정되어 10,000,000원 시작 자금에 비해 최대 9배 상금이 나올 수 있음. 복권이 투자 결과를 압도해 게임의 교육적 균형이 깨짐. `host_news_interval()`처럼 진행자가 자동 복권의 인당 기본 상금 배수를 설정할 수 있는 엔드포인트 (`GET/POST /api/rooms/<rid>/host/lottery-config`)를 추가하고, `Room` 모델에 `lottery_default_prize_per_person` 컬럼을 두어 게임 생성 시 지정 가능하게 만드는 것이 좋음.
+
+- **Flask SECRET_KEY 기본값 보안 취약점 경고** (`app.py:13`): `app.secret_key = os.environ.get('SECRET_KEY', 'mock-stock-game-secret-2024')`에서 `SECRET_KEY` 환경 변수를 설정하지 않으면 소스 코드에 공개된 고정 문자열을 사용함. Flask 세션은 서버 측이 아닌 클라이언트 쿠키에 HMAC 서명으로 저장되므로, 시크릿 키를 알고 있는 공격자가 임의 `user_id`를 가진 위조 세션 쿠키를 생성해 다른 참여자로 위장 가능함. Render 환경 변수에 충분히 긴 랜덤 값을 반드시 설정해야 하며, 최소한 `app.py` 시작 시 `if app.secret_key == 'mock-stock-game-secret-2024': print("WARNING: SECRET_KEY is using default value!")`를 로깅해 경고를 띄워야 함.
+
+- **룰렛 자동닫기 타이머가 스핀 애니메이션 중에도 진행** (`app.js:975-990`, `_startRltAutoClose()`): 룰렛 모달 열림과 동시에 60초 카운트다운이 시작됨. 학생이 배팅하고 `doRouletteSpin()`이 4.3초 애니메이션(`app.js:1062`)을 실행 중일 때 타이머가 0초에 도달하면 `closeRoulette()`를 강제 호출해 결과 확인 전에 모달이 닫힐 수 있음. `doRouletteSpin()` 진입 시 `_stopRltAutoClose()` 호출 후 결과 표시 이후 다시 `_startRltAutoClose()`로 재시작하거나, 스핀 중에는 카운트다운을 완전히 정지하도록 `app.js:1040` 직후에 `_stopRltAutoClose()`를 추가해야 함.
+
+### 제거/단순화할 것들
+
+- **룰렛·퀴즈 오답 패널티 주식 강제 매도 후 0주 보유 종목이 DB에 남음** (`app.py:1036-1038`, `app.py:1318`): 룰렛 베팅 자금 마련 시 `h.shares = 0; h.avg_price = 0`을 설정하지만 `db.session.delete(h)`를 호출하지 않음. 퀴즈 오답 패널티 경로(`app.py:1315-1318`)도 동일. 일반 매도 경로(`app.py:762`)는 `if holding.shares == 0: db.session.delete(holding)` 처리가 있음. 0주 보유 레코드는 `get_portfolio()`에서 필터링(`if h.shares <= 0: continue`, `app.py:783`)되어 화면에는 안 보이지만 DB에 누적되어 저장 공간 낭비·쿼리 성능 저하 발생. 두 경로 모두 `if h.shares == 0: db.session.delete(h)` 한 줄 추가로 수정 가능.
+
+- **`get_history()` 차트 데이터가 과거→현재 방향 랜덤워크가 아닌 역방향 생성** (`stock_service.py:293-308`): 루프가 `range(n_bars, 0, -1)` 역순으로 날짜를 할당하면서 가격은 `price = c` 즉 순방향으로 누적함. 그 결과 `n_bars`일 전 날짜에 현재가와 거의 같은 시작가를 놓고, 마지막 날(오늘)에 가장 많이 벗어난 값이 놓일 수 있음. 날짜 인덱스와 가격 랜덤워크 방향이 반대여서 차트가 현재가에서 거꾸로 거슬러 올라가는 모양이 됨. `price`를 `current * random.uniform(0.8, 1.1)`로 과거 시작가를 먼저 결정한 뒤 순방향으로 바(bar)를 생성하면(`for i in range(n_bars):`로 방향 수정) 투자 차트의 시간 흐름이 직관적으로 표현됨.
+
+- **`_quiz_state` 딕셔너리가 `_end_room()` 에서 부분적으로만 정리** (`app.py:159-160`): `for k in [k for k in _quiz_state if k[0] == room.id]: del _quiz_state[k]` 로 해당 방의 키는 삭제되나, 그 외 `_lots`, `_rlt_active`, `_roulette_config` 정리 역시 분산 처리됨 (`app.py:155-160`). 특히 서버 재시작 없이 같은 진행자가 방을 여러 번 만들 경우 이전 방의 `_quiz_state` 키가 남아 메모리가 누적됨 (ended 상태 방은 정리되지만 waited → ended 빠른 종료 시 `_quiz_state[rid]` 미초기화로 인한 KeyError 가능). `_end_room()`의 메모리 정리 로직을 `_cleanup_room_memory(room_id)` 헬퍼 함수로 통합하면 누락 방지 및 코드 가독성 개선.
+
+- **`enter()` 엔드포인트에서 닉네임 중복 시 기존 사용자 그대로 반환 — 학번·이름 재사용 위험** (`app.py:329-342`): `User.query.filter_by(username=u).first()`로 같은 닉네임 존재 시 해당 User를 반환하여 세션을 설정함. 한 학급에서 학번·이름 조합이 실수로 겹치거나 다른 학생이 같은 이름으로 참여하면 이미 게임 중인 다른 학생의 계정을 탈취하게 됨. `username`을 전역 고유키로 쓰는 현 구조를 방별 `RoomMember.display_name`으로 분리하거나, 최소한 동일 닉네임 존재 시 `{'error': '이미 사용 중인 학번/이름 조합입니다.'}` 오류를 반환하여 중복 방지 처리가 필요함.
+
+- **호스트 게임 화면에서 룰렛 설정(`loadRltConfig()`)을 불필요하게 항상 호출** (`app.js:267`, `enterHostGame()`): `enterHostGame()`은 항상 `loadRltConfig()`를 호출하며, 이는 `/api/rooms/<rid>/host/roulette-config` GET 요청을 발생시킴. 하지만 룰렛 설정 탭은 진행자가 명시적으로 "설정" 탭을 선택해야 보임. `loadRltConfig()`를 `enterHostGame()` 진입 시가 아닌 `switchHostTab('settings')` 진입 시(`app.js:303-312`의 `if (tab === 'settings')` 분기)로 이동하면 불필요한 초기 API 호출 1회를 줄일 수 있음.
+
+---
