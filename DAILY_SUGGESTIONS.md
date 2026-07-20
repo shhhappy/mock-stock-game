@@ -2573,3 +2573,31 @@
 - **`_do_reveal()` 에서 동일 `Room` 객체를 중복 DB 조회** (`app.py:226-233`): `_room_lot = db.session.get(Room, rid)` 로 조회 후 `auto_paused` 블록에서 `room = db.session.get(Room, rid) if _room_lot is None else _room_lot`를 실행. `_room_lot`이 None인 경우 두 번째 `db.session.get(Room, rid)`도 identity map에서 None을 반환하므로 무의미한 중복 조회. `room = _room_lot`으로 단순화하고 `if room and room.status == 'paused' and room.paused_at:` 가드만 유지하면 코드 의도가 명확해지고 비정상 상황에서의 불필요한 DB 왕복도 제거됨.
 
 ---
+
+## 2026-07-20
+
+### 추가하면 좋을 기능
+
+- **Page Visibility API를 활용한 백그라운드 폴링 스로틀링** (`app.js:269-273`, `app.js:562-575`): 참여자 폴링 간격이 5초, 호스트가 10초로 고정. 학생이 스마트폰에서 게임 탭을 백그라운드로 전환해도 폴링이 계속 실행됨. `document.addEventListener('visibilitychange', ...)` 리스너 추가 후 `document.hidden` 시 `clearInterval(S.pollInterval)`, 탭 복귀 시 즉시 재시작하면 30명 클래스에서 불필요한 서버 요청을 최대 50% 절감 가능. 서버 변경 불필요, `startPolling()` 래퍼 함수(약 10줄)로 구현.
+
+- **게임 진행 중 참여자 강퇴 기능** (`app.py:564-575`, `app.py:567`): `kick_member()`가 `if room.status != 'waiting': return error`를 반환해 게임 중에는 퇴장 처리 불가. 실제 수업에서 부정행위(스크립트 자동 매매 등)를 발견한 교사가 해당 학생을 제거할 방법이 없음. `status='waiting'` 조건을 제거하고 대신 게임 중 강퇴 시 해당 학생의 `RoomMember` 레코드를 삭제(또는 `is_kicked` 플래그)하되 거래 내역은 보존하는 방식으로 수정. 진행자 순위 탭 `host-member-row`(`app.js:413-428`)에 게임 중 강퇴 버튼도 노출.
+
+- **엑셀 내보내기에 섹터별 거래 요약 시트 추가** (`app.py:1418-1488`): 현재 엑셀은 '최종 순위' 시트 1개만 포함. `RoomTransaction.query.filter_by(room_id=rid)`를 `STOCKS[t.symbol]['sector']`로 그룹화해 학생별·섹터별 실현손익을 두 번째 시트로 추가(약 40줄). 교사가 수업 후 "IT 섹터 집중 투자 vs 분산 투자" 등 전략 비교 리뷰 시 바로 활용 가능. `openpyxl`이 이미 의존성으로 있어 추가 패키지 불필요.
+
+- **게임 중 참여자 자산 스냅샷 주기 저장** (`app.py:808-824`, `models.py`): 현재 `asset_history`(`app.js:19`, `app.js:697`)는 클라이언트가 폴링할 때만 총 자산을 로컬 배열에 누적해 자산 변화 라인 차트를 그림. 클라이언트가 탭을 닫거나 새로고침하면 히스토리가 소멸. `AssetSnapshot(room_id, user_id, total_value, ts)` 모델을 추가하고 `/api/rooms/<rid>/rankings` 응답 시 서버가 각 멤버의 스냅샷을 INSERT하면, 재접속 후에도 차트 복원이 가능하고 종료 후 "자산 변화 곡선 비교" 기능도 구현 가능. 5분 간격 저장 시 30분 게임 기준 멤버당 최대 6행.
+
+- **복권 자동 상금 배수 설정 엔드포인트** (`app.py:419`, `app.py:630-646`): 자동 복권 발동 시 `default_prize = member_count * 30_000_000` 하드코딩. 30명 클래스에서 회당 9억 원 상금이 생성되어 1,000만 원 시작 자금 대비 최대 90배 상금이 가능함 — 복권이 투자 결과를 압도해 교육 효과가 훼손됨. `host_news_interval()`과 동일 패턴으로 `GET/POST /api/rooms/<rid>/host/lottery-config` 엔드포인트를 추가해 `prize_per_person`(기본 값 1,000,000원 등)을 설정 가능하게 하고, `Room` 테이블 컬럼 또는 in-memory dict로 저장.
+
+### 제거/단순화할 것들
+
+- **`member_total_value()` N+1 쿼리 문제** (`app.py:107-118`, `app.py:812-818`): `get_rankings()`에서 RoomMember를 전체 조회 후 멤버 수 N만큼 `member_total_value()`를 개별 호출. 각 호출은 `RoomHolding.query.filter_by(room_id=rid, user_id=uid)` + `Deposit.query.filter_by(...)` 2개의 쿼리 추가 발생. 30명 클래스에서 순위 1회 갱신에 최소 60+30 = 90개 쿼리 실행. `RoomHolding.query.filter_by(room_id=rid).all()`과 `Deposit.query.filter_by(room_id=rid, status='active').all()`을 각각 1번 쿼리해 `user_id` 기준 dict로 group한 뒤 루프를 돌면 3개 쿼리로 동일 결과 산출 가능. `host_members(rid)` (`app.py:542-562`)에도 같은 문제가 있어 양쪽 모두 개선 필요.
+
+- **Chart.js 인스턴스가 주식 상세 모달 재열 때 destroy 되지 않음** (`app.js:1-30 S.stockChart`, `app.js:1372-1400` `loadChart()`): `S.stockChart`는 모달을 처음 열 때 생성되고 닫아도 destroy 되지 않음. 같은 캔버스(`#stock-chart`)에 새 Chart를 생성 시 "Canvas is already in use. Chart with ID X must be destroyed before the canvas with ID stock-chart can be reused" 경고가 콘솔에 반복 출력되며 메모리 누수가 누적됨. `loadChart()` 진입부 또는 `closeModal('modal-stock')` 핸들러에서 `if (S.stockChart) { S.stockChart.destroy(); S.stockChart = null; }` 3줄 추가로 해결.
+
+- **`force_sector_event()` 이전 뉴스를 덮어씀 — 연속 이벤트 불가** (`stock_service.py:262-275`): 섹터 이벤트 발동 시 `self._news`를 새 dict로 통째 교체. 진행자가 "반도체 섹터 +10%"를 발동한 직후 "IT 섹터 -15%"를 연속 발동하면 학생 화면에는 두 번째 뉴스만 보임. `self._news`의 `items` 리스트(`stock_service.py:158, 238, 270`)가 이미 배열 구조이므로 `force_sector_event()`에서 `self._news['items'].append(new_item)` 방식으로 기존 뉴스에 추가하고 최대 5개 유지 로직을 추가하면 됨. 교사가 여러 섹터를 빠르게 조작할 때 학생이 모든 뉴스를 확인 가능.
+
+- **`host_adjust()`에 delta 범위 유효성 검사 없음** (`app.py:587-603`): `delta = float(d.get('delta', 0))`에 범위 제한이 없어 진행자가 실수로 `-9999999999` 같은 값을 입력해도 `m.cash = max(0, m.cash + delta)`로 0까지만 보호됨. 반대로 `+99999999999` 입력 시 참여자 현금이 게임 밸런스를 깨는 수준으로 증가 가능. `if abs(delta) > room.starting_cash * 10: return error` 정도의 가드 또는 UI `adj-delta` 입력 필드에 `max="50000000"` HTML 속성 추가로 실수 방지. 현재 UI에 min/max 속성이 없음 (`index.html:788`).
+
+- **`trade()` 엔드포인트에 동시 요청에 대한 row-level 잠금 없음** (`app.py:724-767`): 현재 `member.cash` 잔액 확인(`app.py:748`) 후 차감(`app.py:750`)까지 다른 요청이 끼어들 수 있는 TOCTOU 취약점 존재. SQLite WAL 모드가 동시 쓰기를 직렬화하므로 실제 충돌은 드물지만 PostgreSQL로 전환 시 동시 매수 2건이 모두 잔액 체크를 통과해 과소비가 발생할 수 있음. SQLAlchemy `with_for_update()`로 `RoomMember` 행을 선점하거나(`RoomMember.query.filter_by(...).with_for_update().first()`), 트랜잭션 격리 수준을 SERIALIZABLE로 설정하는 방어 코드 추가 권장.
+
+---
