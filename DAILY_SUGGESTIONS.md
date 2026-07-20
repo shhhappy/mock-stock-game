@@ -2601,3 +2601,33 @@
 - **`trade()` 엔드포인트에 동시 요청에 대한 row-level 잠금 없음** (`app.py:724-767`): 현재 `member.cash` 잔액 확인(`app.py:748`) 후 차감(`app.py:750`)까지 다른 요청이 끼어들 수 있는 TOCTOU 취약점 존재. SQLite WAL 모드가 동시 쓰기를 직렬화하므로 실제 충돌은 드물지만 PostgreSQL로 전환 시 동시 매수 2건이 모두 잔액 체크를 통과해 과소비가 발생할 수 있음. SQLAlchemy `with_for_update()`로 `RoomMember` 행을 선점하거나(`RoomMember.query.filter_by(...).with_for_update().first()`), 트랜잭션 격리 수준을 SERIALIZABLE로 설정하는 방어 코드 추가 권장.
 
 ---
+
+## 2026-07-20 (2차)
+
+### 추가하면 좋을 기능
+
+- **퀴즈 문항별 정답률 집계 통계** (`app.py:1270-1342`, `_quiz_state`): `submit_quiz()`는 정답 여부와 상금/패널티를 처리하지만 답변 기록을 DB에 남기지 않음(`_quiz_state`는 쿨다운 관리 전용). 진행자가 어떤 개념을 학생들이 어려워하는지 알 수 없어 수업 피드백이 불가. `RoomTransaction`에 `action='QUIZ'`, `symbol=f'Q{q["id"]}'`, `note=f'퀴즈 {"정답" if correct else "오답"}'`을 기록하는 1줄 추가 또는 별도 `QuizAnswer(room_id, user_id, qid, correct, ts)` 모델을 추가하고, `GET /api/rooms/<rid>/host/quiz-stats` 엔드포인트에서 문항별 정답률을 집계해 진행자 설정 탭에 표시하면 수업 사후 분석 효율이 대폭 향상됨.
+
+- **`refreshMyRank()` 경량 전용 API 교체** (`app.js:735-752`, `app.py:808-824`): 참여자 게임에서 10초마다 `GET /api/rooms/<rid>/rankings` 전체 보드를 내려받아 `data.find(e => e.is_me)`로 자신 항목 1개만 추출. 30명 게임에서 참여자 N명이 동시에 30개 항목을 받으므로 실제 필요 데이터의 30배를 전송. `GET /api/rooms/<rid>/my-summary`(현금·총자산·순위 3개 필드만 반환, 약 15줄 서버 코드)를 추가하고 `refreshMyRank()`에서 이 경량 API를 호출하면 응답 크기 ~97% 감소. `S.currentPage === 'rankings'`일 때만 풀 랭킹을 별도 호출하면 됨.
+
+- **진행자 시장 탭 종목 카드 클릭 시 가격 추이 차트 확인** (`app.js:314-358`, `loadHostMarket()`): 진행자 `host-stock-grid` 카드에는 현재 가격과 섹터만 표시되고 클릭 이벤트가 없음. 참여자 화면의 `openStockModal()`(`app.js:약 1327`)은 이미 서버 차트 API를 호출해 Chart.js 모달을 표시하므로, `loadHostMarket()`의 `stock-card` 렌더링에 `onclick="openStockModal('${st.symbol}')"` 한 줄 추가로 진행자도 종목 조정 전 가격 흐름 확인 가능. 서버 변경 불필요.
+
+- **게임 설정 프리셋 로컬 저장/불러오기** (`app.js:121-139`, `doCreateRoom()`): 교사가 매 수업마다 게임 시간·시작 자금·금리를 반복 입력. `doCreateRoom()` 상단에 `const saved = JSON.parse(localStorage.getItem('gamePreset') || 'null')`로 이전 설정을 자동 복원하고, 게임 생성 성공 시 `localStorage.setItem('gamePreset', JSON.stringify({dur, cash, rate}))`로 저장하는 약 5줄 추가. "마지막 사용 설정으로 불러오기" 버튼을 함께 제공하면 서버 변경 없이 반복 입력 피로를 완전히 제거 가능.
+
+- **관심 종목 목표 가격 알림 기능** (`app.js:17`, `S.watchlist`): `S.watchlist`는 현재 시장 탭 종목 필터링에만 쓰임. `S.watchlistAlerts = JSON.parse(localStorage.getItem('watchlistAlerts') || '{}')` 딕셔너리에 `{symbol: {above: number, below: number}}` 형태로 목표가를 저장하고, `loadMarket()` 내 주가 갱신 시 `if (alert.below && st.price <= alert.below) toast(...)` 조건(약 8줄)을 추가하면 학생이 포트폴리오·예금 탭에 있을 때도 관심 종목의 목표가 도달을 알림으로 받을 수 있음. 서버 변경 불필요, 클라이언트 전용 구현.
+
+### 제거/단순화할 것들
+
+- **`lobby_members()` 호스트 권한 확인 누락** (`app.py:577-585`): `Room.query.get_or_404(rid)` 이후 `cur_user()` 호출이나 `room.host_id == user.id` 체크 없이 멤버 목록을 반환. `/host/lobby-members` 경로임에도 로그인된 사용자라면 방 ID 추측만으로 임의 방의 참여자 이름을 수집 가능 (정보 노출). `loadPLobbyMembers()`(`app.js:579`)가 참여자 로비에서 동일 엔드포인트를 사용하는 구조이므로, 호스트 전용 버전(`host/lobby-members`)은 `if room.host_id != user.id: return 403`을 추가하고 참여자용은 `/lobby-members`로 경로를 분리하는 방향이 권장됨.
+
+- **`_prev` 기준가가 게임 전체 기간 고정되어 등락률 의미 손실** (`stock_service.py:108-113`, `app.py:664-668`): `_prev` dict가 `_init_prices()`에서 한 번 설정된 후 절대 갱신되지 않음. `get_stocks()` API의 `change`·`change_pct` 계산이 항상 게임 시작가와 비교하므로 2시간 게임에서는 사실상 "누적 등락률"이 되어버림. `_maybe_generate_news()` 내 뉴스 생성 직전에 `for sym in STOCKS: self._prev[sym] = self._prices[sym][1]` 한 줄 추가하면 뉴스 사이클 기준 등락률로 전환되어 "이번 뉴스로 얼마나 올랐나"를 직관적으로 확인 가능.
+
+- **`api.get()`/`api.post()` 네트워크 예외가 uncaught promise rejection으로 전파** (`app.js:29-44`): `r.ok` 확인 로직은 있지만 `fetch()` 자체가 throw하는 경우(와이파이 끊김, DNS 실패)에는 `{error: ...}` 변환이 실행되지 않고 예외가 상위로 전파됨. 호출부(`loadHostMembers()`, `loadMarket()` 등)에 try-catch가 없으므로 네트워크 장애 시 `setInterval` 콜백에서 unhandled rejection이 반복 발생하며 이후 코드가 실행되지 않아 UI가 굳음. `api.get()`/`api.post()` 내부를 `try { ... } catch(e) { return {error: '네트워크 오류'}; }` 로 감싸는 2줄 수정으로 전체 호출부를 방어 가능.
+
+- **참여자 게임 폴링에서 랭킹 API 중복 호출** (`app.js:647-649`): `S.currentPage === 'rankings'`일 때 10초 콜백 마지막에서 `refreshMyRank()`(`GET /rankings`)와 `loadParticipantRankings()`(`GET /rankings`)가 거의 동시에 발행되어 동일 엔드포인트를 2회 연속 호출함. 응답 순서가 어긋나면 이전 데이터로 화면이 덮힐 수 있음. `refreshMyRank()` 호출을 `if (S.currentPage !== 'rankings')` 조건부로 감싸거나, `loadParticipantRankings()` 내부에서 자신의 총자산·순위 표시를 같이 처리해 `refreshMyRank()` 자체를 통합하면 중복 제거와 UI 일관성을 동시에 달성.
+
+- **`create_deposit()` 소수점·미소 금액 유효성 검사 부재** (`app.py:887-891`): `amount = float(request.json.get('amount', 0))`에서 `0.001`원 같은 소수점 금액이나 `1e15`원 같은 비현실적 금액을 막는 검증이 없음. `0 < amount < float('inf')` 체크만 존재해 소액 예금을 무제한 생성할 수 있고 `Deposit` 레코드가 폭발적으로 늘어 `withdraw_deposit()` 루프 부하 증가. `amount = int(round(amount))` + `if amount < 10_000: return jsonify({'error': '최소 예금액은 10,000원입니다.'}), 400` 두 줄 추가로 해결.
+
+- **`withdraw_deposit()` 게임 일시정지(freeze) 중 예금 인출 허용** (`app.py:904-916`): 복권·룰렛 자동 일시정지 기간에 가격이 동결된 상태에서 예금을 인출해 현금을 확보하고 `trade()`가 `active` 상태를 요구해도 이를 우회한 뒤 재개 직후 즉시 무위험 대량 매수가 가능한 구조. `trade()`는 `room.status != 'active'` 체크(`app.py:728`)가 있지만 `withdraw_deposit()`에는 상태 확인이 전혀 없음. `room = Room.query.get_or_404(rid)` 조회 후 `if room.status == 'paused': return jsonify({'error': '게임 일시정지 중에는 예금을 해지할 수 없습니다.'}), 400` 추가로 간단히 차단.
+
+---
