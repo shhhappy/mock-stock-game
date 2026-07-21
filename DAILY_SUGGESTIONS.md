@@ -2663,3 +2663,37 @@
 - **`lobby_members()` 엔드포인트 호스트 인증 누락** (`app.py:577-585`): `/api/rooms/<rid>/host/lobby-members` 경로는 `/host/` 하위에 있지만 `cur_user()`나 `room.host_id` 검사 없이 모든 로그인 사용자에게 방 멤버 목록을 반환. 방 ID를 순차 대입하는 것만으로 다른 수업의 학생 이름·학번 목록 수집이 가능한 개인정보 노출. 참여자 로비에서도 이 엔드포인트를 사용(`app.js:579`)하므로 완전한 호스트 전용화는 불가하나, 최소한 `if room.host_id != user.id and not RoomMember.query.filter_by(room_id=rid, user_id=user.id).first(): return 403` 체크를 추가해 해당 방 관계자 외 접근을 차단해야 함.
 
 - **`host_members()`에서 `member_total_value()` N+1 쿼리 중복 (호스트 대시보드 전용)** (`app.py:542-562`): 전일 분석에서 `get_rankings()`의 N+1 문제를 지적했으나 `host_members()` 역시 동일 패턴. 10초마다 호스트 순위 탭이 갱신될 때 30명 기준 60~90개 쿼리 발생. `get_rankings()` 개선과 동시에 `host_members()`도 `RoomHolding`·`Deposit`을 `room_id` 기준 일괄 조회 후 메모리 내 집계로 전환하면 순위 API 응답 시간이 SQLite 기준 약 300ms → 30ms로 단축 예상.
+
+---
+
+## 2026-07-21 (2차)
+
+### 추가하면 좋을 기능
+
+- **진행자 방송 공지 기능** (`app.py:278-305`, `room_dict()`, `app.js:1150-1206`): 진행자가 텍스트 메시지를 입력하면 모든 참여자 화면 최상단에 배너로 즉시 표시되는 기능. 현재는 폭탄뉴스 이벤트 외에 교사가 학생 전체에게 직접 텍스트 공지를 보낼 수단이 없음. `POST /api/rooms/<rid>/host/announce` 엔드포인트를 추가해 `Room` 테이블 또는 in-memory dict에 `current_announcement` 문자열을 저장하고, `room_dict()` (`app.py:278`) 응답에 포함시키면 기존 참여자 5초 폴링이 이를 수신해 화면 상단에 `position:fixed` 배너로 표시 가능. "지금 삼성전자 주가 주목!" 같은 수업 유도 지시를 즉시 전달 가능.
+
+- **지정가(예약) 주문 기능** (`app.py:724-767`, `trade()`, `stock_service.py:101-139`): 현재는 시장가 즉시 체결만 지원. "삼성전자 72,000원 이하 시 10주 매수"처럼 조건부 주문을 설정하면 해당 가격 도달 시 서버가 자동 체결하는 기능. `LimitOrder(room_id, user_id, symbol, action, target_price, shares)` 테이블을 추가하고, `get_price()` 호출 주기(`stock_service.py:PRICE_TTL=20`) 때마다 미체결 주문을 스캔해 조건 충족 시 `trade()` 핵심 로직을 실행하면 됨. 실제 증권사 핵심 주문 유형(지정가·시장가 비교)을 직접 체험하게 해 교육적 가치가 높음. 클라이언트는 시장 탭 주식 모달에 "예약 매수/매도" 탭 추가로 구현.
+
+- **진행자 화면 QR 코드 자동 생성** (`app.js:204-217`, `enterHostLobby()`, `static/index.html:114-134`): 현재 호스트 로비 화면에 방 코드(텍스트)와 "QR 코드" 버튼이 있지만 실제 QR 이미지 생성 로직이 없음 (`app.js:209`에 `#host-qr-img`에 대한 언급만 있고 실제 생성 코드 불확인). 순수 JS로 구현된 QR 인코더(CDN 없이 ~2KB 인라인 스크립트)를 `<canvas>` API와 결합하면 외부 의존 없이 QR을 생성 가능. 교사가 프로젝터에 화면을 띄우면 학생들이 스마트폰으로 즉시 스캔해 입장 가능 — 코드 수동 입력 오류를 완전히 제거.
+
+- **모바일 숫자 키보드 최적화** (`static/index.html:424`, `static/index.html:705`): 주식 수량 입력(`<input id="trade-qty" type="number">`, index.html:705)과 예금 금액 입력(`<input id="dep-amount" type="number">`, index.html:424) 모두 `inputmode="numeric"` 속성이 없음. iOS Safari는 `type="number"`에서 소수점과 마이너스 포함 키보드를 표시하는데, 모바일 기기에서 학생이 수량이나 금액을 입력할 때 숫자 전용 키패드(`inputmode="numeric"`)가 표시되면 입력 정확도와 속도가 크게 향상됨. HTML 속성 2개 추가, 서버 변경 불필요.
+
+- **결과 화면에 섹터별 투자 비중 요약 카드** (`app.js:1694-1760`, `loadResults()`, `app.py:808-824`): 현재 결과 화면(`screen-results`)은 순위표·자산·수익률만 표시하고 "어떤 섹터에 집중했는가"는 제공하지 않음. `loadResults()` 에서 `GET /api/rooms/<rid>/portfolio` 응답의 `holdings` 배열을 섹터별로 집계해 작은 도넛 차트나 섹터 비중 바를 결과 화면 하단에 추가하면 "반도체 집중 투자 vs 분산 투자" 전략 비교 수업 토론 소재로 즉시 활용 가능. 서버 변경 불필요, 기존 `port.holdings` 데이터 재활용.
+
+- **퀴즈 오답 시 관련 용어 사전 바로가기** (`app.js:882-889`, `submitQuiz()`, `education_data.py:GLOSSARY`): 퀴즈 오답 결과에 `q['ex']` 한 줄 해설만 표시됨. `QUIZ_QUESTIONS`에 `glossary_key` 필드를 추가해 서버 응답에 포함시키고(`submit_quiz()` `app.py:1342`), `submitQuiz()`의 오답 결과 영역에 "📚 관련 용어 보기" 버튼을 추가해 `openGlossaryModal(data.glossary_key)` 함수를 호출하면, 오답 → 즉시 개념 복습 흐름이 완성됨. 교육 탭을 별도로 열 필요 없이 퀴즈 결과 화면에서 바로 개념 확인 가능.
+
+### 제거/단순화할 것들
+
+- **`minigame_spin()` 룰렛 자금 마련 시 주식 전량 매도 후 `h.shares=0, h.avg_price=0`만 설정하고 DB 레코드 삭제 안 함** (`app.py:1037-1038`): `trade()` (`app.py:762`)는 주식을 전량 매도하면 `db.session.delete(holding)`으로 레코드를 삭제하지만, `minigame_spin()` 내 자금 마련 코드는 `h.shares = 0; h.avg_price = 0`만 설정하고 레코드를 남김. 동일 문제가 `submit_quiz()` 퀴즈 패널티 코드(`app.py:1318`)에도 존재. 0주 레코드가 DB에 잔류하면 `RoomHolding.query.filter_by(room_id=rid, user_id=uid).all()` 쿼리 결과가 오염되고 `get_portfolio()` 루프가 불필요하게 순회해야 함. 두 곳 모두 `h.shares == 0` 이후 `db.session.delete(h)` 호출 패턴으로 통일.
+
+- **`Room.query.get_or_404(rid)` deprecated Legacy Query API를 40곳 이상에서 반복 사용** (`app.py:435, 478, 493, 506, 522, 545, 567 등`): Flask-SQLAlchemy 3.0 이후 `Query.get()`과 `Query.get_or_404()`는 deprecated됨. `grep -n "get_or_404" app.py` 결과 40개 이상의 호출이 확인됨. SQLAlchemy 2.0 스타일인 `db.get_or_404(Room, rid)` 패턴(Flask-SQLAlchemy 3.x 지원)으로 교체해야 향후 의존성 업그레이드 시 하위 호환 경고를 제거 가능. `Room.query.get_or_404(rid)` → `db.get_or_404(Room, rid)`, `db.session.get(Room, rid)` 두 가지 대안 중 404 처리 필요 여부에 따라 선택.
+
+- **`gen_code()` 최종 폴백이 중복 코드를 반환할 수 있어 `create_room()` 500 위험** (`models.py:8-13`, `app.py:382-390`): `gen_code()`는 10번 시도 후 모두 중복이면 마지막으로 생성된 코드를 그냥 반환(`return ''.join(random.choices(...))`). 반환값이 이미 사용 중인 코드이면 `db.session.commit()` 시 `IntegrityError`(UNIQUE 제약 위반)가 발생하는데, `create_room()` (`app.py:382-390`)에는 이 예외를 처리하는 try-except가 없어 500 HTML 에러 반환. 수업 중 방 생성이 실패하는 드문 케이스이지만, `gen_code()` 마지막 줄을 `raise RuntimeError('코드 생성 실패')`로 바꾸거나 `create_room()`에서 `IntegrityError`를 catch해 재시도하는 방어 코드가 필요.
+
+- **`export_rankings()` 게임 진행 중 호출 시 예금 이자 미정산 상태로 내보내기** (`app.py:1419-1440`): `export_rankings()`는 `room.status != 'ended'` 체크 없이 진행자가 언제든 호출 가능. 게임 중 다운로드 시 `member_total_value()`가 활성 예금의 원금만 포함하고 이자는 게임 종료(`_end_room()`) 전까지 정산되지 않음. 결과적으로 엑셀의 최종 자산이 실제 게임 종료 후 순위와 다른 값을 보여줌. 최소한 파일명에 현재 상태(`_진행중_미정산`)를 명시하거나, `room.status != 'ended'`일 때 경고 헤더 행을 시트 상단에 삽입하는 것이 사용자 혼란을 방지할 수 있음. 강하게는 `status='ended'` 조건을 강제해 종료 후에만 다운로드 허용.
+
+- **`minigame_spin()` 예금 인출 시 초과 인출 — `submit_quiz()` 부분 인출과 불일치** (`app.py:1049-1058` vs `app.py:1328-1335`): 룰렛 베팅 자금 마련 중 예금을 인출할 때 `m.cash += d.amount; shortfall -= d.amount; d.status = 'withdrawn'`으로 **예금 전액을 항상 해지**. shortfall이 5만원인데 예금이 100만원이면 100만원 전체가 해지되어 초과 95만원이 현금으로 전환됨. 반면 `submit_quiz()` 패널티 처리(`app.py:1331`)는 `take = min(dep.amount, shortfall); dep.amount -= take`로 부분 인출을 지원. 두 곳이 동일한 자금 마련 시나리오에서 다르게 동작해 학생 불이익 발생 가능. `minigame_spin()`에도 `take = min(d.amount, shortfall)` 패턴을 적용하고 잔여 예금을 유지해야 함.
+
+- **`loadChart()` 기간 탭 활성화가 한국어 텍스트 비교에 의존해 리팩토링 취약** (`app.js:1360-1364`): 기간 탭 버튼의 활성 클래스를 `b.textContent === {'1d':'1일','1w':'1주','1mo':'1달','3mo':'3달','1y':'1년'}[period]` 문자열 매핑으로 결정. 만약 탭 텍스트가 "1개월"로 변경되거나 공백이 추가되면 매핑이 조용히 실패해 어떤 탭도 활성화되지 않음. HTML에 `data-period="1mo"` 속성을 추가하고(`static/index.html:680-684`) `loadChart()` 내에서 `b.dataset.period === period`로 비교하도록 변경하면 텍스트 변경에 독립적인 견고한 구현이 됨. 서버 변경 불필요, 5줄 수정.
+
+- **`withdraw_deposit()` `RoomMember`가 None인 경우 `AttributeError` 잠재** (`app.py:912-914`): `m = RoomMember.query.filter_by(room_id=rid, user_id=user.id).first()` 후 None 체크 없이 `m.cash += dep.amount` 실행. 예금 소유자는 반드시 RoomMember여야 하므로 현재는 실패하지 않지만, 향후 게임 중 강퇴 기능 구현 시 강퇴된 학생의 예금 조회 API 호출로 AttributeError → 500 응답 발생 가능. `get_portfolio()` (`app.py:777`) 처럼 `if not m: return jsonify({'error': '참여자가 아닙니다.'}), 403` 방어 코드를 `app.py:913` 직후에 추가해 API 계약을 명확히 해야 함.
