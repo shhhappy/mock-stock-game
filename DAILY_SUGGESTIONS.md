@@ -2631,3 +2631,35 @@
 - **`withdraw_deposit()` 게임 일시정지(freeze) 중 예금 인출 허용** (`app.py:904-916`): 복권·룰렛 자동 일시정지 기간에 가격이 동결된 상태에서 예금을 인출해 현금을 확보하고 `trade()`가 `active` 상태를 요구해도 이를 우회한 뒤 재개 직후 즉시 무위험 대량 매수가 가능한 구조. `trade()`는 `room.status != 'active'` 체크(`app.py:728`)가 있지만 `withdraw_deposit()`에는 상태 확인이 전혀 없음. `room = Room.query.get_or_404(rid)` 조회 후 `if room.status == 'paused': return jsonify({'error': '게임 일시정지 중에는 예금을 해지할 수 없습니다.'}), 400` 추가로 간단히 차단.
 
 ---
+
+---
+
+## 2026-07-21
+
+### 추가하면 좋을 기능
+
+- **게임 시작 전 방 설정 수정 기능** (`app.py:363-390`, `models.py:25-41`): 방 생성 후 `duration_minutes`, `starting_cash`, `deposit_rate`를 변경할 수 있는 엔드포인트가 없음. 로비에서 학생 수가 예상보다 많거나 수업 시간이 줄어들 때 방을 삭제하고 다시 만들어야 함. `PUT /api/rooms/<rid>/settings` 엔드포인트를 추가하고 `room.status == 'waiting'` 조건을 만족할 때만 허용하면 됨(약 15줄). 진행자 로비 화면(`screen-host-lobby`)에 "설정 수정" 링크도 추가 필요.
+
+- **URL 쿼리 파라미터 자동 코드 채우기** (`app.js:196-198`, `static/index.html:319-322`): 호스트 로비 QR의 URL이 `?code=XXXXXX` 형식인데(`app.js:197`), 참여자가 해당 URL로 접속해도 입력 폼의 코드 칸이 자동으로 채워지지 않음. `DOMContentLoaded` 시점에 `new URLSearchParams(location.search).get('code')`로 값을 읽어 `document.getElementById('join-code').value`에 설정하는 약 5줄 추가로, QR 스캔 → 자동 코드 입력 흐름을 완성할 수 있음. 특히 스마트폰 환경에서 수동 코드 입력 실수를 방지.
+
+- **룰렛/복권 설정값 서버 재시작 후 복구** (`app.py:250-251`, `app.py:1245-1246`): `_roulette_config`, `_quiz_settings` 두 dict가 순수 in-memory 저장. Render 무료 티어는 비활성 시 컨테이너를 재시작하므로 교사가 설정한 룰렛 확률·퀴즈 보상/패널티가 소멸됨. `lottery_rounds_done` 컬럼처럼(`app.py:34-40`) `Room` 테이블에 `roulette_config JSON`, `quiz_reward_pct FLOAT`, `quiz_penalty_pct FLOAT` 컬럼을 추가하고, `GET/POST /host/roulette-config`와 `GET/POST /host/quiz-settings` 처리 시 DB에도 반영하면 재시작 후 복구 가능.
+
+- **참여자 개인 자산 내역 차트 서버 측 저장** (`app.js:19`, `app.js:697-711`): `S.assetHistory` 배열이 클라이언트 메모리에만 존재해 탭 새로고침·이탈 시 소멸. 30분 게임에서 10초 폴링 기준 최대 180개 포인트가 누적되지만, 새로고침 직후에는 빈 차트가 표시됨. `GET /api/rooms/<rid>/portfolio` 응답에 `asset_snapshots` 배열(최근 30개, 10분 간격)을 추가하고 서버 측 `member_total_value()` 호출을 스냅샷으로 저장(`AssetSnapshot` 모델)하면 재접속 후 차트 복원이 가능. 30명·30분 게임 기준 최대 540행.
+
+- **진행자 시장 탭 종목 카드에 상세 차트 클릭** (`app.js:314-358`, `loadHostMarket()`): `host-stock-grid` 카드에 클릭 핸들러가 없어 진행자가 가격 강제 조정 전 시세 흐름을 확인할 방법이 없음. 참여자 화면의 `openStockModal(sym)` 함수가 이미 구현되어 있으므로 (`app.js` 내 종목 카드 onclick 부분), `loadHostMarket()`의 카드 렌더링 template literal에 `onclick="openStockModal('${st.symbol}')"` 한 줄 추가만으로 진행자도 동일 차트 모달 활용 가능. 서버 변경 불필요.
+
+- **게임 방 설정 프리셋 localStorage 저장** (`app.js:121-139`): 교사가 매 수업마다 게임 시간·시작 자금·금리를 동일하게 반복 입력. `doCreateRoom()` 성공 시 `localStorage.setItem('gamePreset', JSON.stringify({dur, cash, rate}))` 저장하고, 방 만들기 화면 진입 시 이를 불러와 `value`에 자동 적용하는 약 8줄 추가. "마지막 사용 설정 불러오기" 버튼을 별도로 제공하면 실수로 덮어쓰는 것도 방지 가능.
+
+### 제거/단순화할 것들
+
+- **`종목명 학번 이름` 형식이 서버에서 강제되지 않아 엑셀 분리 오류 발생** (`app.py:1435-1438`, `app.js:73-80`): 엑셀 내보내기에서 `u.username.split(' ', 1)`으로 학번과 이름을 분리하는데, 이름에 공백이 있거나(`홍 길동`) 학번 없이 이름만 입력한 경우 `sid`가 이름 값이 되고 `name`이 빈 문자열이 됨. 서버의 `enter()` API (`app.py:329-342`)가 `len(u) >= 2` 검사만 함. 최소한 `len(u.split()) >= 2` 조건을 추가하거나, 프론트엔드 `doAuth()`(`app.js:73-75`)에서 `sid`와 `name` 값을 따로 검증해 전송하고 서버가 별도 필드로 처리하는 방향으로 리팩터링이 필요.
+
+- **`_ending_soon` 집합 재시작 시 소멸로 인한 60초 재설정 버그** (`app.py:90`, `app.py:527-535`): 진행자가 종료 버튼 클릭 시 `remaining > 60`이면 `end_time = now + 60s`로 갱신하고 `rid`를 `_ending_soon`에 추가. 그러나 Render가 이 60초 사이에 재시작하면 `_ending_soon`이 초기화됨. 재시작 후 `get_room()` 폴링이 되살아난 진행자가 다시 종료 버튼을 누르면 `rid not in _ending_soon`이 True여서 `end_time = now + 60s`가 또 60초 연장됨. `Room` 테이블에 `ending_soon_until DATETIME` 컬럼을 추가하거나, `end_room()` 진입부에서 `room.end_time - now <= 60`이면 즉시 종료하도록 수정 필요.
+
+- **`get_history()` 차트가 게임 중 실제 가격 이력을 반영하지 않음** (`stock_service.py:281-309`): `get_history()`는 현재 가격(`current`)에서 역방향 랜덤 워크로 바를 생성(`stock_service.py:296-305`). 즉 게임 시작 후 강제 섹터 이벤트로 주가를 +30% 올려도 차트 캔들에는 반영이 안 됨. `force_price()`, `force_sector_event()`에서 `self._history_cache`를 삭제하지만(`stock_service.py:227-229`, `stock_service.py:257-259`) 다음 요청에서 또 랜덤 재생성. 최소한 `StockService` 내부에 실제 변동 이력을 `deque(maxlen=60)` 형태로 저장하고 `get_history()`에서 이를 활용하면 차트 신뢰도가 크게 향상됨.
+
+- **`get_quiz()` 일시정지 중에도 문제 발급 가능** (`app.py:1248-1268`): `get_quiz()` 라우트는 `room.status != 'active'` 조건을 검사(`app.py:1252-1253`)하므로 일시정지(paused) 중에는 403 응답을 반환하지 않고 오히려 `return jsonify({'error': '게임 중에만 사용 가능합니다'}), 400`을 반환해 퀴즈 FAB 버튼이 클릭 가능한 채로 남음. 일시정지 상태에서 문제를 발급받아(=실제 400 응답은 나가지만 팝업이 열림) UX가 혼란스러움. `room.status not in ('active',)` 조건으로 명확히 하고, 프론트엔드 `openQuiz()`(`app.js` 내 해당 함수)에서도 `S.room.status !== 'active'` 시 toast('일시정지 중')로 즉시 반환하면 됨.
+
+- **`lobby_members()` 엔드포인트 호스트 인증 누락** (`app.py:577-585`): `/api/rooms/<rid>/host/lobby-members` 경로는 `/host/` 하위에 있지만 `cur_user()`나 `room.host_id` 검사 없이 모든 로그인 사용자에게 방 멤버 목록을 반환. 방 ID를 순차 대입하는 것만으로 다른 수업의 학생 이름·학번 목록 수집이 가능한 개인정보 노출. 참여자 로비에서도 이 엔드포인트를 사용(`app.js:579`)하므로 완전한 호스트 전용화는 불가하나, 최소한 `if room.host_id != user.id and not RoomMember.query.filter_by(room_id=rid, user_id=user.id).first(): return 403` 체크를 추가해 해당 방 관계자 외 접근을 차단해야 함.
+
+- **`host_members()`에서 `member_total_value()` N+1 쿼리 중복 (호스트 대시보드 전용)** (`app.py:542-562`): 전일 분석에서 `get_rankings()`의 N+1 문제를 지적했으나 `host_members()` 역시 동일 패턴. 10초마다 호스트 순위 탭이 갱신될 때 30명 기준 60~90개 쿼리 발생. `get_rankings()` 개선과 동시에 `host_members()`도 `RoomHolding`·`Deposit`을 `room_id` 기준 일괄 조회 후 메모리 내 집계로 전환하면 순위 API 응답 시간이 SQLite 기준 약 300ms → 30ms로 단축 예상.
