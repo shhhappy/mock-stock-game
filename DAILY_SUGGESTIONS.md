@@ -2697,3 +2697,39 @@
 - **`loadChart()` 기간 탭 활성화가 한국어 텍스트 비교에 의존해 리팩토링 취약** (`app.js:1360-1364`): 기간 탭 버튼의 활성 클래스를 `b.textContent === {'1d':'1일','1w':'1주','1mo':'1달','3mo':'3달','1y':'1년'}[period]` 문자열 매핑으로 결정. 만약 탭 텍스트가 "1개월"로 변경되거나 공백이 추가되면 매핑이 조용히 실패해 어떤 탭도 활성화되지 않음. HTML에 `data-period="1mo"` 속성을 추가하고(`static/index.html:680-684`) `loadChart()` 내에서 `b.dataset.period === period`로 비교하도록 변경하면 텍스트 변경에 독립적인 견고한 구현이 됨. 서버 변경 불필요, 5줄 수정.
 
 - **`withdraw_deposit()` `RoomMember`가 None인 경우 `AttributeError` 잠재** (`app.py:912-914`): `m = RoomMember.query.filter_by(room_id=rid, user_id=user.id).first()` 후 None 체크 없이 `m.cash += dep.amount` 실행. 예금 소유자는 반드시 RoomMember여야 하므로 현재는 실패하지 않지만, 향후 게임 중 강퇴 기능 구현 시 강퇴된 학생의 예금 조회 API 호출로 AttributeError → 500 응답 발생 가능. `get_portfolio()` (`app.py:777`) 처럼 `if not m: return jsonify({'error': '참여자가 아닙니다.'}), 403` 방어 코드를 `app.py:913` 직후에 추가해 API 계약을 명확히 해야 함.
+
+---
+
+## 2026-07-22
+
+### 추가하면 좋을 기능
+
+- **참여자 최초 입장 시 게임 사용법 튜토리얼 오버레이** (`app.js:589-651`, `enterParticipantGame()`): 처음 참가하는 학생이 게임 시작 직후 어디서 무엇을 해야 할지 안내가 전혀 없음. `enterParticipantGame()` 내에서 `localStorage.getItem('tutorialSeen_' + S.room.id) === null`인 경우 3단계 오버레이(① 시장 탭에서 종목 클릭 → ② 수량 입력 후 매수 → ③ 순위 탭에서 내 위치 확인)를 표시하고 "시작하기" 버튼으로 닫게 하면 됨. 서버 변경 없이 클라이언트 단 ~30줄로 구현 가능하며, 수업 초반 5분간 "어떻게 해요?"라는 질문을 대폭 줄일 수 있음.
+
+- **진행자 대시보드에 최근 체결 거래 실시간 피드** (`app.py:542-562`, `host_members()`): 진행자 화면에서 학생이 어떤 거래를 하는지 실시간으로 확인할 방법이 없음. `GET /api/rooms/<rid>/host/recent-trades` 엔드포인트를 추가해 `RoomTransaction`의 최근 10건(전체 참여자 대상)을 KST 시각과 함께 반환하고, 진행자 순위 탭 하단에 작은 피드로 표시하면 수업 개입 시점을 포착하는 데 도움이 됨. 기존 10초 호스트 폴링 주기에 묻어가면 서버 부하 추가 없이 구현 가능.
+
+- **진행자가 특정 문항을 방 전체에 일제 발송하는 "방송 퀴즈" 모드** (`app.py:1243-1342`, `_quiz_state`): 현재 퀴즈는 학생이 FAB 버튼을 개별적으로 눌러야 시작됨. `POST /api/rooms/<rid>/host/broadcast-quiz` 엔드포인트에서 `qid`를 지정하면 `_quiz_state`에 방 전체 플래그를 세우고, 참여자 폴링(`GET /api/rooms/<rid>`)이 이를 감지해 자동으로 퀴즈 오버레이를 여는 방식으로 구현 가능. `room_dict()` 응답에 `broadcast_quiz_id` 필드를 추가하고 클라이언트가 변화 감지 시 `openQuiz()` 호출하면 됨. 모든 학생이 동시에 동일 문제를 풀어 채점 결과를 비교하는 수업 참여 활동에 활용 가능.
+
+- **엑셀 다운로드 파일명에 날짜 포함** (`app.py:1485`): `filename = f"{room.name}_결과.xlsx"` 형식으로 방 이름만 사용되어, 같은 반에서 게임을 반복하면 이전 파일이 덮어씌워짐. `datetime.now(KST).strftime('%m%d_%H%M')`을 추가해 `f"{room.name}_결과_0722_1430.xlsx"` 형식으로 변경하는 1줄 수정으로 중복 파일명 문제 완전 해결. 교사가 수업 회차별 결과를 보관할 때 즉시 구분 가능.
+
+- **진행자가 특정 참여자의 포트폴리오 구성 조회** (`app.py:542-562`, `host_members()`): 진행자 대시보드에서 참여자 행의 "거래" 버튼이 거래 내역만 보여주고 현재 보유 종목 구성은 제공하지 않음. `GET /api/rooms/<rid>/host/members/<uid>/portfolio` 엔드포인트를 추가하면(기존 `get_portfolio()` 로직의 권한 조건만 변경) 진행자가 "이 학생은 반도체 집중 투자를 했구나"를 파악하고 맞춤 피드백을 줄 수 있음. 기존 `modal-student-txn` 모달에 "포트폴리오" 탭 하나 추가로 UI도 간단히 통합 가능.
+
+- **복권 수동 시작 모달에 추천 상금 자동 표시** (`app.py:418-419`, `static/index.html:722-736`): 자동 복권(`_auto_start_lottery_if_due`)은 `member_count * 30_000_000` 공식으로 상금을 자동 계산하지만, 진행자가 수동 시작하는 `modal-lottery-start` 입력 폼에는 안내가 없어 임의 금액을 입력하거나 빈칸을 제출하는 실수가 발생. `openManualLotteryModal()` 실행 시 `/host/members` 응답에서 참여자 수를 가져와 `lottery-prize-input.placeholder`에 `추천: ${(count * 30_000_000).toLocaleString()}원` 힌트를 자동 입력하는 ~5줄 추가로 교사의 의사결정 부담 감소.
+
+- **모바일 숫자 입력 필드에 `inputmode="numeric"` 및 `pattern` 속성 추가** (`static/index.html:705, 424, 169, 189`): 주식 수량(`trade-qty`), 예금 금액(`dep-amount`), 주가 강제 변동률(`force-price-pct`), 섹터 이벤트 변동률(`market-event-pct`) 입력란 모두 `type="number"`지만 `inputmode="numeric"` 속성이 없음. iOS Safari는 소수점·마이너스 포함 전체 키보드를 표시해 학생이 숫자 패드를 찾아 전환해야 함. HTML 속성 4개 추가, 서버 변경 불필요, 모바일 입력 UX 즉시 개선.
+
+### 제거/단순화할 것들
+
+- **`_rlt_active` count 기반 로직이 서버 재시작 후 무기한 pause 유발 가능** (`app.py:252, 948-993`): `_rlt_active[rid] = {'count': N, 'auto_paused': True}` 상태로 게임이 pause된 상황에서 Render 컨테이너가 재시작되면 `_rlt_active`가 초기화됨. 이후 `minigame_close()` 호출 시 `state = _rlt_active.get(rid)`가 None을 반환해 즉시 `return jsonify({'ok': True})`(962줄)로 나가버리므로 게임이 영구 pause 상태에 갇힘. `get_room()` 폴링(app.py:467-468)에서 `rlt_triggered and paused and rid not in _rlt_active`인 경우 `_rlt_active[rid]`를 복원하는 코드가 있지만, 모든 참여자가 이미 3회 룰렛을 다 했다면 `count=0`으로 복원해야 자동 resume이 트리거됨. 복원 로직에 `count=0` 조건 추가 또는 DB에 rlt_count 컬럼을 저장해 재시작 후 정확히 복구해야 함.
+
+- **`get_history()` '1w' 기간에 5개 바만 생성되어 차트가 과도하게 드문** (`stock_service.py:292-293`): `n_bars = {'1d': 30, '5d': 5, '1mo': 30, '3mo': 90}.get(period, 30)` 매핑에서 '5d'(1주 탭)가 5개 바만 생성됨. `app.py:715`의 기간 매핑에서 '1w' → `('5d', '30m')`이므로 30분 간격 5일치 데이터를 원하면 `5 * 16 = 80`개 바가 적절하나 5개만 생성해 차트가 계단처럼 표시됨. `'5d': 80`으로 수정하는 1줄 변경으로 수정 가능.
+
+- **`find_active_room()` 종료된 방을 탐색하지 않아 재접속 시 결과 화면 진입 불가** (`app.py:307-313`, `app.js:83-89`): 게임이 끝난 후 학생이 창을 새로고침하면 `get_me()` 응답의 `active_room`이 `None`(`find_active_room()`이 'ended' 방을 제외). 클라이언트 `onLogin()`에서 `active_room`이 없으면 `showLanding()`으로 이동해 결과 화면에 재접속할 방법이 없음(진행자가 "결과 발표"를 눌러도 이미 랜딩으로 돌아간 학생은 수동으로 코드를 재입력해야 함). `find_active_room()`이 'ended' 방도 반환하도록 확장하거나, `get_me()` 응답에 `last_room`을 별도로 포함하면 재접속 흐름이 완성됨.
+
+- **`loadDepositsPage()`가 포트폴리오 API를 중복 호출** (`app.js:1621-1627`): 예금 탭 진입 시 `api.get('.../portfolio')`를 호출해 현금 잔액을 가져오는데, 이미 `refreshMyRank()` 10초 폴링이 `/rankings` API를 통해 총 자산을 최신화하고 있음. 별도의 포트폴리오 API 호출 없이 `S.room`이나 `S.tradeCash` 상태를 활용하거나, 예금 탭 전용 `GET /deposits` 응답에 현재 현금을 포함하면 API 호출 1건 절감 가능.
+
+- **`doStartGame()`에 참여자 0명 시 아무 경고 없이 게임 시작** (`app.js:246-255`, `app.py:476-488`): 교사가 학생 입장을 확인하지 않고 실수로 시작 버튼을 누르면 참여자 없는 상태로 게임이 진행됨. 복권·룰렛 자동 트리거가 `non_host` 목록 기준으로 작동하므로 실제 피해는 없지만, `start_room()` API에서 `RoomMember.query.filter_by(room_id=rid).count() == 0` 시 `{'warning': '참여자가 없습니다. 계속하시겠습니까?'}` 를 반환하고 클라이언트가 2단계 확인을 요구하면 실수 방지 가능.
+
+- **`user.username`을 `학번 이름` 형식으로 강제하지 않아 엑셀 파싱 오류** (`app.py:329-342`, `app.py:1435-1438`): `enter()` API에서 닉네임은 `len(u) >= 2`만 검사하므로 "홍길동"처럼 이름만 입력하거나 "20715홍길동"처럼 공백 없이 입력 가능. 엑셀 내보내기의 `u.username.split(' ', 1)` 분리가 실패해 학번/이름 컬럼이 잘못 채워짐. 최소한 입장 API에서 `if ' ' not in u: return jsonify({'error': '학번과 이름을 공백으로 구분해 입력하세요.'}), 400` 검사를 추가하거나, 프론트엔드 `doAuth(sid, name)` 호출(`app.js:75`)에서 이미 분리된 sid와 name을 별도 필드로 전송하고 서버가 `f"{sid} {name}"` 형태로 저장하는 방식으로 파싱 오류를 구조적으로 제거해야 함.
+
+- **`minigame_spin()` 예금 전액 인출 vs `submit_quiz()` 부분 인출 불일치** (`app.py:1049-1058` vs `app.py:1328-1335`): 룰렛 자금 마련 시 예금을 처리하는 코드가 `d.status = 'withdrawn'`으로 예금 전액을 항상 해지(shortfall이 5만원인데 예금이 100만원이면 95만원 초과 인출). 같은 상황에서 퀴즈 패널티 코드는 `take = min(dep.amount, shortfall); dep.amount -= take`로 부분 인출을 지원해 두 경로의 동작이 다름. `minigame_spin()` 예금 처리를 `take = min(d.amount, shortfall); d.amount -= take; if d.amount <= 0: d.status = 'withdrawn'` 패턴으로 통일해야 학생 불이익 방지.
