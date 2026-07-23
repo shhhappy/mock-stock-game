@@ -2794,3 +2794,37 @@
 
 - **참여자 폴링 3개 interval 겹침으로 동시 요청 급증** (`app.js:611-650`, `app.js:808-819`, `app.js:735-752`): 참여자 게임 화면에서 `pollInterval(10s)` + `newsInterval(8s)` + `_waitingPoll(3s, 결과 대기 시)` 가 독립적으로 실행됨. 학생 30명 기준 주기가 겹치는 순간 Flask 서버에 90+개 요청이 동시 도달 가능. `pollInterval` 콜백 안에서 뉴스도 함께 조회하거나, 두 인터벌을 단일 `setInterval` 로 통합하고 내부에서 카운터로 뉴스 조회 빈도를 제어하면 동시 요청 수를 절반으로 줄일 수 있음. Render free tier 기준 동시 요청이 많을수록 응답 지연 → 폴링 누적 → 지연 악화 악순환이 발생.
 
+
+## 2026-07-23 (2차)
+
+### 추가하면 좋을 기능
+
+- **게임 일시정지 중 진행자 공지사항 전파 기능** (`app.py:490-501`, `pause_room()`, `app.js:653-666`): 일시정지 시 학생 화면에는 "⏸ 게임이 일시정지되었습니다" 배너(`showPausedBanner()`)만 뜨고, 교사가 멈춤 이유나 복권·룰렛 설명을 텍스트로 전달할 수단이 없음. `_room_announcements: dict = {}` 딕셔너리를 추가하고 `POST /api/rooms/<rid>/host/announcement` 엔드포인트(~8줄)로 진행자가 공지 텍스트를 저장. `GET /api/rooms/<rid>` 의 `room_dict()` 반환값(`app.py:278`)에 `announcement` 필드를 포함시키면 10초 폴링 주기로 학생 화면에 자동 전파. `showPausedBanner()`에서 `S.room.announcement`가 있으면 배너에 추가 텍스트를 표시하는 ~3줄 클라이언트 수정으로 완성. 서버 12줄·클라이언트 5줄 추가, 수업 중 실시간 교사 안내 가능.
+
+- **포트폴리오 섹터별 배분율 요약 표시** (`app.js:1456-1567`, `loadPortfolio()`): 포트폴리오 화면의 도넛 차트가 개별 종목 단위로 색상을 배분하여 10개 종목 보유 시 범례가 뭉개짐. 이미 보유 목록(`data.holdings`)에 `sector` 필드가 있으므로 클라이언트에서 섹터별 합계를 집계해 `반도체 45% · IT 22% · 현금 33%` 형태의 한 줄 요약을 `port-summary` 카드 아래(`app.js:1462`)에 추가 가능. 서버 수정 불필요. `Object.entries(holdings.reduce(...))` 패턴으로 ~8줄 추가. "포트폴리오 분산투자" 교육 개념을 화면에서 직관적으로 체험 가능.
+
+- **대량 단일 종목 투자 시 경고 팝업** (`app.js:1424-1454`, `execTrade()`): 매수 금액이 총 자산의 30%를 초과해도 아무 확인 없이 즉시 체결됨. 학생이 실수로 전 재산을 한 종목에 투자하는 상황이 발생. `execTrade()` 내 `app.js:1431` 직후에 `if (shares * S.tradePrice > S.tradeCash * 0.3 && !confirm('총 자산의 30% 이상을 단일 종목에 투자합니다. 계속하시겠습니까?')) return;` 한 줄 삽입으로 방지. 서버 변경 불필요. "계란을 한 바구니에 담지 말라"는 분산투자 교훈을 실시간으로 강화.
+
+- **진행자 랭킹에 학생별 거래 횟수 표시** (`app.py:542-562`, `host_members()`): 현재 진행자 랭킹이 총자산·수익률만 반환해 누가 적극적으로 거래하는지 파악 불가. `host_members()` 응답 딕셔너리에 `trade_count` 필드를 추가하되, N+1 방지를 위해 `db.session.query(RoomTransaction.user_id, func.count().label('cnt')).filter_by(room_id=rid).filter(RoomTransaction.action.in_(['BUY','SELL'])).group_by(RoomTransaction.user_id).all()` 단일 집계 쿼리로 처리. `app.js:425` 멤버 행 렌더링에 `(${m.trade_count}회)` 표시 추가. 교사가 수업 참여도를 한눈에 파악해 소극적 학생을 즉시 독려 가능.
+
+- **퀴즈 연속 정답 콤보 보너스** (`app.py:1270-1342`, `submit_quiz()`, `_quiz_state`): 매 퀴즈가 독립적으로 보상되어 연속 참여 동기가 없음. `_quiz_state[key]` 딕셔너리(`app.py:1267`)에 `streak` 키를 추가해 정답 시 1씩 증가, 오답·쿨다운 초기화 시 0으로 리셋. `submit_quiz()` 에서 reward 계산 직전에 `combo_mult = 2.0 if streak >= 3 else (1.5 if streak >= 2 else 1.0)` 을 삽입하고 `reward = int(reward * combo_mult)` 로 보너스 지급(~5줄 추가). 클라이언트 퀴즈 결과 화면에 `🔥 2연속 콤보! x1.5` 텍스트 표시(~2줄). 연속 정답 동기 부여로 수업 집중도 향상.
+
+- **결과 화면 부문별 특별 시상** (`app.py:808-824`, `get_rankings()`, `app.js:1702-1795`, `loadResults()`): 종합 순위 외 부문상이 없어 하위권 학생의 동기가 저하됨. `GET /api/rooms/<rid>/host/award-stats` 엔드포인트(~25줄)를 추가해 "단일 거래 최고 금액(가장 대담한 투자자)", "보유 종목 수 최다(분산왕)", "퀴즈 정답 최다(경제 박사)" 등을 집계. `RoomTransaction` 테이블에서 `max(amount)`, `count(distinct symbol)`, 퀴즈 ADJ 트랜잭션 수를 `group_by(user_id)` 로 조회해 수상자를 결정. `loadResults()` 마지막 부분에 `results-awards` 섹션을 추가해 게임 종료 후 다양한 학생이 주목받을 기회 제공.
+
+### 제거/단순화할 것들
+
+- **`get_rankings()` User 레코드 None 시 AttributeError → 500** (`app.py:818`): `u = db.session.get(User, m.user_id)` 직후 `u.username`을 None 체크 없이 바로 사용. `host_members()`(`app.py:557`)는 동일 상황에서 `u.username if u else str(m.user_id)`로 안전하게 처리하지만 `get_rankings()`는 누락. DB 이상, User 삭제, 외래 키 불일치 시 전체 랭킹 API가 500으로 사망해 학생 화면이 순위 없이 멈춤. `board.append({'username': u.username if u else str(m.user_id), ...})` 로 1줄 수정.
+
+- **`minigame_close()` 에서 deprecated `Room.query.get(rid)` 사용** (`app.py:977`): 동일 파일의 다른 모든 라우트는 `Room.query.get_or_404(rid)` 또는 `db.session.get(Room, rid)`를 사용하는데, 이 함수만 구버전 `Room.query.get(rid)` 패턴. SQLAlchemy 2.x에서 `Query.get()`은 deprecated(제거 예정). Room이 None일 때 `if room and room.status == 'paused':` 조건이 있어 즉각 오류는 없지만, 향후 SQLAlchemy 업그레이드 시 경고→에러 전환. `db.session.get(Room, rid)` 로 교체.
+
+- **`host_news_interval()` float 파싱 ValueError/TypeError 미처리** (`app.py:639-641`): `svc.set_news_interval(float(d['news_seconds']))`, `svc.set_price_interval(float(d['price_seconds']))` — 비숫자 문자열이나 `None`이 입력되면 `ValueError`/`TypeError` → 500 에러. 같은 파일의 `host_market_event()`(`app.py:1353`)는 `try/except`로 보호하는데 이 엔드포인트는 미적용. `try: val = float(d['news_seconds']); svc.set_news_interval(val) except (TypeError, ValueError): return jsonify({'error': '잘못된 값'}), 400` 패턴으로 두 필드 모두 보호.
+
+- **`host_adjust()` delta에 `float('inf')` · `float('nan')` 미검증 — DB 손상 위험** (`app.py:595`): `delta = float(d.get('delta', 0))`는 JSON 값 `"inf"`, `"1e999"`, `"nan"`을 조용히 파싱. `m.cash = max(0, m.cash + float('inf'))` 결과가 SQLite Float 컬럼에 `inf`로 저장되면 이후 모든 자산 비교·정렬이 붕괴하고, `nan` 저장 시 `nan != nan` 특성으로 랭킹 정렬이 무너짐. 이미 2026-07-20 항목에서 범위 제한 미비가 지적된 맥락에서, `import math` 후 `if not math.isfinite(delta): return jsonify({'error': '유효하지 않은 금액'}), 400` 추가로 수치 안전성 확보.
+
+- **`member_total_value()` O(N) 반복 호출로 랭킹·호스트 멤버 API에서 N×2 쿼리 발생** (`app.py:107-118`, `app.py:815-823`): `get_rankings()` 가 멤버 루프 내에서 `member_total_value()` 를 호출하고, 이 함수가 `RoomHolding.query.filter_by()` · `Deposit.query.filter_by()` 각 1회 실행. 학생 30명 기준 `get_rankings()` 1회 호출에 DB 쿼리 60건+. `host_members()`(`app.py:548`)도 동일 패턴. `RoomHolding.query.filter_by(room_id=rid).all()` 1회 + `Deposit.query.filter_by(room_id=rid, status='active').all()` 1회로 전체를 한 번에 로드해 `user_id`로 groupby 집계하면 O(N) 쿼리를 O(1)로 개선. `StockService`에 `get_all_prices() -> dict` 헬퍼를 추가해 Lock도 1회만 획득.
+
+- **`loadDepositsPage()` 에서 `portfolio` · `deposits` API 순차 호출** (`app.js:1621-1627`): `await api.get('.../portfolio')` 후 `await api.get('.../deposits')` 를 순차 실행하므로 예금 탭 진입 시 2 RTT 대기. 두 요청이 독립적이므로 `const [port, data] = await Promise.all([api.get(...portfolio), api.get(...deposits)]);` 한 줄로 병렬화하면 탭 전환 체감 속도를 약 절반으로 단축. 서버 변경 불필요. Render free tier 기준 네트워크 왕복 300ms+일 경우 절감 효과가 체감 수준.
+
+- **`loadPortfolio()` 보유 종목 버튼 `onclick`에서 `h.name`·`h.sector` 미이스케이프** (`app.js:1558-1560`): `onclick="openStockModal('${h.symbol}',{name:'${h.name}',sector:'${h.sector}',...})"` — 이미 2026-07-22 2차에서 `loadHostMembers`·`loadLobbyMembers`의 username 이스케이프 미비가 지적됐으나, 포트폴리오 보유 목록 버튼에도 동일 패턴이 존재. 현재 STOCKS 딕셔너리의 name·sector가 한국어라 즉각 위험은 없지만, 향후 종목 추가 시 `'`이나 `"` 포함 이름이 들어오면 JS 파싱 에러로 매수/매도 버튼 동작 불가. `data-symbol`, `data-name`, `data-sector` 속성 + 이벤트 위임 패턴으로 인라인 `onclick` 제거 권장.
+
+---
