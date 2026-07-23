@@ -2767,3 +2767,30 @@
 - **`StockService.get_price()` 내 히스토리 캐시 무효화가 전체 캐시 키 O(N) 순회** (`stock_service.py:186-189`, `stock_service.py:227-229`, `stock_service.py:257-259`): `get_price()`, `force_price()`, `force_sector_event()` 모두 `for key in list(self._history_cache.keys()): if key[0] == symbol: del ...` 패턴으로 캐시를 무효화. 학생들이 여러 종목 차트를 열 경우 `_history_cache` 에 `(symbol, period)` 키가 쌓이고, 20초마다 47개 종목이 업데이트될 때마다 각각 전체 캐시 키를 순회. `_history_cache` 를 `{symbol: {'1d': ..., '1mo': ..., ...}}` 중첩 딕셔너리로 재구성하면 `del self._history_cache[symbol]` 한 줄로 O(1) 무효화 가능. 세 곳 동시 수정, 약 15줄.
 
 - **`create_room()` `starting_cash` 상한 없어 비정상 금액 입력 가능** (`app.py:383-386`): `starting_cash=max(100000, float(d.get('starting_cash', 10_000_000)))` 에서 최솟값(10만원)만 검증하고 최댓값 제한이 없음. 진행자가 실수로 `"starting_cash": 999999999999` (1조원)를 입력하면 거래 금액 표시가 비정상적으로 커지고, 복권 자동 상금(`member_count * 30_000_000`, app.py:419)을 의미없게 만들며 SQLite Float 정밀도 한계(15자리)를 초과할 수 있음. 프론트(app.js:136)에서는 이미 입력 필드가 있지만 서버 검증이 없음. `min(1_000_000_000, max(100_000, float(...)))` 로 상한 10억원을 추가하는 1줄 수정.
+
+---
+
+## 2026-07-23
+
+### 추가하면 좋을 기능
+
+- **퀴즈 설정·룰렛 설정 DB 저장 (Render 재시작 대비)** (`app.py:1246-1251`, `app.py:1250`): `_quiz_settings`와 `_roulette_config`가 서버 메모리에만 존재해 Render free tier가 비활성 후 재시작되면 진행자가 설정한 퀴즈 보상/패널티 비율과 룰렛 배율·확률이 모두 기본값으로 초기화됨. `Room` 테이블에 `quiz_reward_pct FLOAT DEFAULT 1.0`, `quiz_penalty_pct FLOAT DEFAULT 0.5`, `rlt_config VARCHAR(200) DEFAULT ''` 컬럼 3개를 추가하고 `POST /host/quiz-settings`, `POST /host/roulette-config` 핸들러에서 DB에도 함께 저장하면 재시작 후 자동 복구 가능. `lottery_rounds_done` 컬럼이 같은 방식으로 이미 구현되어 있어(`app.py:34-36`, `app.py:225-229`) 패턴 동일.
+
+- **룰렛 베팅 시 자동 청산 예고 팝업** (`app.py:1022-1058`, `app.js:1032-1043`): 베팅 금액이 보유 현금을 초과하면 서버가 조용히 보유 주식·예금을 청산해 현금을 조달함(`app.py:1025-1058`). 클라이언트는 `rlt-err` 검사를 총 자산(`_rltCash`)과만 비교하므로(`app.js:1038`) 실제로 어떤 주식이 팔릴지 경고가 없음. `doRouletteSpin()` 실행 전 현금 부족을 감지하면 `confirm('현금이 부족해 보유 주식이 자동 매도됩니다. 계속하시겠습니까?')` 한 줄을 삽입하면 학생이 예상치 못한 강제 청산을 인지 가능. 서버 수정 없이 `app.js:1039` 직후에 추가.
+
+- **예금 중도해지 전 이자 손실 확인 팝업** (`app.js:1690-1710`, `doWithdrawDeposit()`): 학생이 예금을 해지할 때 별도 확인 없이 즉시 처리됨. 해지하면 이자 없이 원금만 반환(`app.py:912-916`)되므로, 팝업에 "현재까지 쌓인 예상 이자 N원을 포기합니다" 메시지를 보여주면 "조기 해지의 기회비용" 개념을 실습으로 가르칠 수 있음. 이미 `deposits` GET 응답에 `expected_interest` 필드가 있으므로(`app.py:869-873`) 별도 API 호출 없이 렌더링 시점의 값으로 confirm 문 생성 가능.
+
+- **진행자 게임 중 강퇴 기능** (`app.py:564-575`, `kick_member()`): 현재 `room.status != 'waiting'`이면 강퇴 불가. 수업 중 무단 이탈하거나 같은 이름으로 중복 입장한 학생을 게임 도중 정리할 방법이 없음. `waiting` 조건을 제거하고, 활성 상태 강퇴 시 해당 멤버의 보유 주식을 현재가로 정산해 `_end_room()` 과 동일한 패턴으로 자산을 청산한 뒤 `RoomMember`, `RoomHolding`, 관련 `Deposit` 레코드를 삭제하면 됨. `_end_room()` 에 이미 개별 멤버 청산 로직이 있으므로(`app.py:144-152`) 함수로 추출해 재사용 가능.
+
+- **차트 역방향 랜덤워크 개선: 고정 시드 기반 일관된 히스토리** (`stock_service.py:281-310`, `get_history()`): 현재 차트는 현재가에서 과거로 역방향 랜덤워크를 생성함. 2분 캐시가 만료될 때마다 완전히 다른 과거 데이터가 나타나 학생이 "아까 봤을 때 차트 모양이 달랐는데?"라며 혼란. 대신 게임 시작 시각(`room.start_time`)과 종목 심볼을 seed로 삼아 `random.seed(f"{symbol}{room_start}")` 로 결정론적 히스토리를 생성하면 방 전체에서 동일한 과거 차트를 볼 수 있음. `get_history()` 시그니처에 `seed` 파라미터를 추가하고, `/api/rooms/<rid>/stocks/<symbol>/chart` 핸들러에서 `room.start_time`을 넘기는 방식으로 구현.
+
+### 제거/단순화할 것들
+
+- **`export_rankings()` 공백 분리 학번 파싱 — 이름에 공백 포함 시 데이터 깨짐** (`app.py:1435-1436`): `parts = u.username.split(' ', 1)` 로 첫 공백 기준 분리해 학번과 이름을 추출. `doAuth()` 에서 `u = f"{sid} {name}"` 으로 합치는데(`app.js:74`), 학생이 `name` 필드에 `"홍 길동"` 처럼 공백이 포함된 이름을 입력하면 엑셀에서 학번·이름이 정상 분리됨. 그러나 학번 필드에 공백을 입력한 경우(`" 20715"`) sid 분리가 오염됨. User 모델에 `student_id` 컬럼을 별도 추가하거나, username 포맷을 `{sid}|{name}` 구분자로 변경하면 split 모호성 제거. 단기적으로는 `app.js:74` 에서 sid·name에 공백 trimming + 공백 포함 금지 validation만 추가해도 회피 가능.
+
+- **퀴즈 패널티로 예금 원금이 직접 감액됨 (`Deposit.amount` 수정)** (`app.py:1331-1337`): 퀴즈 오답 패널티가 현금을 초과하면 `dep.amount -= take` 로 예금 원금 자체를 줄임. 같은 예금의 `expected_interest`는 원래 `amount × rate` 기준이었으므로 이후 계산이 틀려지고, `get_deposits()` 응답의 `max_interest` 도 원래 이자보다 낮게 표시됨. 교육적으로 보면 "예금이 줄어드는" 이상한 현상을 학생이 경험. 대신 `dep.status = 'withdrawn'` 후 잔액을 현금으로 돌려받고 다시 패널티를 차감하는 패턴 — 즉 `Deposit` 원금은 불변으로 유지하고 완전 해지 후 패널티 적용 — 이 더 현실적이고 이자 계산을 단순하게 유지.
+
+- **`get_lottery()` 상태 전이 로직이 GET 엔드포인트 내에 있음** (`app.py:1114-1131`): 타임아웃 기반 `picking → drawing → revealed` 전이가 `GET /lottery` 내에서 `_lottery_lock` 아래 실행됨. 즉, 아무도 GET 요청을 안 보내면 상태 전이가 일어나지 않음. 진행자 탭이 닫혀 있을 때 참여자들은 `_startLotPolling` 을 통해 동일 엔드포인트를 3초마다 호출하므로 실제로는 동작하지만, "타이머 만료 = 상태 전이"라는 계약이 HTTP GET의 부작용에 의존해 예측하기 어려움. 별도 백그라운드 스레드 또는 `_auto_start_lottery_if_due()` 패턴처럼 상태 전이 로직을 GET과 분리하면 코드 흐름이 명확해짐.
+
+- **참여자 폴링 3개 interval 겹침으로 동시 요청 급증** (`app.js:611-650`, `app.js:808-819`, `app.js:735-752`): 참여자 게임 화면에서 `pollInterval(10s)` + `newsInterval(8s)` + `_waitingPoll(3s, 결과 대기 시)` 가 독립적으로 실행됨. 학생 30명 기준 주기가 겹치는 순간 Flask 서버에 90+개 요청이 동시 도달 가능. `pollInterval` 콜백 안에서 뉴스도 함께 조회하거나, 두 인터벌을 단일 `setInterval` 로 통합하고 내부에서 카운터로 뉴스 조회 빈도를 제어하면 동시 요청 수를 절반으로 줄일 수 있음. Render free tier 기준 동시 요청이 많을수록 응답 지연 → 폴링 누적 → 지연 악화 악순환이 발생.
+
