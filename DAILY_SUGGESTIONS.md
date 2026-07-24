@@ -2828,3 +2828,29 @@
 - **`loadPortfolio()` 보유 종목 버튼 `onclick`에서 `h.name`·`h.sector` 미이스케이프** (`app.js:1558-1560`): `onclick="openStockModal('${h.symbol}',{name:'${h.name}',sector:'${h.sector}',...})"` — 이미 2026-07-22 2차에서 `loadHostMembers`·`loadLobbyMembers`의 username 이스케이프 미비가 지적됐으나, 포트폴리오 보유 목록 버튼에도 동일 패턴이 존재. 현재 STOCKS 딕셔너리의 name·sector가 한국어라 즉각 위험은 없지만, 향후 종목 추가 시 `'`이나 `"` 포함 이름이 들어오면 JS 파싱 에러로 매수/매도 버튼 동작 불가. `data-symbol`, `data-name`, `data-sector` 속성 + 이벤트 위임 패턴으로 인라인 `onclick` 제거 권장.
 
 ---
+
+## 2026-07-24
+
+### 추가하면 좋을 기능
+
+- **시장 카드에 개인 보유 손익 배지 실시간 표시** (`app.js:1293-1311`, `renderGrid()`, `app.js:1344-1357`, `openStockModal()`): 종목 카드를 클릭해 모달을 열어야만 보유 수량과 평균 매수가 대비 손익이 확인됨. `enterParticipantGame()` 및 `execTrade()` 완료 후 포트폴리오를 한 번 캐시하고, `renderGrid()` 내 카드 HTML(app.js:1293)에서 보유 중인 종목이면 카드 우측 상단에 `3주 · +2.1%` 형태 배지를 덧씌우면 됨. `data.holdings`를 `symbol → {shares, gain_pct}` Map으로 변환해 O(1) 조회 가능. 서버 변경 불필요, 클라이언트 ~15줄 추가. 모달을 열지 않아도 "내가 이 종목에서 얼마 버는지"가 보여 매도 판단 속도가 빨라짐.
+
+- **분반 반복 수업 시 동명이학(同名異學) 학생 계정 충돌** (`models.py:19`, `User.username UNIQUE`, `app.py:335-342`): `User.username`이 전역 UNIQUE 제약이라 서로 다른 반에서 동일 학번·이름으로 입장한 두 학생은 같은 DB 레코드를 공유함. 선생님이 같은 방 코드를 2교시 연속으로 재사용하거나, 3반과 4반에 같은 이름의 학생이 있을 때 두 번째 학생이 접속하면 첫 번째 학생의 세션을 덮어씀(`session['user_id'] = user.id`). 최소 수정: `enter()` API에서 username을 `{room_code}:{sid} {name}` 형식으로 저장(app.py:336), `export_rankings()` 파싱 시 `username.split(':', 1)[1].split(' ', 1)` 로 `sid`·`name` 분리(app.py:1435). 혹은 `Room.code`를 salt로 UUID 기반 username 생성.
+
+- **`get_history()` "1년" 탭이 "1달"과 동일하게 30개 바만 생성** (`stock_service.py:292`, `n_bars` 딕셔너리): `n_bars = {'1d': 30, '5d': 5, '1mo': 30, '3mo': 90}.get(period, 30)` — `'1y'` 키가 없어 기본값 30으로 처리됨. "1년" 탭 차트와 "1달" 차트가 동일한 모양으로 나타나 교육적 의미가 없음. `'1y': 252`(연간 영업일 수)를 딕셔너리에 추가하고, 각 기간에 맞는 날짜 간격도 `interval_days = {'1d': 0.167, '5d': 1, '1mo': 1, '3mo': 1, '1y': 1}.get(period, 1)` 로 정의해 `now - i * 86400 * interval_days` 로 각 바의 타임스탬프를 계산하면 됨. stock_service.py:292·297 두 줄 수정.
+
+- **관심종목(watchlist)이 방 구분 없이 전역 localStorage에 저장됨** (`app.js:17`, `S.watchlist`, `app.js:1283-1284`): `localStorage.getItem('watchlist')` 키가 방 ID 없이 저장되어 학기 중 여러 게임에 참여하는 학생의 관심종목이 계속 누적되고, 다른 반 학생이 같은 브라우저를 쓸 경우 관심종목이 공유됨. 방별 독립 저장: `app.js:17`의 키를 `'watchlist'`에서 `'watchlist_' + roomId`로 변경하고, `enterParticipantGame()` 진입 시(app.js:589) 현재 `S.room.id`로 watchlist를 로드하면 됨. `toggleWatchlist()` 저장 시(app.js:1283)도 동일 키 사용. 서버 변경 불필요, 3곳 1줄씩 수정.
+
+- **진행자 랭킹·Excel에서 학번/이름 서버측 분리 제공** (`app.py:548-561`, `host_members()`, `app.py:1435-1438`): 현재 `host_members()` 응답의 `username` 필드가 `"20715 홍길동"` 합성 문자열. 클라이언트 `loadHostMembers()`(app.js:412)가 이를 통째로 표시해 가독성이 낮고, 이름만 크게 표시하기 어려움. `host_members()` 응답 딕셔너리에서 `export_rankings()`(app.py:1435)와 동일한 로직(`parts = u.username.split(' ', 1)`)으로 `student_id`·`name` 필드를 미리 분리해 반환하면, 클라이언트에서 이름만 굵게 표시하고 학번을 부제로 표시하는 레이아웃 구현 가능. 진행자가 학생 이름을 빠르게 스캔하는 수업 중 실용성 향상.
+
+### 제거/단순화할 것들
+
+- **`confirmLeaveGame()` 브라우저 기본 `confirm()` 사용 — 모바일 실수 퇴장 위험** (`app.js:114-117`): UI 전체가 CSS 모달(`openModal()`/`closeModal()`)을 사용하는데 게임 이탈 확인만 `window.confirm()`. 모바일에서 dismiss 제스처(스와이프)로 `false` 반환되면 `goHome()`(app.js:108)이 즉시 `POST /api/auth/logout`을 호출해 세션이 파기됨. 재입장 시 `resumeRoom()`이 호출되지 않아 방 상태를 잃는 것으로 학생이 오인. 기존 `modal-rules` 구조처럼 별도 이탈 확인 모달을 추가하고, 모달 안에 "현재 순위와 보유 자산은 유지됩니다. 재입장 시 동일 코드로 복귀 가능합니다." 안내를 포함하면 실수 이탈과 불안감 해소 동시에 달성.
+
+- **`_quiz_state` 구조가 `{(rid, uid): state}` 평면 딕셔너리 — 방 종료 정리가 O(N) 순회** (`app.py:1245`, `app.py:159-160`): `_end_room()` 내 정리 코드 `for k in [k for k in _quiz_state if k[0] == room.id]: del _quiz_state[k]`가 딕셔너리 전체를 순회. 동일 파일의 `_lots`, `_rlt_active`, `_quiz_settings`, `_roulette_config`는 모두 `_lots.pop(room.id, None)` 패턴으로 O(1) 정리(app.py:155-157). `_quiz_state` 구조를 `{(rid, uid): state}` → `{rid: {uid: state}}`로 변경하면 `_quiz_state.pop(room.id, None)` 한 줄로 통일 가능. `get_quiz()`(app.py:1255), `submit_quiz()`(app.py:1271·1340) 참조도 `_quiz_state.setdefault(rid, {})[user.id]` 형태로 수정(총 ~6곳).
+
+- **`RoomTransaction.action` VARCHAR(4) 제한으로 복권·퀴즈 액션 우회 저장** (`models.py:74`, `app.py:218`, `app.py:1316`): `action = db.Column(db.String(4))`로 4자 제한. 현재 복권 당첨금은 `action='ADJ', symbol='LOTTO'`(app.py:218), 퀴즈 패널티 주식 청산도 `action='SELL', note='퀴즈 오답 패널티'`(app.py:1316)로 우회. 거래 내역 탭에서 `t.action === 'ADJ'`이면 "조정"(app.js:529)으로 표시되어 복권 당첨과 진행자 자산 조정이 같은 레이블로 묶임. 컬럼을 `db.String(10)`으로 확장하고(`LOTTO`, `QUIZ`, `BONUS` 등 명시적 액션 도입) 거래 내역 표시 로직(app.js:529)도 액션별로 구분하면 학생이 "왜 자산이 변했는지" 한눈에 파악 가능. SQLite는 VARCHAR 크기를 강제하지 않아 즉각 오류 없지만 PostgreSQL 전환 시 잘림 위험.
+
+- **`get_history()` 모든 바의 시가(open)가 전 바 종가(close)와 항상 동일 — 갭 없는 차트** (`stock_service.py:298-303`): `o = price` → `c = max(1.0, o * (1 + gauss))` → `price = c` 패턴에서 다음 바의 `o`가 항상 직전 `c`와 동일. 실제 주식 차트에는 전날 종가와 당일 시가 사이 갭(gap)이 발생해 "갭 상승", "갭 하락" 개념을 시각적으로 교육할 수 있는데, 현재 구현에서는 항상 연속 캔들. `o = price * random.uniform(0.99, 1.01)` 한 줄로 바꾸면 현실적인 갭이 생성되어 "아침 시초가가 왜 어제 종가와 다른가?" 수업 소재로 활용 가능. stock_service.py:298 수정 1줄.
+
+- **결과 화면 `host-bar-chart` / `results-bar-chart`가 고정 높이로 30명 이상 시 바 너무 얇아짐** (`index.html:157`, `index.html:625-627`, `app.js:433-478`): `<canvas id="host-bar-chart" style="max-height:300px">` 와 `results-chart-wrap style="height:220px"` 가 고정 높이. Chart.js 가로 막대 차트(`indexAxis:'y'`)에서 참여자 30명이면 바 높이가 6px 이하로 레이블이 잘림. `max-height` 대신 `min(600px, max(240px, memberCount * 28px))` 를 동적으로 계산해 canvas 컨테이너 높이를 설정하면(`renderHostBarChart()` 호출 전 `canvas.parentElement.style.height` 업데이트) 인원수에 상관없이 읽기 편한 차트 생성. 엑셀보다 이 차트가 수업 중 실시간 발표용으로 더 많이 활용되므로 가독성 직결.
