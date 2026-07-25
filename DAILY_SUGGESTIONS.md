@@ -2918,3 +2918,35 @@
 - **`get_stocks()` 섹터 필터가 서버사이드에서 전체 STOCKS 순회** (`app.py:658-671`): `?sector=반도체` 파라미터가 있어도 `for sym, info in STOCKS.items()`로 전체 47개 종목을 순회 후 파이썬 레벨에서 필터링. STOCKS가 고정 딕셔너리이므로 섹터별 인덱스(`STOCKS_BY_SECTOR = defaultdict(list)`)를 모듈 로드 시 1회 빌드해두면 초기화 비용 없이 O(n) → O(k)로 줄일 수 있음(n=종목 수, k=해당 섹터 종목 수). `stock_service.py:99` 아래에 `STOCKS_BY_SECTOR` dict 추가, `app.py:659`에서 `STOCKS_BY_SECTOR.get(sf, STOCKS)` 사용.
 
 - **`loadLobbyMembers()` 폴링이 게임 시작 후에도 계속 실행** (`app.js:192`): `enterHostLobby()`에서 `S.pollInterval = setInterval(loadLobbyMembers, 5000)`을 설정한 후, `doStartGame()`의 `stopPolling()`(`app.js:254`)이 올바르게 정리하긴 하지만, `stopPolling()` 호출 전에 `enterHostGame()`이 새 interval을 덮어쓸 경우 기존 로비 폴링이 남을 수 있음. `enterHostLobby()` 상단에서 항상 `stopPolling()` 선호 호출로 보험 처리하고, 단일 `S.pollInterval` 변수에 interval 하나만 살아있도록 보장하면 안전함.
+
+---
+
+## 2026-07-25 (2차)
+
+### 추가하면 좋을 기능
+
+- **게임 종료 후 개인 투자 종합 리포트** (`app.py:829-847`, `get_transactions()`, `app.py:1419-1488`, `export_rankings()`): 결과 화면(`screen-results`)에 학생 개인의 "투자 요약" 섹션을 추가. `RoomTransaction.query.filter_by(room_id=rid, user_id=uid)` 집계로 가장 많이 거래한 종목, 단일 종목 최대 수익/손실, 총 거래 횟수 등을 서버측 `GET /api/rooms/<rid>/my-report` 엔드포인트로 반환. 결과 화면 `loadResults()`(app.js:1702) 안에서 호출해 "나는 어느 종목에서 가장 잘 했나?" 성찰용으로 활용. 서버 ~20줄, 클라이언트 결과 화면 섹션 1개 추가.
+
+- **참여자 게임 화면 상단에 방 코드 배지 상시 표시** (`app.js:589-651`, `enterParticipantGame()`, `index.html` 참여자 게임 상단 바): 학생이 게임 중 브라우저를 닫거나 새로고침하면 방 코드를 몰라 재입장이 어려움. `enterParticipantGame()` 진입 시(app.js:598) `S.room.code`를 상단 툴바(또는 화면 고정 영역)에 소형 배지(`<span id="game-room-code">`)로 표시하면 됨. 탭하면 클립보드 복사 기능 겸용. 서버 변경 불필요, HTML·JS ~5줄.
+
+- **진행자 랜딩 화면에 종료된 방 목록 및 결과 재열람** (`app.py:307-313`, `find_active_room()`, `app.py:808-824`, `get_rankings()`): `find_active_room()` 이 `'ended'` 방을 반환하지 않아 게임 종료 후 진행자도 결과를 다시 볼 방법이 없음. `GET /api/rooms/history` 엔드포인트를 추가해 `Room.query.filter_by(host_id=user.id, status='ended').order_by(Room.created_at.desc()).limit(5)` 를 반환하고, 랜딩 화면에 "최근 게임 기록" 목록을 렌더링. 항목 클릭 시 `get_rankings()` 호출로 과거 결과 화면 재표시. 서버 ~15줄, 클라이언트 랜딩 화면 섹션 1개.
+
+- **복권 픽킹 단계에서 진행자 실시간 참여 현황 확인** (`app.py:1114-1147`, `get_lottery()`, 진행자 복권 모달): `get_lottery()` 응답이 `picking` 상태에서 진행자에게 `len(cur['picks'])` 를 제공하지 않아 "지금 몇 명이 번호를 골랐는지" 알 수 없음. 응답에 `picks_submitted: len(cur.get('picks', {}))` 와 `eligible_count: RoomMember.query.filter_by(room_id=rid).count() - (1 if host_is_member else 0)` 를 추가하면 진행자가 "12/20명 선택 완료" 현황을 파악해 다음 단계로 넘어가는 타이밍을 잡을 수 있음. 서버 2줄, 클라이언트 모달에 진행 바 1개.
+
+- **랭킹 화면 순위 변동 애니메이션** (`app.js:1673-1692`, `loadParticipantRankings()`): `loadParticipantRankings()` 가 10초마다 `list.innerHTML = ...`로 전체 DOM을 재생성해 랭킹 탭이 열려 있을 때 시각적 깜빡임 발생. 각 `.rank-row`에 `data-uid` 속성을 부여하고 기존 노드를 DOM에서 재배치(`insertBefore`)하는 방식으로 교체하면, 순위가 오를 때 `slide-up` CSS 애니메이션, 내려갈 때 `slide-down` 애니메이션을 자연스럽게 적용 가능. 수업 중 랭킹 변동이 눈에 띄어 학생 집중도 향상. 서버 변경 불필요.
+
+- **게임 상단 헤더에 현재 보유 현금 잔액 실시간 표시** (`app.js:735-753`, `refreshMyRank()`, `app.py:819`, `get_rankings()`): `refreshMyRank()` 가 `me.total_value`와 `me.gain_pct` 는 표시하지만 `me.cash` 는 업데이트하지 않음. 현재 현금은 거래·예금 직후에만 `S.tradeCash` 에 갱신되고 10초 폴링으로는 반영이 안 됨. `get_rankings()` 응답(app.py:819)에 `cash` 필드를 추가하고, `refreshMyRank()` 에서 `document.getElementById('pg-cash-detail').textContent = krw(me.cash)` 로 매 10초마다 갱신하면 됨. 서버 1줄, 클라이언트 2줄.
+
+### 제거/단순화할 것들
+
+- **`get_room_service()` Lock 내부에서 `StockService()` 인스턴스 생성 — 다른 방 조회 블로킹** (`stock_service.py:318-322`): `with _room_services_lock: _room_services[room_id] = StockService()` — `StockService.__init__()`이 47종목 × `random.uniform()` + 타임스탬프 저장 연산을 수행하며 수 밀리초 소요. Lock 점유 중에 다른 방의 `get_room_service()` 호출이 모두 블로킹됨. 해결: Lock 외부에서 `svc = StockService()`를 먼저 생성 후 `with _room_services_lock: if room_id not in _room_services: _room_services[room_id] = svc` 패턴으로 변경하면 Lock 점유 시간이 O(1) dict 쓰기로 단축. 멀티 클래스 동시 시작 시나리오에서 효과적.
+
+- **`force_price()` / `force_sector_event()` 내 `time.time()` 이중 호출 — news timestamp와 last_news_ts 미세 불일치** (`stock_service.py:235,240`, `stock_service.py:272,275`): 두 함수 모두 `self._news = {'timestamp': time.time(), ...}` 이후 별도로 `self._last_news_ts = time.time()` 를 호출. 극미한 시간차로 `_last_news_ts > _news['timestamp']` 가 되어 `_maybe_generate_news()` 의 TTL 계산 기준이 뒤틀림. `ts = time.time()` 한 번 할당 후 두 곳에서 `ts` 를 재사용하면 일관성 확보. `force_price()` 와 `force_sector_event()` 각 2줄 수정.
+
+- **`get_history()` 기간별 봉 간격이 항상 24시간 고정 — 단기 차트가 날짜 단위로만 표시** (`stock_service.py:292-303`): `for i in range(n_bars, 0, -1): date_str = datetime.utcfromtimestamp(now - i * 86400)` — `86400` 초(24시간)가 모든 기간에 동일하게 사용. `'1d'` 탭은 5분 간격(288바), `'5d'` 는 30분 간격(~80바)이어야 기간별 시간 해상도가 의미 있는데 현재는 모두 1일 단위. `interval_secs = {'1d': 300, '5d': 1800, '1mo': 86400, '3mo': 86400, '1y': 604800}.get(period, 86400)` 을 정의하고 `now - i * interval_secs` 로 변경하면 됨. `date_str` 포맷도 `'%H:%M'`(단기) / `'%Y-%m-%d'`(장기)로 기간에 맞게 조정 필요. stock_service.py 약 5줄 수정.
+
+- **`create_deposit()` 소수점 금액 허용 — float 오차 누적 및 비현실적 소액 예금** (`app.py:887-889`): `amount = float((request.json or {}).get('amount', 0))` 로 `0.1` 같은 소수점 금액이 허용됨. `m.cash -= 0.1` 반복 시 IEEE 754 부동소수점 오차가 쌓여 `0.1 + 0.1 + 0.1 != 0.3` 류 잔액 불일치 발생. 교실 환경에서 최소 입금 단위를 10,000원으로 강제하면 현실감도 높아짐. `amount = int(round(amount))` 변환 후 `if amount < 10000: return jsonify({'error': '최소 예금액은 10,000원입니다.'}), 400` 추가. `doDeposit()` 클라이언트(app.js:1647)에서도 동일 제한 UI 추가.
+
+- **`_quiz_state` seen 집합이 in-memory 전용 — 서버 재시작 후 모든 학생에게 중복 문제 재출제** (`app.py:1260-1267`): `_lots[rid]` 은 `lottery_rounds_done` DB 컬럼으로 복구하고, `_rlt_active[rid]` 는 `rlt_triggered` 플래그로 복구하는데(app.py:467-468), `_quiz_state` 의 `seen` 집합은 복구 로직이 전혀 없음. Render free tier에서 슬립→재기동 후 학생들이 이미 푼 문제를 다시 받는 문제 발생. 퀴즈 제출 시 `RoomTransaction`에 `action='QUIZ', symbol='QUIZ_' + str(q['id'])` 로 quiz ID를 기록하고, 재시작 시 해당 트랜잭션에서 `seen = {int(t.symbol.split('_')[1]) for t in ...}` 로 복구하면 됨. `submit_quiz()` 트랜잭션 기록 로직(app.py:1339) 수정 포함.
+
+- **`host_adjust()` delta 절대값 상한선 없음 — 실수 입력으로 게임 파괴 가능** (`app.py:595-603`): `math.isfinite(delta)` 검증(기 지적)이 있어도 `delta = 1_000_000_000_000`(1조) 같은 극단적 유한수는 통과. 진행자가 UI에서 실수로 `0`을 여러 개 입력하면 학생 자산이 비현실적으로 증가해 게임이 망가짐. `room.starting_cash` 기준 합리적 상한 `if abs(delta) > room.starting_cash * 5: return jsonify({'error': '조정 한도 초과'}), 400` 을 추가하면 실수 입력을 방어 가능. `delta = round(delta)` 로 정수화도 함께 적용.
