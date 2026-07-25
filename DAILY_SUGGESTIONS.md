@@ -2888,3 +2888,33 @@
 - **`loadPortfolio()` 진입마다 Chart.js destroy+create 반복 — 깜빡임 및 메모리 부담** (`app.js:1486`, `app.js:1509`): 포트폴리오 탭을 클릭할 때마다 `if (S.portChart) S.portChart.destroy()` / `S.portChart = new Chart(...)` 와 `if (S.assetLineChart) S.assetLineChart.destroy()` / `S.assetLineChart = new Chart(...)` 가 실행. DOM 노드 재계산과 Canvas 재렌더링 비용이 발생하며, 순간적인 흰 깜빡임이 생김. `renderHostBarChart()`(`app.js:300-337`)에서 이미 `chart.data.datasets[0].data = values; chart.update()` 패턴을 사용하므로, 동일하게 기존 인스턴스가 있으면 데이터만 갱신하는 방식으로 교체하면 됨. 도넛과 라인 차트 각각 5줄 수정.
 
 - **`_end_room()` 내 `Room` 객체를 `_do_reveal()` 에서 두 번 조회** (`app.py:226-233`): `_do_reveal()` 내부에서 `_room_lot = db.session.get(Room, rid)` (226줄)로 Room을 조회한 후, 곧바로 auto-paused 처리에서 `room = db.session.get(Room, rid) if _room_lot is None else _room_lot` (233줄)로 같은 레코드를 또 참조. `_room_lot`이 None인 경우에만 재조회하는 의도지만, 루프 전 단계에서 이미 `_room_lot`을 가져왔으므로 233줄의 조건부 재조회는 불필요. `room = _room_lot` 으로 단순화하면 조건부 쿼리 1건 제거. 더 나아가 호출자(`_auto_start_lottery_if_due`, `lottery_draw`)가 이미 Room 객체를 보유하므로 `_do_reveal(rid, cur, room=None)` 시그니처로 room 인자를 받아 전달하면 DB 조회를 완전히 제거 가능.
+
+---
+
+## 2026-07-25
+
+### 추가하면 좋을 기능
+
+- **퀴즈 FAB에 쿨다운 타이머 표시** (`app.js` 퀴즈 FAB 렌더, `app.py:1256-1259`): 퀴즈 제출 후 60초 쿨다운이 있으나 FAB(`<button class="quiz-fab">`)은 항상 "🧠 퀴즈" 텍스트로 고정되어 있어, 학생이 쿨다운 중인지 알려면 FAB을 눌러 모달을 열어야 함. `get_quiz()`가 `cooldown` 값을 반환하므로, 폴링 주기마다 잔여 쿨다운을 FAB 텍스트에 반영(`🧠 퀴즈 (42s)`)하면 불필요한 모달 열기를 줄이고 참여 리듬을 개선할 수 있음. 구현: `loadRankings()` 또는 별도 `updateQuizFab()` 함수에서 `GET /api/rooms/${rid}/quiz` 결과 재활용.
+
+- **게임 중 학생 강퇴(kick) 기능** (`app.py:564-575`, `kick_member()`): `kick_member()`가 `room.status != 'waiting'`일 때 400을 반환해 게임 시작 후 잘못 입장한 학생을 제거할 수단이 없음. `waiting` 전용 제약을 제거하고, 게임 중 강퇴 시 해당 멤버의 보유 주식을 현재가로 정산(현금화)한 뒤 `RoomMember`를 삭제하는 로직을 추가하면 됨. `_end_room()`의 주식 정산 로직(`app.py:144-152`)을 별도 함수로 추출해 재사용.
+
+- **복권 당첨 결과 진행자 모달에 시각적 강조** (`app.py:1141-1147`, `get_lottery()`, 진행자 복권 모달): 복권 `revealed` 상태에서 `all_results`가 반환되지만, 진행자 호스트 모달(`#modal-lottery-result`)에는 당첨자가 단순 텍스트로만 표시됨. 6개 일치 잭팟이 발생하면 confetti(`#confetti-canvas` 기존 캔버스 재사용)를 발사하고 당첨자 이름을 큰 폰트로 강조하면 수업 하이라이트로 활용 가능. 서버 변경 없이 `app.js`의 `closeLotteryResultModal()`/결과 렌더 부분 수정만으로 구현 가능.
+
+- **자산 히스토리 스냅샷 서버 저장** (`app.js:S.assetHistory`, `app.py`): 학생 포트폴리오의 "자산 변화" 꺾은선 차트(`#asset-line-chart`)가 `S.assetHistory` 클라이언트 배열에만 의존해, 페이지 새로고침 시 데이터가 사라짐. `app.py`에 `GET /api/rooms/<rid>/asset-history` 엔드포인트를 추가하고, `loadPortfolio()` 호출 시마다 현재 `total_value`를 서버에 기록(`RoomTransaction` 테이블의 `action='SNAP'` 레코드 활용 또는 별도 경량 테이블)하면 새로고침 후에도 차트가 유지됨. Render 슬립 재기동 시 복구도 가능.
+
+- **진행자용 학생 포트폴리오 열람** (`app.py:542-561`, `host_members()`): 진행자는 학생의 총 자산·수익률·거래 내역만 볼 수 있고 현재 보유 종목 구성을 알 수 없음. `app.py:605` 에 이미 있는 `host_member_transactions()` 패턴처럼 `GET /api/rooms/<rid>/host/members/<uid>/portfolio`를 추가하고, `host-members-list`의 각 학생 행에 "포트폴리오" 버튼을 붙이면 "왜 이 수익률이 나왔는지" 즉각적인 교육 개입이 가능. `get_portfolio()` 로직(`app.py:772-803`)을 공통 함수로 추출해 재사용.
+
+- **종목 모달에 보유 평단가 대비 손익 표시** (`app.js` `openStockModal()` 근방): 현재 주식 모달에는 장중 `change_pct`(시가 대비)만 표시됨. `S.portfolio.holdings`에서 이미 `avg_price`, `gain_pct`를 받아오므로, 보유 종목인 경우 모달 헤더에 "내 수익: +5.2% (+120,000원)"을 한 줄 추가하면 매도 타이밍 판단에 직접적 도움이 됨. 서버 변경 없이 프론트 10줄 수정으로 구현 가능.
+
+### 제거/단순화할 것들
+
+- **`Room.query.get_or_404(rid)` — SQLAlchemy 2.0 deprecated API 다수 잔존** (`app.py:435,475,490,503,519,544,564,580,587,609,630,651,673,691,724,729` 등 20여 곳): `Query.get_or_404()`는 Flask-SQLAlchemy 3.x / SQLAlchemy 2.0에서 레거시 경로로, `db.session.get(Room, rid)` + 수동 404 처리로 교체해야 장기적으로 안전함. 한꺼번에 교체하기 어려우면 helper `def get_or_404(model, pk): obj = db.session.get(model, pk); abort(404) if not obj else obj` 를 두고 호출부만 변경해도 됨.
+
+- **룰렛 자동일시정지 후 미참여 학생이 모달을 닫지 않으면 게임 무한 대기** (`app.py:965-993`, `minigame_close()`): `_rlt_active[rid]['count']`가 0이 될 때까지 게임이 재개되지 않는데, 학생이 창을 닫거나 네트워크가 끊기면 `close` API가 호출되지 않아 영구 대기가 발생할 수 있음. `minigame_open()`에 타임스탬프를 기록하고, `get_room()` 폴링 시 열린 지 5분 이상 경과한 룰렛을 자동 강제 종료하는 fallback을 추가하면 안전함.
+
+- **`submit_quiz()` 응답에서 `explanation`만 반환 — 정답이 무엇인지 미노출** (`app.py:1342`): `return jsonify({'correct': correct, 'reward': reward, 'penalty': penalty, 'explanation': q['ex']})` 에서 정답(`q['a']`)이 빠져 있음. 학생이 오답 후 어떤 답이 맞는지 모달에서 알 수 없음. 응답에 `'answer': q['a']`를 추가하고 클라이언트에서 퀴즈 결과 div에 "정답: O" 또는 "정답: X"를 표시하면 교육 효과가 높아짐. 보안 리스크 없음(이미 답을 제출한 이후).
+
+- **`get_stocks()` 섹터 필터가 서버사이드에서 전체 STOCKS 순회** (`app.py:658-671`): `?sector=반도체` 파라미터가 있어도 `for sym, info in STOCKS.items()`로 전체 47개 종목을 순회 후 파이썬 레벨에서 필터링. STOCKS가 고정 딕셔너리이므로 섹터별 인덱스(`STOCKS_BY_SECTOR = defaultdict(list)`)를 모듈 로드 시 1회 빌드해두면 초기화 비용 없이 O(n) → O(k)로 줄일 수 있음(n=종목 수, k=해당 섹터 종목 수). `stock_service.py:99` 아래에 `STOCKS_BY_SECTOR` dict 추가, `app.py:659`에서 `STOCKS_BY_SECTOR.get(sf, STOCKS)` 사용.
+
+- **`loadLobbyMembers()` 폴링이 게임 시작 후에도 계속 실행** (`app.js:192`): `enterHostLobby()`에서 `S.pollInterval = setInterval(loadLobbyMembers, 5000)`을 설정한 후, `doStartGame()`의 `stopPolling()`(`app.js:254`)이 올바르게 정리하긴 하지만, `stopPolling()` 호출 전에 `enterHostGame()`이 새 interval을 덮어쓸 경우 기존 로비 폴링이 남을 수 있음. `enterHostLobby()` 상단에서 항상 `stopPolling()` 선호 호출로 보험 처리하고, 단일 `S.pollInterval` 변수에 interval 하나만 살아있도록 보장하면 안전함.
