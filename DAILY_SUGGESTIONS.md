@@ -2985,3 +2985,38 @@
 
 - **`doAuth()` 닉네임 포맷 `"{sid} {name}"` — 내부 구현 세부사항이 UI에 노출** (`app.js:73-79`, `app.py:330-342`): 학번과 이름을 공백으로 합쳐 `username`으로 저장하는 방식은 `User` 모델 설계상의 임시방편이며, `export_rankings()`의 `u.username.split(' ', 1)` 파싱(`app.py:1435`)이 깨질 수 있는 취약점. 이름에 공백(예: "김 민준")이 포함된 경우 `parts[0]='김'`, `parts[1]='민준'`으로 학번/이름이 뒤바뀜. `User` 모델에 `student_id = db.Column(db.String(20))` 컬럼을 추가하고 `username`에는 이름만 저장하면 파싱 의존성이 사라짐. 기존 호환을 위해 `User.to_dict()`에 `student_id` 포함, 엑셀 내보내기·결과화면에서 직접 참조.
 
+
+## 2026-07-26 (2차)
+
+### 추가하면 좋을 기능
+
+- **배당금 이벤트 (진행자 트리거)** (`app.py` 신규 엔드포인트, `stock_service.py`): 진행자가 "배당금 지급" 버튼을 누르면 특정 종목 보유자에게 1주당 일정 금액(예: 주당 500원)을 현금으로 지급하는 이벤트. `POST /api/rooms/<rid>/host/dividend` 에서 symbol·per_share를 받아 `RoomHolding.query.filter_by(room_id=rid, symbol=symbol).all()` 루프로 `member.cash += holding.shares * per_share` 처리 후 `RoomTransaction(action='ADJ', note='배당금')` 기록. 실제 주식 교육에서 핵심 개념인 "배당"을 체험시킬 수 있어 교육 효과가 높고, 진행자 설정 탭(`index.html:211-307`) 에 종목 선택 드롭다운과 1주당 금액 입력만 추가하면 구현 가능.
+
+- **섹터별 성과 요약 패널** (`static/js/app.js:1243-1253`, `renderSectors()`, `static/css/style.css`): 현재 섹터 필터 버튼(`app.js:1244`)에는 섹터명만 표시되고 해당 섹터의 평균 등락률이 없음. 각 섹터 버튼 옆에 해당 섹터 전체 종목의 `change_pct` 평균을 `+2.3%` 형식으로 표시하면 학생이 어느 섹터가 강세인지 한눈에 파악. `S.stocks` 배열은 이미 `change_pct`를 포함하므로(`app.py:663-670`) 서버 추가 요청 없이 `renderSectors()` 내에서 `sectors.map(s => { const avg = S.stocks.filter(st => st.sector===s).reduce((a,b) => a+b.change_pct,0)/count; ... })` 계산만 추가. 클라이언트 전용 수정으로 서버 변경 불필요.
+
+- **진행자 게임 시간 연장 버튼** (`app.py:519-537`, `end_room()`, `app.py` 신규 엔드포인트): 현재 진행자가 게임 시간을 늘리려면 일시정지 후 재개해도 남은 시간만 유지됨. `POST /api/rooms/<rid>/host/extend` 엔드포인트를 추가해 `room.end_time += timedelta(minutes=add_minutes)` 처리하면, 진행자 설정 탭에 "+5분 / +10분" 버튼만 추가해 수업이 흥미로운 상황에서 손쉽게 연장 가능. `_invalidate_room_cache(rid)` 호출 필요. 학급 상황에 따라 유연하게 수업을 조율하는 교사의 실제 니즈를 해결.
+
+- **지정가 예약 주문 (Limit Order)** (`app.py` 신규, `models.py` 신규 테이블, `stock_service.py`): 학생이 "삼성전자가 70,000원 이하로 내려오면 100주 자동 매수"처럼 조건부 주문을 예약할 수 있는 기능. `RoomOrder(room_id, user_id, symbol, action, shares, limit_price, status)` 모델 추가. `get_price()` 호출 시점 또는 별도 주기적 체크(`stock_service.py`)에서 활성 예약 주문과 현재 가격을 대조해 조건 충족 시 `trade()` 동일 로직 실행. 고급 교육 기능이지만 실제 증권 거래의 핵심 개념을 체험하게 해줌. 진행자가 활성화·비활성화 가능한 옵션 플래그로 선택적 제공.
+
+- **익명 순위 모드** (`app.py:808-824`, `get_rankings()`, `app.js:735-753`, `refreshMyRank()`): 공개 순위에서 학생 이름 대신 "참가자 1", "참가자 2" 또는 동물 코드네임("호랑이팀")을 표시하는 모드. 자신의 실제 순위는 자기 자신만 확인 가능하고 `is_me: True` 항목에만 실명 표시. `Room` 모델에 `anonymous_rankings = db.Column(db.Boolean, default=False)` 추가, `get_rankings()` 에서 `if room.anonymous_rankings and not entry['is_me']: entry['username'] = f'참가자 {entry["rank"]}'` 처리. 성적 노출이 부담스러운 학생을 배려하면서 경쟁 동기는 유지.
+
+- **퀴즈 정오답 통계 (진행자 패널 표시)** (`app.py:1245-1342`, `_quiz_state`, `app.py:543-562`, `host_members()`): `_quiz_state[key]` 에 `correct_count`·`wrong_count` 필드를 추가하고(`submit_quiz()` app.py:1339 커밋 전에 카운트 증감), `host_members()` 응답에 포함시키면(`app.py:556`) 진행자 순위 패널에 각 학생의 "퀴즈 O/X" 통계를 표시 가능. 누가 금융 지식이 부족한지 실시간 파악해 수업 중 보충 설명 타이밍을 잡는 데 유용. 인메모리 카운터이므로 DB 변경 불필요, 서버 재시작 시 초기화되는 것은 허용 가능 범위.
+
+- **`loadDepositsPage()` 이중 API 호출 통합** (`app.js:1621-1627`): `loadDepositsPage()`는 `/api/rooms/<rid>/portfolio`(현금 조회)와 `/api/rooms/<rid>/deposits`를 순차적으로 호출. 이 두 요청이 독립적이라 `Promise.all()`로 병렬화하거나, `get_deposits()` 응답(app.py:852-876)에 `current_cash` 필드를 추가해 단일 요청으로 통합하면 예금 탭 진입 레이턴시를 절반으로 줄임. 현재 `const port = await api.get(...); ...const data = await api.get(...)` 직렬 구조를 `const [port, data] = await Promise.all([api.get(...), api.get(...)])` 한 줄로 변경 가능.
+
+### 제거/단순화할 것들
+
+- **`lobby_members()` 권한 미확인 — 비인가 사용자가 참여자 목록 열람 가능** (`app.py:577-585`): `lobby_members()`는 `Room.query.get_or_404(rid)` 이후 바로 RoomMember를 조회해 반환함. 로그인만 되어 있으면 방 ID를 알고 있는 누구든 특정 방의 전체 참여자 목록(user_id, username)을 획득 가능. 최소한 `if room.host_id != cur_user().id and not RoomMember.query.filter_by(room_id=rid, user_id=cur_user().id).first(): return jsonify({'error': '권한 없음'}), 403` 를 추가해 호스트 또는 해당 방 참여자만 접근하도록 제한. 학생 정보 노출 최소화 필요.
+
+- **`minigame_close()` 에서 deprecated `Room.query.get(rid)` 사용** (`app.py:977`): `room = Room.query.get(rid)` 는 SQLAlchemy 2.x에서 제거된 레거시 `Query.get()` API. `get_room()` (app.py:435), `start_room()` (app.py:478) 등 다수 엔드포인트는 이미 `Room.query.get_or_404(rid)` 또는 `db.session.get(Room, rid)`로 전환됐으나 `minigame_close()` 만 누락. `room = db.session.get(Room, rid)` 로 교체하면 SQLAlchemy 2.x 이전 버전에서 발생하는 `LegacyAPIWarning` 제거. `Room.query.get` 패턴이 남아 있는 다른 위치도 `grep -n "query.get"` 으로 일괄 확인 권장.
+
+- **`create_room()` 에서 코드 중복 생성 시 IntegrityError 미처리** (`app.py:388-389`, `models.py:8-13`): `gen_code()` 는 루프에서 uniqueness를 확인하지만(`models.py:11`), 두 요청이 동시에 동일 코드를 생성하고 동시에 `db.session.commit()` 하면 DB UNIQUE 제약에 의해 `IntegrityError`가 발생. `join_room()` 은 line 403에서 이를 처리하지만 `create_room()` 은 처리 없이 500 에러로 노출됨. `try: db.session.add(room); db.session.commit() except IntegrityError: db.session.rollback(); room.code = gen_code(); db.session.add(room); db.session.commit()` 패턴으로 재시도하거나, 최소한 500을 400으로 감싸는 에러 핸들러 추가.
+
+- **`create_deposit()` 입금 금액 상한선 없음 — 임의 대형 부동소수점 허용** (`app.py:889`): `if not (0 < amount < float('inf'))` 조건은 `1e300`이나 `999999999999` 같은 천문학적 금액도 통과. 잔액 확인(`m.cash < amount`) 이 있으므로 실제 잔액을 초과한 입금은 막히지만, 학생이 개발자 도구로 요청을 위조해 `amount=S.room.starting_cash * 1000` 같은 값을 보낼 때 잔액 확인에서 막히더라도 서버가 `float('inf')` 비교까지 수행하는 비용이 생김. 현실적 상한(`if amount > 1e13: return jsonify({'error': '금액 초과'}), 400`)을 추가하고, `deposit_rate` 적용 후 이자도 정수 범위를 벗어나지 않는지 확인.
+
+- **`openStockModal()` 매번 포트폴리오 전체 조회** (`app.js:1344-1352`): 학생이 주식 카드를 탭할 때마다 `GET /api/rooms/<rid>/portfolio`가 호출되고, 서버는 `RoomHolding` + `Deposit` 쿼리를 실행해 전체 포트폴리오를 계산. 필요한 정보는 `cash`와 해당 `symbol`의 `shares`뿐. `GET /api/rooms/<rid>/stocks/<symbol>/holding` 같은 경량 엔드포인트를 추가하거나, `enterParticipantGame()` 시 포트폴리오를 한 번 캐시(`S.portfolio`)하고 거래·예금 후에만 갱신하면 불필요한 DB 조회를 대폭 줄일 수 있음. 30명 × 5회 탭/분 기준으로 150 portfolio 쿼리/분이 절감.
+
+- **`host_adjust()` delta 값 범위 미검증** (`app.py:595-603`): `delta = float(d.get('delta', 0))` 이후 `m.cash = max(0, m.cash + delta)` 로 즉시 적용. delta가 `-1e15` 같은 극단값이면 cash가 0으로 강제되고, `+1e15`면 cash가 천문학적으로 커짐. DB는 Float 타입이라 저장 자체는 되지만 UI 표시가 깨지고 엑셀 내보내기 수치도 오염. `if abs(delta) > room.starting_cash * 10: return jsonify({'error': '조정 한도 초과'}), 400` 처럼 시작 자금 기준 합리적 상한을 설정. 또한 `note = d.get('note', '...')` 에도 `[:200]` 슬라이싱으로 DB 컬럼 길이 초과를 방어.
+
+- **`doRouletteSpin()` 4300ms 대기 후 DOM 접근 — 모달 닫힘 시 오류 가능** (`app.js:1062-1096`): `await new Promise(r => setTimeout(r, 4300))` 동안 학생이 `closeRoulette()`를 호출(자동 닫기 타이머가 60초 → 0이 되기 전에 수동 닫기)하면 오버레이가 숨겨진 상태에서 이후 코드가 `document.getElementById('rlt-result')`, `document.getElementById('rlt-spins')` 등 DOM을 업데이트함. 요소 자체는 존재하므로 예외는 안 나지만 숨겨진 UI를 수정해 다음 번 열 때 이전 결과가 잔재. `let _spinAborted = false` 플래그를 `closeRoulette()` 에서 set하고 `setTimeout` 이후 `if (_spinAborted) return` 가드를 추가하면 해결. 또는 `openRouletteModal()` 진입 시 플래그 초기화.
+
