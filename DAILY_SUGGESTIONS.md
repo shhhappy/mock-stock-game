@@ -2950,3 +2950,38 @@
 - **`_quiz_state` seen 집합이 in-memory 전용 — 서버 재시작 후 모든 학생에게 중복 문제 재출제** (`app.py:1260-1267`): `_lots[rid]` 은 `lottery_rounds_done` DB 컬럼으로 복구하고, `_rlt_active[rid]` 는 `rlt_triggered` 플래그로 복구하는데(app.py:467-468), `_quiz_state` 의 `seen` 집합은 복구 로직이 전혀 없음. Render free tier에서 슬립→재기동 후 학생들이 이미 푼 문제를 다시 받는 문제 발생. 퀴즈 제출 시 `RoomTransaction`에 `action='QUIZ', symbol='QUIZ_' + str(q['id'])` 로 quiz ID를 기록하고, 재시작 시 해당 트랜잭션에서 `seen = {int(t.symbol.split('_')[1]) for t in ...}` 로 복구하면 됨. `submit_quiz()` 트랜잭션 기록 로직(app.py:1339) 수정 포함.
 
 - **`host_adjust()` delta 절대값 상한선 없음 — 실수 입력으로 게임 파괴 가능** (`app.py:595-603`): `math.isfinite(delta)` 검증(기 지적)이 있어도 `delta = 1_000_000_000_000`(1조) 같은 극단적 유한수는 통과. 진행자가 UI에서 실수로 `0`을 여러 개 입력하면 학생 자산이 비현실적으로 증가해 게임이 망가짐. `room.starting_cash` 기준 합리적 상한 `if abs(delta) > room.starting_cash * 5: return jsonify({'error': '조정 한도 초과'}), 400` 을 추가하면 실수 입력을 방어 가능. `delta = round(delta)` 로 정수화도 함께 적용.
+
+---
+
+## 2026-07-26
+
+### 추가하면 좋을 기능
+
+- **QR 스캔 후 방 코드 자동 주입** (`app.js:196-206`, `index.html:319-337`): `_makeQR()`이 생성하는 URL은 `?code=XXXXXX` 형태이지만(`app.js:197`), 페이지 로드 시 `URLSearchParams`로 해당 파라미터를 읽어 `join-code` 입력 필드에 자동 채우는 코드가 없음. `doJoinRoom()` 상단 혹은 `DOMContentLoaded` 핸들러에 `const c = new URLSearchParams(location.search).get('code'); if (c) { showScreen('screen-join'); document.getElementById('join-code').value = c.toUpperCase(); }` 3줄 추가면 됨. 학생이 QR 스캔 후 코드를 다시 타이핑하는 마찰 제거.
+
+- **게임 중 신규 참가 잠금 토글 (진행자용)** (`app.py:392-406`, `join_room()`): `join_room()`은 `status='ended'`인 방만 거부하므로 게임 시작 후(`active`/`paused`)에도 새 학생이 자유롭게 입장 가능. 수업 중 지각생 또는 의도치 않은 재입장을 막으려면 `Room` 모델에 `is_locked` 불리언 컬럼(`models.py:25-41`)을 추가하고, 진행자 설정 탭(`index.html:211-307`)에 잠금 토글 버튼과 대응 `POST /api/rooms/<rid>/host/lock` 엔드포인트를 추가. `join_room()` 초반에 `if room.is_locked: return jsonify({'error': '진행자가 입장을 잠갔습니다.'}), 400` 처리.
+
+- **강퇴된 학생 재입장 차단** (`app.py:564-575`, `kick_member()`, `app.py:400-406`, `join_room()`): `kick_member()`는 `RoomMember` 레코드만 삭제하고 별도 차단 목록을 남기지 않아, 강퇴된 학생이 즉시 재입장 가능. `Room` 테이블에 `kicked_users = db.Column(db.Text, default='')` 필드(쉼표 구분 user_id 문자열)를 추가하거나 별도 `RoomKick(room_id, user_id)` 테이블을 신설. `join_room()` 진입 시 `if str(user.id) in (room.kicked_users or '').split(',')` 체크로 재입장 거부. `kick_member()` 삭제 로직(`db.session.delete(m)`) 이후 `kicked_users`에 uid 추가.
+
+- **결과화면 우승자·준우승자 카드에 학번(학번) 표시** (`app.js:1726-1738`, `parseUsername()`): `results-runners-up` 카드(`app.js:1727-1737`)는 `name`만 표시하고 `sid`를 생략. 동명이인이 많은 교실에서 "이 1등이 어느 학생인지" 혼동 유발. 카드 본문에 `<div style="font-size:11px;color:var(--muted)">${escHtml(sid)}</div>` 한 줄 추가로 학번 표시. 1위 우승자 카드(`#results-winner-name`, `app.js:1717-1719`)도 동일하게 학번 부행 추가 필요.
+
+- **`member_total_value()` 배치 로드 버전 추가로 N+1 쿼리 제거** (`app.py:107-118`, `get_rankings()` `app.py:814-824`, `host_members()` `app.py:543-562`): `member_total_value(rid, uid)`는 `RoomHolding.query.filter_by()` + `Deposit.query.filter_by()` 2회 쿼리를 uid당 실행. `get_rankings()`에서 30명을 루프하면 최소 60회 쿼리가 매 10초 폴링마다 발생. `RoomHolding.query.filter_by(room_id=rid).all()`과 `Deposit.query.filter_by(room_id=rid, status='active').all()`을 한 번씩 전체 로드 후 `uid`로 그룹핑하는 `_batch_total_values(rid, svc)` 함수를 `app.py:107` 아래에 추가하고, `get_rankings()`와 `host_members()`에서 사용하면 쿼리 수가 O(n) → O(1)로 감소.
+
+- **진행자→참가자 공지 메시지 브로드캐스트** (`app.py` 신규 엔드포인트, `app.js` 폴링): 진행자가 "지금 반도체 종목에 주목하세요!" 같은 짧은 안내를 참가자 화면에 띄울 수단이 없음. `Room` 모델에 `broadcast_msg = db.Column(db.String(200), default='')` 추가, `POST /api/rooms/<rid>/host/broadcast` 로 저장, `room_dict()`에 포함시켜 10초 폴링으로 참가자에게 전달. 클라이언트에서 이전 값과 달라지면 `toast()` 또는 팝업 표시. 기존 인프라(폴링, room_dict) 그대로 활용해 WebSocket 없이 구현 가능.
+
+- **포트폴리오 페이지에서 직접 매도 버튼 클릭 시 수량 자동 설정** (`app.js:1556-1562`, 보유 종목 "▼ 매도" 버튼): 보유 종목 목록의 "▼ 매도" 버튼이 `openStockModal()`을 호출하지만 `trade-qty` 수량이 초기값 1로 리셋됨. 풀 매도 의도인 경우 수량을 `h.shares`로 자동 설정해줘야 UX가 자연스러움. `openStockModal()` 시그니처에 `defaultQty` 파라미터를 추가하고(`app.js:1327`), 매도 버튼에서 `openStockModal('${h.symbol}', ..., ${h.shares})` 형태로 전달해 `document.getElementById('trade-qty').value = defaultQty || 1`으로 설정.
+
+### 제거/단순화할 것들
+
+- **`SECRET_KEY` 하드코딩 — 소스 유출 시 세션 위조 가능** (`app.py:13`): `app.secret_key = os.environ.get('SECRET_KEY', 'mock-stock-game-secret-2024')` 의 fallback 문자열이 공개 저장소에 노출. 동일 값을 사용하는 Render 배포 인스턴스에서는 누구든 `'mock-stock-game-secret-2024'` 로 서명한 세션 쿠키를 위조해 임의 `user_id`로 로그인 가능. 기본값을 제거하고 `if not os.environ.get('SECRET_KEY'): raise RuntimeError('SECRET_KEY 환경변수를 설정하세요.')` 으로 교체하거나, `secrets.token_hex(32)`를 startup 시 생성해 경고 로그와 함께 사용. Render 대시보드 환경변수에 실제 랜덤 값 설정 필수.
+
+- **거래 내역에서 룰렛 트랜잭션이 '조정'으로 표시 — 학생이 원인을 파악하기 어려움** (`app.py:1065-1067`, `app.js:529,1584`): `action='RLT'` 트랜잭션은 `app.js:529`의 `t.action==='BUY'?'매수':t.action==='SELL'?'매도':'조정'` 분기에서 '조정'으로 표기되고, `txn-badge rlt` CSS 클래스도 별도 스타일 없음. 학생이 거래 내역에서 "조정"이라고만 보이면 룰렛 결과임을 인식 불가. `t.action==='RLT'?'룰렛':t.action==='BUY'?'매수':...` 로 분기 추가하고, `QUIZ` 심볼 ADJ 트랜잭션도 '퀴즈'로 표시. `app.js:529,1584` 두 곳 동일 수정.
+
+- **복권 진행자 UI 모달 3중 구조 — `modal-lottery-start`, `modal-lottery-host`, `modal-lottery-result`** (`index.html:722-774`): 복권 한 사이클에 시작 입력 모달 → 진행 현황 모달 → 결과 모달 세 개의 분리된 `<div class="modal-overlay">`가 연속 등장. 참가자용 `#lottery-overlay` 와도 별도. 코드량이 많고 상태 관리 복잡성이 높아 버그 진입점이 됨. `modal-lottery-start` 와 `modal-lottery-host`를 단일 모달로 합쳐 내부 섹션 show/hide로 단계 전환하면 DOM 노드 수와 JS 이벤트 핸들러 수를 줄일 수 있음.
+
+- **`app.py` 스타트업 인라인 `ALTER TABLE` — 프로덕션에서 잠금 위험** (`app.py:30-40`): 서버 재시작마다 `"ALTER TABLE rooms ADD COLUMN ..."` 3개를 실행하고 이미 존재하면 예외를 롤백. SQLite WAL 모드에서 스키마 변경은 배타적 잠금을 획득하므로, 동시 요청이 있는 Render 환경에서 재시작 지연이 발생할 수 있음. `Flask-Migrate` 또는 별도 `migrate.py` 스크립트로 분리하고, 컬럼 존재 여부를 `PRAGMA table_info(rooms)` 로 먼저 확인해 불필요한 ALTER를 건너뛰는 방식이 안전. 최소한 `with app.app_context()` 블록 자체를 `if __name__ == '__main__'` 바깥 모듈 레벨 초기화에서 별도 함수로 추출해 테스트 가능성 확보.
+
+- **`get_room()` 에서 `cur_user()` 이중 호출** (`app.py:432-473`): `get_room()` 함수 내에서 `cur_user()` 가 `_get_room_cached(room, cur_user().id)` (line 473) 뿐 아니라 종료 조건 분기 `return jsonify(room_dict(room, cur_user().id))` (lines 439, 444)에서도 반복 호출됨. `db.session.get(User, session['user_id'])` 를 매번 실행하므로 한 요청 안에서 최대 3회 DB 조회. 함수 상단에서 `user = cur_user()` 를 한 번 할당 후 재사용하면 DB 왕복 최대 2회 절감.
+
+- **`doAuth()` 닉네임 포맷 `"{sid} {name}"` — 내부 구현 세부사항이 UI에 노출** (`app.js:73-79`, `app.py:330-342`): 학번과 이름을 공백으로 합쳐 `username`으로 저장하는 방식은 `User` 모델 설계상의 임시방편이며, `export_rankings()`의 `u.username.split(' ', 1)` 파싱(`app.py:1435`)이 깨질 수 있는 취약점. 이름에 공백(예: "김 민준")이 포함된 경우 `parts[0]='김'`, `parts[1]='민준'`으로 학번/이름이 뒤바뀜. `User` 모델에 `student_id = db.Column(db.String(20))` 컬럼을 추가하고 `username`에는 이름만 저장하면 파싱 의존성이 사라짐. 기존 호환을 위해 `User.to_dict()`에 `student_id` 포함, 엑셀 내보내기·결과화면에서 직접 참조.
+
