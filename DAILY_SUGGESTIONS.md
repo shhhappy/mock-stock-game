@@ -3044,3 +3044,31 @@
 - **엑셀 내보내기 학번·이름 파싱 취약점** (`app.py:1435-1437`): `parts = u.username.split(' ', 1)` 로 첫 공백 기준 학번/이름을 분리하는 방식은, 학생이 "학번 이름" 형태가 아닌 이름만 입력했을 경우(`sid=''`, `name=전체입력값`) 엑셀의 "학번" 열이 공백으로 출력됨. 또한 학번에 공백이 없어도 이름에 공백이 포함되면(`'홍 길동'`) 학번이 이름 일부로 파싱됨. 파싱 실패 시 셀에 "(학번 없음)" 또는 원래 username 전체를 표시하는 fallback을 추가하거나, 입력 폼에서 학번/이름을 별도 필드로 받되 서버에서 구조화해 저장하는 방향으로 개선 필요.
 
 - **`_lots`, `_rlt_active` 인메모리 상태가 종료된 방에 무기한 잔류** (`app.py:155-161 _end_room()`): `_end_room()` 에서 `_lots.pop(room.id, None)`, `_rlt_active.pop(room.id, None)` 로 정리되지만, 방이 갑자기 에러로 종료되거나 서버 재시작 없이 오래 실행될 경우 종료된 방의 데이터가 dict에 남을 수 있음. 주기적 GC(예: 1시간마다 ended 방 ID 조회 후 관련 인메모리 키 삭제)를 추가하면 장시간 운영 시 메모리 누수 방지 가능. Render free tier는 재기동이 잦아 실제 문제 빈도는 낮지만 유료 전환 시 주의 필요.
+
+## 2026-07-27 (2차)
+
+### 추가하면 좋을 기능
+
+- **거래 수량 range 슬라이더** (`static/index.html` 거래 모달, `app.js:openStockModal()`): 수량 입력이 텍스트 박스만 있어 터치스크린에서 불편. `<input type="range">` 를 `trade-qty` 아래에 추가하고, 최댓값을 매수 시 `Math.floor(tradeCash/price)`, 매도 시 `holding.shares` 로 동적 설정. 서버 변경 없이 HTML/JS 약 10줄로 구현 가능하며 학생 스마트폰 환경에서 UX가 크게 개선됨.
+
+- **결과 화면 "최고 단일 매도 수익 거래" 배너** (`app.js:1760-1775 loadResults()`, `app.py` 신규 엔드포인트): `results-my-stats` 블록에 순위·자산·수익률만 표시되고 가장 수익이 좋았던 단일 거래 정보가 없음. `GET /api/rooms/<rid>/best-trade` 를 신설해 `RoomTransaction` 에서 매도(`action='SELL'`) 최고 `amount` 행을 조회하고 결과 화면에 "최고 매도 수익: +X원 (종목)" 카드를 추가하면 수업 마무리 토론에 활용 가능.
+
+- **종목 모달에서 같은 방 보유자 수 표시** (`app.py:651-671 get_stocks()`, `app.js:1327 openStockModal()`): `get_stocks()` 응답 각 종목에 `holder_count` 필드 추가 (`RoomHolding.query.filter_by(room_id=rid, symbol=sym).filter(RoomHolding.shares > 0).count()`), 종목 모달 상단에 "N명 보유 중" 배지 표시. 군중심리·쏠림 현상을 실시간으로 관찰하는 교육적 기능으로 활용 가능.
+
+- **진행자 종목 거래 잠금 기능** (`app.py:724-766 trade()`, `models.py Room`): `Room` 에 `disabled_symbols = db.Column(db.Text, default='')` 컬럼 추가, `trade()` 진입 시 잠긴 종목이면 403 반환, `POST /api/rooms/<rid>/host/lock-symbols` 엔드포인트 신설. "오늘 수업에서는 IT 섹터만 거래" 같은 수업 시나리오를 코드 수정 없이 진행자 UI에서 제어 가능.
+
+- **게임 종료 후 개인 전체 거래 통계 카드** (`app.js:1760-1775 loadResults()`, `app.py` 신규): 결과 화면 "내 결과" 섹션에 총 거래 횟수·매수 총액·매도 총액이 없음. `GET /api/rooms/<rid>/my-summary` 에서 `RoomTransaction` 집계 후 JSON 반환, 결과 화면에 "총 N회 거래 | 매수 X원 | 매도 Y원" 통계 줄 추가. 학생 스스로 거래 패턴을 돌아볼 수 있는 반성 자료가 됨.
+
+### 제거/단순화할 것들
+
+- **`lottery_skip()` DB 저장 누락으로 서버 재시작 시 스킵 회차 재발동** (`app.py:1209-1219`): `_lots[rid]['done'].add(round_n)` 이후 `Room.lottery_rounds_done` DB 컬럼을 갱신하지 않아, Render 재기동 시 인메모리 상태가 초기화되면 이미 진행자가 스킵한 회차가 다시 활성화됨. `lot['done']` 갱신 직후 `room.lottery_rounds_done = ','.join(str(r) for r in lot['done']); db.session.commit()` 를 추가해 DB와 동기화해야 함.
+
+- **`withdraw_deposit()` 강퇴 학생 예금 해지 시 `m=None` → AttributeError** (`app.py:912-914`): 강퇴된 학생의 `RoomMember` 행이 삭제된 상태에서 예금 해지 요청이 오면 `m = RoomMember.query.filter_by(...).first()` 가 `None` 을 반환하고 이후 `m.cash += dep.amount` 에서 AttributeError 발생. `if not m: dep.status = 'withdrawn'; db.session.commit(); return jsonify({'ok': True})` 분기를 추가해 예금금액을 복구 불가로 처리하거나, 강퇴 시 활성 예금을 자동 해지하는 로직을 `kick_member()` 에 넣어야 함.
+
+- **`trade()` 동시 요청 시 잔액 이중 차감 경쟁 조건** (`app.py:747-751`): `if member.cash < amount` 체크와 `member.cash -= amount` 사이에 DB 레벨 락이 없어 같은 사용자가 두 요청을 동시에 보내면 잔액 부족 상태에서 두 번 차감될 수 있음. `RoomMember.query.filter_by(...).with_for_update().first()` 또는 `db.session.execute(update(RoomMember).where(...).values(cash=RoomMember.cash - amount).where(RoomMember.cash >= amount))` 의 원자적 업데이트로 해결 가능.
+
+- **`get_chart()` · `get_room_news()` 방 소속 검증 누락** (`app.py:703-707`, `app.py:710-719`): 두 엔드포인트 모두 `Room.query.get_or_404(rid)` 만 수행하고 요청자가 해당 방 멤버인지 확인하지 않음. 로그인한 임의 사용자가 다른 방의 뉴스와 차트를 열람 가능. `RoomMember.query.filter_by(room_id=rid, user_id=user.id).first_or_404()` 한 줄 추가로 수정 가능.
+
+- **`room_dict()` 에서 `member_count` COUNT 쿼리 매 호출 실행** (`app.py:297`): 방 목록·상태 조회마다 `RoomMember.query.filter_by(room_id=room.id).count()` 가 별도 SQL로 실행됨. `Room` 모델에 이미 `members` relationship이 있으므로 `len(room.members)` 로 대체하거나 (이미 로드된 경우), `room_dict()` 호출 전 `joinedload(Room.members)` 를 사용해 N+1 패턴 제거.
+
+- **`get_room()` 룰렛 트리거 판단 시 멤버별 COUNT 쿼리 N회 실행** (`app.py:449-453`): `has_spins = any(RoomTransaction.query.filter_by(..., action='RLT').count() < 3 for m in non_host)` 패턴이 멤버 수만큼 별도 COUNT SQL을 발행. `db.session.query(RoomTransaction.user_id, func.count()).filter_by(room_id=rid, action='RLT').group_by(RoomTransaction.user_id).all()` 한 번으로 집계한 뒤 메모리에서 비교하면 쿼리 수가 1개로 줄어듦.
