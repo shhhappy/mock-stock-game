@@ -3020,3 +3020,27 @@
 
 - **`doRouletteSpin()` 4300ms 대기 후 DOM 접근 — 모달 닫힘 시 오류 가능** (`app.js:1062-1096`): `await new Promise(r => setTimeout(r, 4300))` 동안 학생이 `closeRoulette()`를 호출(자동 닫기 타이머가 60초 → 0이 되기 전에 수동 닫기)하면 오버레이가 숨겨진 상태에서 이후 코드가 `document.getElementById('rlt-result')`, `document.getElementById('rlt-spins')` 등 DOM을 업데이트함. 요소 자체는 존재하므로 예외는 안 나지만 숨겨진 UI를 수정해 다음 번 열 때 이전 결과가 잔재. `let _spinAborted = false` 플래그를 `closeRoulette()` 에서 set하고 `setTimeout` 이후 `if (_spinAborted) return` 가드를 추가하면 해결. 또는 `openRouletteModal()` 진입 시 플래그 초기화.
 
+
+---
+
+## 2026-07-27
+
+### 추가하면 좋을 기능
+
+- **거래 모달에 "최대 매수 가능 수량" 실시간 표시** (`app.py:747-748`, 거래 모달 프론트): 현재 매수 모달에 수량 입력란만 있고, 보유 현금으로 몇 주까지 살 수 있는지 표시되지 않음. 서버 변경 없이 `openStockModal()` 내에서 `Math.floor(S.tradeCash / price)` 를 계산해 "최대 X주 (≈ Y원)" 를 input 아래에 한 줄 표시하면 됨. 학생들이 잔액 초과 오류를 반복적으로 받는 가장 흔한 UX 마찰 지점이므로 즉각적인 개선 효과가 큼.
+
+- **보유 종목 전량 매도 버튼** (`app.js` holdings 렌더링 부분, `app.py:757-762`): 포트폴리오 보유 종목 카드에 "전량 매도" 버튼이 없어, 게임 종료 직전 청산을 원하는 학생이 보유 수량을 직접 입력해야 함. 홀딩 카드 렌더링 시 `<button onclick="quickSellAll('${h.symbol}', ${h.shares})">전량 매도</button>` 를 추가하고 `quickSellAll()` 에서 `shares=h.shares` 로 trade API를 호출하면 서버 변경 없이 구현 가능. 룰렛 베팅 시 강제 청산 로직(`app.py:1026-1047`)과 개념적으로 동일하므로 검증된 패턴임.
+
+- **퀴즈 설정·룰렛 설정 DB 영속화** (`app.py:1246 _quiz_settings`, `app.py:250 _roulette_config`): 두 설정 모두 순수 인메모리 dict로, Render free tier에서 수면 후 재기동될 때마다 기본값으로 초기화됨. `Room` 모델에 `quiz_reward_pct FLOAT DEFAULT 1.0`, `quiz_penalty_pct FLOAT DEFAULT 0.5`, `roulette_config JSON` 컬럼(또는 VARCHAR)을 추가하고 POST 시 DB에 저장·GET 시 DB에서 로드하면 재기동 안전성 확보. `app.py:31-40`의 ALTER TABLE 패턴 그대로 마이그레이션 가능.
+
+- **진행자 대시보드에 "최근 미활동 학생" 표시** (`app.py:542-561 host_members()`, `models.py:47-54 RoomMember`): 현재 진행자는 학생이 실제로 게임에 접속 중인지 알 방법이 없음. `RoomMember`에 `last_seen_at DATETIME` 컬럼을 추가하고, 학생이 `/api/rooms/<rid>` 또는 `/api/rooms/<rid>/portfolio`를 호출할 때 갱신하면 됨. `host_members()` 응답에 포함시켜 3분 이상 미응답 학생에게 ⚠️ 뱃지를 표시하면 교사가 "그 학생 핸드폰 확인해" 같은 즉각적인 개입이 가능.
+
+- **실제 게임 가격 히스토리 저장** (`stock_service.py:281-310 get_history()`): 현재 차트는 `현재가`에서 역방향으로 랜덤 OHLC를 생성하므로(`stock_service.py:296-309`), 새로고침마다 과거 차트가 달라지고 실제 인게임 가격 변동과 무관. `StockService._prices` 업데이트 시(`get_price()` 내 TTL 만료 분기, `force_price()`) 간단한 링 버퍼 `_price_log: dict[str, deque]`에 `(timestamp, price)` 를 최대 200개 append하면 실제 인게임 가격 흐름을 차트로 보여줄 수 있음. 이것이 교육적 가치가 훨씬 높음.
+
+### 제거/단순화할 것들
+
+- **참여자 게임 루프의 독립 타이머 4개 통합** (`app.js:613-651 enterParticipantGame()`, `app.js:807-826 startNewsPolling()`): 참여자 게임 화면에서 `setInterval(roomPoll, 10000)`, `setInterval(newsPoll, 8000)`, `setInterval(timerTick, 1000)` 세 타이머가 독립 실행되고, 각 루프 내에서 `refreshMyRank()` (rankings API), `loadMarket()` (stocks API) 가 추가로 호출됨. 학생 30명 기준 10초마다 약 120~150개 요청이 Render 단일 인스턴스에 집중. roomPoll에서 `minigame_available`, `lottery_active`, `status` 변경만 감지하고 필요한 데이터를 aggregated endpoint 하나로 받는 구조로 변경하면 서버 부하가 50% 이상 감소 예상.
+
+- **엑셀 내보내기 학번·이름 파싱 취약점** (`app.py:1435-1437`): `parts = u.username.split(' ', 1)` 로 첫 공백 기준 학번/이름을 분리하는 방식은, 학생이 "학번 이름" 형태가 아닌 이름만 입력했을 경우(`sid=''`, `name=전체입력값`) 엑셀의 "학번" 열이 공백으로 출력됨. 또한 학번에 공백이 없어도 이름에 공백이 포함되면(`'홍 길동'`) 학번이 이름 일부로 파싱됨. 파싱 실패 시 셀에 "(학번 없음)" 또는 원래 username 전체를 표시하는 fallback을 추가하거나, 입력 폼에서 학번/이름을 별도 필드로 받되 서버에서 구조화해 저장하는 방향으로 개선 필요.
+
+- **`_lots`, `_rlt_active` 인메모리 상태가 종료된 방에 무기한 잔류** (`app.py:155-161 _end_room()`): `_end_room()` 에서 `_lots.pop(room.id, None)`, `_rlt_active.pop(room.id, None)` 로 정리되지만, 방이 갑자기 에러로 종료되거나 서버 재시작 없이 오래 실행될 경우 종료된 방의 데이터가 dict에 남을 수 있음. 주기적 GC(예: 1시간마다 ended 방 ID 조회 후 관련 인메모리 키 삭제)를 추가하면 장시간 운영 시 메모리 누수 방지 가능. Render free tier는 재기동이 잦아 실제 문제 빈도는 낮지만 유료 전환 시 주의 필요.
