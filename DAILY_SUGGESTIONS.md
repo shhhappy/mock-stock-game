@@ -3072,3 +3072,32 @@
 - **`room_dict()` 에서 `member_count` COUNT 쿼리 매 호출 실행** (`app.py:297`): 방 목록·상태 조회마다 `RoomMember.query.filter_by(room_id=room.id).count()` 가 별도 SQL로 실행됨. `Room` 모델에 이미 `members` relationship이 있으므로 `len(room.members)` 로 대체하거나 (이미 로드된 경우), `room_dict()` 호출 전 `joinedload(Room.members)` 를 사용해 N+1 패턴 제거.
 
 - **`get_room()` 룰렛 트리거 판단 시 멤버별 COUNT 쿼리 N회 실행** (`app.py:449-453`): `has_spins = any(RoomTransaction.query.filter_by(..., action='RLT').count() < 3 for m in non_host)` 패턴이 멤버 수만큼 별도 COUNT SQL을 발행. `db.session.query(RoomTransaction.user_id, func.count()).filter_by(room_id=rid, action='RLT').group_by(RoomTransaction.user_id).all()` 한 번으로 집계한 뒤 메모리에서 비교하면 쿼리 수가 1개로 줄어듦.
+
+---
+
+## 2026-07-28
+
+### 추가하면 좋을 기능
+
+- **엑셀 다운로드에 전체 거래 내역 시트 추가** (`app.py:1419-1488`, `export_rankings()`): 현재 최종 순위 시트 하나만 생성함. `wb.create_sheet('거래 내역')`을 추가해 `RoomTransaction.query.filter_by(room_id=rid).order_by(timestamp).all()`로 모든 학생의 매수·매도·룰렛·퀴즈 기록을 두 번째 시트에 기록하면 선생님이 수업 후 학생별 행동 패턴을 엑셀에서 직접 분석 가능. 서버 코드 약 20줄 추가, 클라이언트 변경 없음.
+
+- **거래 모달에 "최대 수량" 버튼 추가** (`app.js:openStockModal()`, `static/index.html` 거래 모달): 현재 주식 수량을 직접 타이핑해야 해 스마트폰에서 불편함. 매수 시 `Math.floor(S.tradeCash / S.tradePrice)`, 매도 시 `S.tradeHolding`을 trade-qty에 자동 입력하는 "전량" 버튼을 `<input id="trade-qty">` 옆에 추가하면 터치 환경에서 UX가 크게 개선됨. HTML 1줄·JS 1줄로 구현 가능.
+
+- **퀴즈 설정을 Room 모델에 저장해 서버 재시작 후에도 유지** (`app.py:1246`, `app.py:1399-1414`, `models.py`): `_quiz_settings` 딕셔너리는 in-memory 상태여서 Render 무료 인스턴스가 재기동되면 진행자가 설정한 `reward_pct`·`penalty_pct`가 기본값(1%, 0.5%)으로 초기화됨. `rooms` 테이블에 `quiz_reward_pct FLOAT DEFAULT 1.0`, `quiz_penalty_pct FLOAT DEFAULT 0.5` 컬럼 추가(`app.py:31-40` ALTER 패턴 활용) 후 `quiz_settings()`에서 DB read/write하면 재기동 내구성 확보.
+
+- **진행자 대시보드에 실시간 참여 지표 카드 추가** (`app.py:542-561`, `host_members()`): 현재 순위 목록만 표시되고 "방 전체에서 오늘 몇 건 거래가 발생했는지, 가장 활발한 학생은 누구인지" 요약 정보가 없음. `RoomTransaction.query.filter_by(room_id=rid).count()`와 `GROUP BY user_id`를 활용해 총 거래 수, 1위 거래왕 학생, 가장 많이 거래된 종목 3개를 `GET /api/rooms/<rid>/host/activity-summary`로 제공하고 순위 탭 상단에 미니 카드 3개로 표시하면 수업 참여도 모니터링이 가능.
+
+- **주가 급변 임계 배지 표시** (`stock_service.py:129-139`, `app.js:loadMarket()`): 가격 변동폭이 vol 기준으로 크게 벌어질 수 있으나 학생 시세 목록에 "현재 변동폭이 오늘 최대치" 같은 시각적 신호가 없음. `StockService`에 `_session_high`·`_session_low` 딕셔너리를 추가해 `get_price()`에서 갱신하고, `get_stocks()` 응답에 `is_high: bool`, `is_low: bool` 필드를 추가. `app.js` 시세 카드에 "📈 신고가" / "📉 신저가" 배지를 보여주면 투자 타이밍 교육에 활용 가능.
+
+### 제거/단순화할 것들
+
+- **`get_stocks()` 방 멤버 여부 미검증 — 다른 방 시세 무단 열람 가능** (`app.py:651-671`): `@login_required`와 `Room.query.get_or_404(rid)` 만 있고 `RoomMember` 확인이 없음. 로그인한 사용자가 임의 `rid`로 `GET /api/rooms/{rid}/stocks`를 요청하면 다른 방의 모든 시세(초기화 가격 포함)를 볼 수 있음. `app.py:655` 이후에 `if not RoomMember.query.filter_by(room_id=rid, user_id=cur_user().id).first() and room.host_id != cur_user().id: return jsonify({'error': '권한 없음'}), 403`을 추가하면 됨.
+
+- **`RoomMember.cash`·`RoomHolding.avg_price`가 `Float` 타입 — 금융 계산 정밀도 손실** (`models.py:52`, `models.py:62`): SQLAlchemy `Float`은 IEEE 754 부동소수점으로 저장되어 누적 매수·이자 계산 시 1~2원 단위 반올림 오차가 쌓임. `db.Column(db.Numeric(precision=18, scale=2))` 로 교체하거나 단기적으로 모든 계산 후 `round(..., 0)`을 일관되게 적용하면 정산 결과 불일치를 방지할 수 있음. (현재 일부 경로만 `round()` 처리, 누락된 경로 있음.)
+
+- **`kick_member()`는 `waiting` 상태에서만 동작하지만 `join_room()`은 `active`·`paused` 상태에서도 허용 — 강퇴 불가 상황 발생** (`app.py:564-575`, `app.py:392-406`): 게임이 시작된 후 늦게 입장한 학생을 진행자가 강퇴할 수단이 없음. `kick_member()`에서 `waiting` 체크를 제거하고 `active`·`paused` 상태에서도 강퇴를 허용하되, 강퇴 시 해당 학생의 `RoomHolding`·`Deposit`을 정산(주식 → 현금, 예금 원금 복구 후 삭제)하는 로직을 추가해야 일관성이 유지됨.
+
+- **`enter()` 닉네임 내부 공백 정규화 없음 — "홍길동" vs "홍  길동" 별개 유저 생성** (`app.py:332-339`): `u = d.get('username','').strip()`은 앞뒤 공백만 제거하고 내부 연속 공백은 그대로 둠. "20715 홍 길동"처럼 학번과 이름 사이에 공백이 하나 더 들어가면 새 User 레코드가 생성되어 기존 세션과 분리됨. `' '.join(u.split())`로 내부 공백을 단일화하면 비의도적 중복 계정 방지.
+
+- **`StockService.get_history()` 차트 데이터가 실제 게임 중 가격 변동과 무관한 랜덤값** (`stock_service.py:281-310`): `get_history()`는 `current` 가격에서 역방향으로 랜덤 바(bar)를 생성하므로, 같은 종목을 두 번 조회해도 다른 차트 형태가 나올 수 있음(캐시 히트 시엔 동일). 특히 가격이 뉴스로 크게 움직인 뒤 차트에는 그 움직임이 반영되지 않아 학생들이 혼란을 겪음. 단기적으로는 차트 모달에 "실시간 반영 미지원 — 참고용" 안내 문구를 추가하고, 장기적으로는 `StockService`에 `_price_log: list`를 추가해 게임 중 실제 가격을 타임스탬프와 함께 기록하는 방향으로 개선 가능.
+
