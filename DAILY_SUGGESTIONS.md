@@ -3101,3 +3101,34 @@
 
 - **`StockService.get_history()` 차트 데이터가 실제 게임 중 가격 변동과 무관한 랜덤값** (`stock_service.py:281-310`): `get_history()`는 `current` 가격에서 역방향으로 랜덤 바(bar)를 생성하므로, 같은 종목을 두 번 조회해도 다른 차트 형태가 나올 수 있음(캐시 히트 시엔 동일). 특히 가격이 뉴스로 크게 움직인 뒤 차트에는 그 움직임이 반영되지 않아 학생들이 혼란을 겪음. 단기적으로는 차트 모달에 "실시간 반영 미지원 — 참고용" 안내 문구를 추가하고, 장기적으로는 `StockService`에 `_price_log: list`를 추가해 게임 중 실제 가격을 타임스탬프와 함께 기록하는 방향으로 개선 가능.
 
+
+## 2026-07-28 (2차)
+
+### 추가하면 좋을 기능
+
+- **호스트 공지 방송 기능** (`app.py` 신규 엔드포인트, `app.js:enterParticipantGame()` 폴링 루프): 진행자가 수업 중 학생 전체에게 즉시 메시지를 보낼 방법이 없어 현재는 '폭탄뉴스'만 간접 소통 수단임. `POST /api/rooms/<rid>/host/broadcast` 엔드포인트를 추가해 `{'message': str, 'ts': float}` 를 인메모리에 저장하고, `get_room()` 응답 또는 별도 `GET /api/rooms/<rid>/broadcast` 로 최신 공지를 노출하면 됨. `app.js` 폴링 루프(`app.js:613`)에서 `ts` 비교 후 새 공지가 있으면 `showBombNews()` 와 유사한 팝업 배너로 표시. 수업 재개·행동 지시·긴급 공지에 즉각 활용 가능.
+
+- **거래 내역 액션 필터** (`app.js:1569-1593 loadTxn()`, `app.py:829-847 get_transactions()`): 포트폴리오의 거래 내역에 매수·매도·조정·룰렛이 모두 섞여 있어 특정 패턴을 찾기 어려움. `?action=BUY` 쿼리파라미터를 `get_transactions()` 에 추가하거나(서버에서 `.filter()` 한 줄 추가), 클라이언트에서 전체 1페이지를 로드한 뒤 `filter(t => !tab || t.action === tab)` 로 필터링하는 방식으로 구현. `txn-list` 위에 BUY / SELL / ADJ / 전체 탭 버튼을 두면 학생이 자신의 투자 행태를 종류별로 돌아볼 수 있음.
+
+- **포트폴리오 분산도 점수 표시** (`app.js:1457-1563 loadPortfolio()`, `app.py:772-803 get_portfolio()`): 학생이 몇 개 섹터에 분산 투자했는지 알 수 없음. `get_portfolio()` 응답에 이미 각 보유 종목의 `sector` 가 포함되어 있으므로, `app.js` 클라이언트에서 `new Set(holdings.map(h => h.sector)).size` 로 섹터 수를 집계하고 보유 섹터 수에 따라 1개=❌분산없음, 3+개=🟡적절, 5+개=✅우수 배지를 포트폴리오 요약 카드 아래에 표시. 서버 변경 없이 JS 약 8줄 추가로 분산투자 교육 메시지를 시각화.
+
+- **학생 연결 상태 표시 (활성/비활성 표시)** (`app.py:542-562 host_members()`, `models.py RoomMember`): 진행자 랭킹 목록에서 어떤 학생이 실시간으로 게임에 접속 중인지 알 수 없음. `RoomMember` 에 `last_seen = db.Column(db.DateTime, nullable=True)` 컬럼을 추가(`app.py:31-40` `ALTER TABLE` 패턴 활용)하고, `get_room()` 또는 `get_portfolio()` 진입 시 `member.last_seen = datetime.utcnow()` 를 갱신. `host_members()` 응답에 `last_seen_secs` 를 포함해 60초 이내이면 초록 점, 초과이면 회색 점을 `host-member-row` 에 표시하면 교사가 오프라인 학생을 즉시 식별 가능.
+
+- **방 설정 프리셋 저장 (localStorage)** (`app.js:121-140 doCreateRoom()`, `static/index.html 방 만들기 폼`): 교사가 매번 게임을 생성할 때 게임 시간·시작 자금·예금 금리를 다시 입력해야 함. `doCreateRoom()` 에서 방 생성 성공 시 `localStorage.setItem('roomPreset', JSON.stringify({dur, cash, rate}))` 로 저장하고, 방 만들기 화면 진입 시(`enterHostLobby()` 이전) 저장된 값을 폼 필드에 자동 복원. 5줄 이하의 JS 변경으로 반복 수업에서 설정 재입력 부담을 없앨 수 있음.
+
+- **최소 거래 단위 설정 (lot size)** (`app.py:363-390 create_room()`, `app.py:724-767 trade()`, `models.py Room`): 시작 자금이 큰 게임에서 학생들이 1주씩 잦은 소량 거래를 반복해 순위보다 거래 횟수 경쟁이 되는 경우가 있음. `Room` 모델에 `min_lot = db.Column(db.Integer, default=1)` 추가, `create_room()` 에서 `min_lot` 파라미터를 수신, `trade()` 에서 `if shares % room.min_lot != 0: return 400` 체크. 방 생성 UI에 "최소 거래 단위" 선택 드롭다운(1 / 10 / 100 / 1000주)을 추가하면 수업 목표에 맞게 조절 가능.
+
+### 제거/단순화할 것들
+
+- **`get_rankings()` · `host_members()` N+1 쿼리 — 학생 30명 시 90회 이상 SQL 발행** (`app.py:107-118 member_total_value()`, `app.py:812-824`, `app.py:542-562`): `member_total_value(rid, uid)` 가 호출될 때마다 `RoomMember` 1건 + `RoomHolding` 필터 + `Deposit` 필터 쿼리 3개를 실행하며, 랭킹·호스트 멤버 목록 모두 멤버 수 N 만큼 반복 호출함. 수정 방법: 두 엔드포인트 진입 시 `RoomHolding.query.filter_by(room_id=rid).all()` 과 `Deposit.query.filter_by(room_id=rid, status='active').all()` 을 한 번씩만 호출하고 `{uid: [holdings]}`, `{uid: [deposits]}` 딕셔너리로 집계한 뒤 각 멤버의 총자산을 Python에서 계산하면 쿼리 수가 O(N)→O(1) 로 줄어 10초 폴링 부하가 크게 감소.
+
+- **`datetime.utcnow()` Python 3.12 deprecation 전면 적용** (`app.py:125,279,437,442,447,458,482,496,499,511,530,534,985,988,990` 및 `models.py:20,38,53,79,91`): `datetime.utcnow()` 는 Python 3.12에서 공식 deprecation 경고가 발생하며 향후 제거 예정. 코드에서 이미 `from datetime import timezone` 을 임포트(`app.py:2`)하고 있으므로 `datetime.utcnow()` 전체를 `datetime.now(timezone.utc).replace(tzinfo=None)` (기존 naive datetime 유지 시) 또는 `datetime.now(timezone.utc)` (aware datetime 전환 시)로 일괄 치환. `models.py` 의 `default=datetime.utcnow` 도 `default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)` 으로 교체 필요.
+
+- **`SECRET_KEY` 하드코딩 fallback — 세션 위조 보안 취약점** (`app.py:13`): `app.secret_key = os.environ.get('SECRET_KEY', 'mock-stock-game-secret-2024')` 코드가 GitHub에 공개되어 있어 SECRET_KEY 환경 변수가 누락된 배포에서 공격자가 임의 `user_id` 가 담긴 서명된 쿠키를 직접 생성해 다른 사용자로 위장할 수 있음. Render 환경 변수가 누락된 경우를 대비해 `if not os.environ.get('SECRET_KEY'): import warnings; warnings.warn('SECRET_KEY not set, sessions are insecure')` 최소 경고를 추가하거나, fallback 문자열을 제거하고 `os.urandom(24).hex()` 로 랜덤 생성해 재시작 시 세션이 무효화되도록 하는 편이 안전.
+
+- **XSS 위험 — `loadLobbyMembers()` · `loadHostMembers()` 에서 username이 onclick 속성에 직접 삽입** (`app.js:229`, `app.js:425-426`): `onclick="doKickMember(${m.user_id},'${m.username.replace(/'/g,"\\'")}')"`  패턴은 `'` 만 이스케이프하므로 username에 `</button><img src=x onerror=alert(1)>` 같은 문자열이 포함될 경우 HTML 인젝션이 발생. 동일 취약점이 `app.js:583`(`loadPLobbyMembers`)에도 존재. 수정: 동적 username을 `onclick` 인라인 대신 `data-uid` / `data-name` 속성에 넣고 이벤트 위임(`element.dataset.name`)으로 접근하거나, 이미 정의된 `escHtml()` (`app.js:897`)를 innerHTML에 사용.
+
+- **`refreshMyRank()` 가 전체 랭킹 쿼리를 10초마다 호출 — 자신의 순위만 필요함에도 N명 집계 수행** (`app.js:735-752`, `app.py:808-824 get_rankings()`): `refreshMyRank()` 는 단순히 현재 사용자의 순위·총자산을 HUD에 업데이트하기 위해 방의 전 참여자를 조회하는 `get_rankings()` 를 호출함. 학생 수가 많을수록 비효율. `GET /api/rooms/<rid>/portfolio` 응답에 `rank` 와 `total_members` 필드를 추가하거나(이미 rankings 정보를 가져오므로 서버에서 정렬 뒤 현재 user rank를 포함), 별도 `GET /api/rooms/<rid>/my-rank` 경량 엔드포인트를 신설해 `member_total_value()` 1회 + 전체 멤버 total 집계로 순위만 반환.
+
+- **`minigame_close()` 에서 deprecated `Room.query.get(rid)` 사용** (`app.py:976`): `_rlt_lock` 블록 내부에서 `room = Room.query.get(rid)` (레거시 SQLAlchemy 1.x `Query.get()`)를 사용. 나머지 코드는 모두 `db.session.get(Room, rid)` 또는 `.get_or_404()` 를 사용하는데 이 위치만 누락됨. `db.session.get(Room, rid)` 로 교체하면 일관성 확보 및 SQLAlchemy 2.x 경고 제거.
+
