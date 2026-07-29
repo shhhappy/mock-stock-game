@@ -3132,3 +3132,32 @@
 
 - **`minigame_close()` 에서 deprecated `Room.query.get(rid)` 사용** (`app.py:976`): `_rlt_lock` 블록 내부에서 `room = Room.query.get(rid)` (레거시 SQLAlchemy 1.x `Query.get()`)를 사용. 나머지 코드는 모두 `db.session.get(Room, rid)` 또는 `.get_or_404()` 를 사용하는데 이 위치만 누락됨. `db.session.get(Room, rid)` 로 교체하면 일관성 확보 및 SQLAlchemy 2.x 경고 제거.
 
+
+---
+
+## 2026-07-29
+
+### 추가하면 좋을 기능
+
+- **엑셀 순위표에 거래 횟수 / 퀴즈 참여 통계 컬럼 추가** (`app.py:1419-1488`, `export_rankings()`): 현재 Excel에는 순위·이름·학번·최종 자산·수익률·수익금액만 포함. `RoomTransaction.query.filter_by(room_id=rid, user_id=uid)` 결과를 `action`별로 집계해 매수 횟수, 매도 횟수, 퀴즈 정답 횟수(`note='퀴즈 정답' 포함 RLT ADJ 제외 ADJ`)를 열로 추가하면 수업 참여도 평가에 직접 활용 가능. `app.py:1431-1439` 루프에서 멤버별 트랜잭션을 한 번에 일괄 조회(`RoomTransaction.query.filter_by(room_id=rid).all()` → uid별 dict)해 N+1 없이 구현.
+
+- **게임 진행 중 강퇴 기능** (`app.py:564-575`, `kick_member()`): 현재 `room.status != 'waiting'` 조건(`app.py:570`)으로 게임 시작 후 강퇴 불가. 수업 중 인터넷 채팅 등 방해 학생을 즉시 제거할 수 없음. 게임 중 강퇴 시 보유 주식을 현재가로 청산해 cash로 환원(`_end_room` 내 개별 청산 로직 참조)하거나, 단순히 `RoomMember` 레코드를 삭제하되 순위 계산에서 제외하는 방식으로 구현 가능. 프론트엔드는 이미 강퇴 버튼(`app.js:229`)이 있으므로 서버 조건 제거만으로 기능 활성화.
+
+- **참여자 마지막 활동 시간 추적** (`models.py:47-54`, `RoomMember`): 현재 진행자는 누가 실제로 화면을 보고 거래하는지 알 수 없음. `RoomMember`에 `last_active_at = db.Column(db.DateTime)` 컬럼을 추가하고, 매매(`app.py:724-767`)·퀴즈 제출(`app.py:1270`)·포트폴리오 조회(`app.py:772`) 등 주요 엔드포인트에서 업데이트. `host_members()` 응답(`app.py:548-562`)에 `last_active_ago` 초를 포함하면 진행자 대시보드에서 "5분 이상 미활동" 학생을 바로 파악해 독려 가능.
+
+- **진행자 수동 룰렛 트리거** (`app.py:519-537`, `end_room()`; `app.js:217`): 룰렛은 게임 종료 5초 전 자동 트리거만 지원(`app.py:446-465`). 복권처럼 진행자가 게임 중간에 "역전의 기회"로 수동 룰렛을 실행할 수 없음. `host_settings` 탭에 "룰렛 지금 시작" 버튼을 추가하고, 신규 `POST /api/rooms/<rid>/host/trigger-roulette` 엔드포인트에서 `room.rlt_triggered = True`, `room.status = 'paused'`, `room.paused_at = now` 처리 후 참여자 폴링에서 `minigame_available` 플래그로 오버레이 트리거. 기존 `minigame_open/close/spin` 로직 그대로 재사용 가능.
+
+- **포트폴리오 페이지에서 직접 매도 버튼 추가** (`app.js:1481-1540`, `loadPortfolio()`; `static/index.html:386-403`): 현재 보유 종목 카드에는 "내역" 버튼만 있고, 매도하려면 시장 탭으로 이동해 종목을 검색·클릭해야 함. 포트폴리오 종목 카드에 "매도" 버튼을 추가해 `openStockModal(symbol, holdingFallback)` 를 호출하면 2-3탭 이동을 없앨 수 있음. `openStockModal()`이 `fallback` 파라미터를 이미 지원(`app.js:1327`)하므로 현재 가격을 전달해 차트 로딩 없이 즉시 거래 모달 오픈 가능.
+
+### 제거/단순화할 것들
+
+- **`loadLobbyMembers()` / `loadPLobbyMembers()` / `loadHostMembers()` XSS 취약점** (`app.js:224`, `app.js:583`, `app.js:413`): `m.username`이 `innerHTML` 문자열 보간(`${m.username}`)으로 직접 삽입됨. 서버 측 입력 검증(`app.py:333`)이 길이만 체크해 `<img src=x onerror=alert(1)>` 같은 페이로드(26자, 유효)를 허용. `escHtml()` 함수가 `app.js:897`에 이미 존재하나 세 곳 모두 미적용. 또한 `app.js:229`의 onclick 인라인 핸들러 `'${m.username.replace(/'/g,"\\'")}'`도 `</ 스크립트>` 같은 인젝션에 취약. 수정: 세 함수의 username 렌더링 모두 `escHtml(m.username)`으로 교체. 서버에서도 `app.py:334`에 `import re; if re.search(r'[<>&"\']', u): return ...` 방어 추가 권장 (교실 공개 배포 환경이므로 우선순위 높음).
+
+- **`_quiz_settings` / `_roulette_config` 서버 재시작 시 소실** (`app.py:1246-1247`, `app.py:250`): Render 무료 플랜은 비활성 15분 후 컨테이너를 재시작. 진행자가 설정한 퀴즈 보상률·패널티율과 룰렛 배율·확률이 모두 초기화됨. `Room` 모델에 `quiz_reward_pct`, `quiz_penalty_pct`, `rlt_multipliers`, `rlt_weights` 컬럼을 추가하거나(또는 `Room.extra_config = db.Column(db.Text)` JSON 컬럼 하나로 통합), `_quiz_settings`/`_roulette_config` dict 조회 시 DB를 fallback으로 사용하면 재시작 내성 확보. `app.py:26-40`의 `ALTER TABLE` 패턴을 그대로 활용해 마이그레이션 가능.
+
+- **`stock_service.py` 1일 차트가 1개월 차트와 동일한 30개 일별 봉 생성** (`stock_service.py:292`): `n_bars = {'1d': 30, '5d': 5, '1mo': 30, ...}` — `1d`와 `1mo` 모두 30개 봉을 생성하며 날짜 레이블도 동일하게 `%Y-%m-%d` 단위로 붙음. 학생이 "1일" 탭을 눌러도 한 달치 그래프와 외관이 같아 시간 축 개념 학습에 혼선. `1d`는 `n_bars=16`으로 줄이고 레이블을 `HH:MM` 형식으로, `1w`는 `n_bars=5`에 요일 표기로 분리하면 실제 증권 앱과 유사한 UE 제공. `stock_service.py:296-307` 루프의 `date_str` 생성 부분에서 분기 처리.
+
+- **`enterParticipantGame()` 폴링에서 `/rankings` API 중복 호출** (`app.js:611`, `app.js:647`): 10초 interval 콜백(`app.js:613-651`)에서 `refreshMyRank()` (내부적으로 `GET /rankings` 호출) + 현재 페이지가 `rankings`이면 `loadParticipantRankings()` (또 `GET /rankings` 호출) 두 번 호출될 수 있음. 추가로 시장 페이지이면 `loadMarket()`도 동시 호출. 즉 학생 한 명당 10초마다 최대 3 API 호출 발생. `refreshMyRank()`에서 순위 정보를 별도 조회하는 대신, 기존 폴링에서 이미 받은 `GET /api/rooms/{rid}` 응답에 `my_rank`와 `my_total_value` 필드를 추가(`app.py:288-305`, `room_dict()`)하면 호출 1회로 통합 가능.
+
+- **룰렛 자동 닫힘 60초 카운트다운 경고 미흡** (`app.js:975-991`, `_startRltAutoClose()`): 잔여 스핀이 남아 있는 상태에서 60초가 지나면 오버레이가 자동으로 닫혀 나머지 기회를 잃음. 타이머 표시 (`app.js:979`) 가 작은 `font-size:11px` muted 텍스트라 학생이 주목하기 어려움. 30초 이하 구간에서 글씨를 `color:var(--down)` + `font-weight:700`으로 바꾸고, 자동 닫힘 직전에 `if (data.spins_left > 0) { confirmAutoClose() }` 확인창을 추가하거나 최소한 `closeRoulette()` 호출 전 남은 스핀 수를 toast로 표시하는 방어 코드 추가 권장.
+
