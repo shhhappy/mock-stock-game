@@ -3161,3 +3161,35 @@
 
 - **룰렛 자동 닫힘 60초 카운트다운 경고 미흡** (`app.js:975-991`, `_startRltAutoClose()`): 잔여 스핀이 남아 있는 상태에서 60초가 지나면 오버레이가 자동으로 닫혀 나머지 기회를 잃음. 타이머 표시 (`app.js:979`) 가 작은 `font-size:11px` muted 텍스트라 학생이 주목하기 어려움. 30초 이하 구간에서 글씨를 `color:var(--down)` + `font-weight:700`으로 바꾸고, 자동 닫힘 직전에 `if (data.spins_left > 0) { confirmAutoClose() }` 확인창을 추가하거나 최소한 `closeRoulette()` 호출 전 남은 스핀 수를 toast로 표시하는 방어 코드 추가 권장.
 
+
+## 2026-07-29 (2차)
+
+### 추가하면 좋을 기능
+
+- **게임 시간 연장/단축 기능 (진행자)** (`app.py:475-488`, `start_room()`; `app.js:258-274`, `enterHostGame()`): 게임 시작 후 진행자가 남은 시간을 조정할 방법이 없어 수업 흐름에 맞게 탄력 운영이 불가. `POST /api/rooms/<rid>/host/extend` 엔드포인트를 추가해 `{"minutes": 10}` (±1~30분, 최대 360분 초과 불가)를 받아 `room.end_time += timedelta(minutes=minutes)` 후 `_invalidate_room_cache(rid)` 호출. `status='paused'` 상태에서도 `paused_at + remaining + delta` 로 계산해야 올바름. 진행자 설정 탭에 "⏱ +5분 / −5분" 버튼 + 입력창으로 구현. 서버 약 15줄·클라이언트 약 20줄 추가.
+
+- **호스트 시장 탭 종목 카드 클릭 시 차트 팝업** (`app.js:343-357`, `loadHostMarket()`): 진행자 시장 탭의 종목 카드(`app.js:343`)는 클릭해도 아무 반응 없음. `renderGrid()` 와 동일하게 `onclick="openStockModal('${st.symbol}')"` 를 각 카드 `<div>`에 추가하면 기존 주식 상세/차트 모달이 재사용됨(단 매매 버튼 비활성화는 호스트 체크 조건 추가 또는 CSS `hidden` 처리). 수업 중 특정 종목 차트를 프로젝터에 바로 띄워 설명할 수 있어 교육적 흐름에 도움. 클라이언트 HTML 1줄 수정, 서버 변경 없음.
+
+- **퀴즈 누적 통계 API (진행자용)** (`app.py:1399-1414`, `quiz_settings()`; `app.py:1270-1342`, `submit_quiz()`): 진행자가 퀴즈 보상률·패널티율을 설정할 수 있지만 실제 퀴즈 참여 현황(총 참여 횟수·정답률·보상 지급 합계)을 볼 방법이 없음. `GET /api/rooms/<rid>/host/quiz-stats` 신규 엔드포인트를 추가해 `RoomTransaction.query.filter_by(room_id=rid, action='ADJ').filter(RoomTransaction.note.like('%퀴즈%')).all()` 로 정답/오답 건수 및 지급 금액을 집계. 진행자 설정 탭 퀴즈 패널 하단에 "총 시도 N회 · 정답 M회 · 보상 합계 X원" 미니 통계 카드 형태로 렌더링하면 퀴즈 교육 효과 모니터링 가능.
+
+- **포트폴리오 탭에서 예금 이자 현황 통합 표시** (`app.js:1457-1565`, `loadPortfolio()`; `app.py:852-876`, `get_deposits()`): 포트폴리오 페이지는 `deposits_locked` 총액만 요약하고 개별 예금의 예상 이자 정보가 없음. `loadPortfolio()` 내에서 `GET /deposits`를 병렬 호출(`Promise.all`)해 활성 예금 각각의 원금·예상 이자를 보유 주식 목록 아래에 섹션으로 추가하면, 학생이 포트폴리오 탭 하나에서 주식·현금·예금 이자를 포함한 전체 자산 구성을 파악 가능. 서버 변경 없이 클라이언트 약 15줄 추가.
+
+- **뉴스·주가 갱신 속도 프리셋 버튼** (`app.py:630-646`, `host_news_interval()`; `app.js:391-406`, `doSetIntervals()`): 진행자가 뉴스/주가 갱신 주기를 숫자로 직접 입력해야 해 수업 흐름 중 빠른 모드 전환이 어려움. "🐢 느림(120초/180초)", "⚡ 보통(30초/45초)", "🚀 빠름(10초/15초)", "📚 설명(60초/300초)" 프리셋 버튼 4개를 `doSetIntervals()` 입력창 위에 추가하면 클릭 한 번으로 게임 페이스 조절 가능. 각 버튼 `onclick`에서 `document.getElementById('news-interval-input').value = N` 셋팅 후 `doSetIntervals()` 호출. 기존 엔드포인트 재사용, 서버 변경 없음, 클라이언트 HTML ~25줄.
+
+- **대규모 단일 거래 확인 다이얼로그** (`app.js:1424-1454`, `execTrade()`): 스마트폰에서 수량 입력 오류로 현금 전액을 단일 종목에 투자하는 사고를 방지할 수단이 없음. `execTrade()` 내에서 `const ratio = (shares * S.tradePrice) / S.tradeCash`를 계산해 `ratio > 0.3` (보유 현금의 30% 초과)이고 `action === 'BUY'`인 경우 `confirm('현금의 ${Math.round(ratio*100)}%를 사용합니다. 계속하시겠습니까?')` 확인창을 표시. 클라이언트 JS 5줄 추가, 서버 변경 없음. 학생의 실수성 대형 매수 방지.
+
+### 제거/단순화할 것들
+
+- **`Room.query.get_or_404()` deprecated 레거시 Query API — 30개 이상 엔드포인트 전반 미수정** (`app.py:435,478,493,506,521,545,565,580,609,654,675,693,727,775,883,921,939,965,999,1081,1114,1159,1188,1213,1251,1271,1346,1364,1387,1400,1419` 등): 이전 분석에서 `minigame_close()`의 `Room.query.get(rid)` (line 976) 한 곳만 지적했으나, `Room.query.get_or_404(rid)` 도 동일하게 SQLAlchemy 2.0 레거시 Query API임. Flask-SQLAlchemy 3.x에서 `db.get_or_404(Room, rid)` 또는 `db.session.get(Room, rid)` + 404 처리로 일괄 교체 필요. 프로젝트 전체 `Room.query.get_or_404` 패턴을 `sed -i 's/Room\.query\.get_or_404(\(.*\))/db.get_or_404(Room, \1)/g'` 로 일괄 치환 후 테스트.
+
+- **`create_room()` int/float 변환 try/except 누락 — 비숫자 입력 시 500 에러** (`app.py:384-387`): `int(d.get('duration_minutes', 30))`, `float(d.get('starting_cash', 10_000_000))`, `float(d.get('deposit_rate', 3.0))` 세 변환에 try/except 가 없음. 악의적 사용자가 `{"duration_minutes": "abc"}` 전송 시 `ValueError` → 500 응답. `trade()` (`app.py:738-739`)는 동일 패턴에 try/except를 적용했으나 `create_room()`은 누락. 세 변환을 `try: duration=int(...) except (TypeError,ValueError): return jsonify({'error':'잘못된 입력'}),400` 패턴으로 보호 필요.
+
+- **`_auto_start_lottery_if_due()` 복권 `revealed` 상태에서 다음 회차 즉시 자동 시작 버그** (`app.py:408-430`, `app.py:181-198`): `_lot_round_due()`는 `cur['state']`가 `'picking'`/`'drawing'`이면 early-return 하지만 `'revealed'`이면 통과해 다음 회차 번호를 반환함. 이후 `_auto_start_lottery_if_due()`에서 state가 `picking/drawing` 아니면 새 round를 시작해 이전 회차 결과 화면을 덮어씀. 60분 이하 게임에서 1회차 복권이 `pct >= 2/3` 구간에 `revealed`되면 매 10초 폴링마다 2회차 자동 시작이 반복. 수정: `_lot_round_due()` 의 early-return 조건을 `if cur and cur.get('state') in ('picking', 'drawing', 'revealed'): return None` 으로 확장.
+
+- **`lobby_members()` 멤버십·호스트 검증 없음 — 임의 rid로 전체 참여자 목록 열람 가능** (`app.py:577-585`): `@login_required` 외 접근 제어 없음. 로그인된 사용자가 임의 rid로 `GET /api/rooms/{rid}/host/lobby-members`를 호출하면 해당 방 모든 학생 닉네임이 노출. 참여자 로비(`loadPLobbyMembers`)도 이 엔드포인트를 사용하므로 완전 차단 대신, `user = cur_user(); room = db.get_or_404(Room, rid); if room.host_id != user.id and not RoomMember.query.filter_by(room_id=rid, user_id=user.id).first(): return jsonify({'error':'권한없음'}), 403` 을 추가해 방 관계자만 접근 허용.
+
+- **`StockService.get_history()` 캐시 만료 시 매번 다른 랜덤 차트 생성** (`stock_service.py:281-309`): `HISTORY_CACHE_TTL=120`초 경과 후 `get_price()` 호출로 캐시가 무효화되면(`stock_service.py:187-189`), 학생이 "1달" 탭 → "3달" 탭 → 다시 "1달" 탭을 누를 때 캐시 미스 시마다 완전히 다른 형태의 차트가 표시됨. 학생이 이미 본 차트를 다시 보려 하면 혼란. 수정: `StockService.__init__`에서 `self._history_seed = random.randint(0, 2**32)`를 한 번 고정한 뒤, `get_history()` 내 바(bar) 생성 직전 `random.seed(self._history_seed ^ hash((symbol, period)))` 를 적용해 같은 종목·기간 조합은 항상 같은 형태의 차트를 생성.
+
+- **`minigame_close()` `unfreeze()` 호출이 `db.session.commit()` 보다 앞에 위치 — 가격 재개와 상태 저장 사이 경쟁 조건** (`app.py:978-990`): `_rlt_lock` 블록 안에서 `get_room_service(rid).unfreeze()` (가격 시뮬레이션 재개) → `room.status = 'active'` → `db.session.commit()` 순으로 진행됨. `unfreeze()` 이후 commit 전 수 ms 동안 가격은 변동되지만 DB는 `status='paused'`를 유지해, 그 사이 `get_room()` 폴링을 받은 클라이언트는 "일시정지 상태지만 가격은 변동 중"인 불일치 상태를 받게 됨. `db.session.commit()` 완료 후 `unfreeze()`를 호출하는 순서 교환으로 해결 (`app.py:988` ↔ `app.py:989` 순서 변경).
+
+- **`submit_quiz()` 타임아웃과 의도적 오답 구별 불가 — 서버 측 통계 블랙박스** (`app.js:876-879`, `app.py:1282-1342`): 퀴즈 30초 타임아웃 시 클라이언트가 `{answer: false}` 를 전송(`app.js:877`)해 서버는 이를 일반 오답과 동일하게 처리·패널티 부과. 의도적 틀린 답과 미응답을 구분할 수 없어 향후 퀴즈 통계 기능 추가 시 데이터 품질 저하. 수정: `{answer: false, timed_out: true}` 필드를 추가하고, `submit_quiz()` (`app.py:1281`)에서 `timed_out = bool(d.get('timed_out'))` 수신 후 `RoomTransaction.note` 에 `'퀴즈 시간초과'`/`'퀴즈 오답'` 으로 구분 기록. 클라이언트 1줄·서버 3줄 수정.
