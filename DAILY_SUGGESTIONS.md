@@ -3193,3 +3193,29 @@
 - **`minigame_close()` `unfreeze()` 호출이 `db.session.commit()` 보다 앞에 위치 — 가격 재개와 상태 저장 사이 경쟁 조건** (`app.py:978-990`): `_rlt_lock` 블록 안에서 `get_room_service(rid).unfreeze()` (가격 시뮬레이션 재개) → `room.status = 'active'` → `db.session.commit()` 순으로 진행됨. `unfreeze()` 이후 commit 전 수 ms 동안 가격은 변동되지만 DB는 `status='paused'`를 유지해, 그 사이 `get_room()` 폴링을 받은 클라이언트는 "일시정지 상태지만 가격은 변동 중"인 불일치 상태를 받게 됨. `db.session.commit()` 완료 후 `unfreeze()`를 호출하는 순서 교환으로 해결 (`app.py:988` ↔ `app.py:989` 순서 변경).
 
 - **`submit_quiz()` 타임아웃과 의도적 오답 구별 불가 — 서버 측 통계 블랙박스** (`app.js:876-879`, `app.py:1282-1342`): 퀴즈 30초 타임아웃 시 클라이언트가 `{answer: false}` 를 전송(`app.js:877`)해 서버는 이를 일반 오답과 동일하게 처리·패널티 부과. 의도적 틀린 답과 미응답을 구분할 수 없어 향후 퀴즈 통계 기능 추가 시 데이터 품질 저하. 수정: `{answer: false, timed_out: true}` 필드를 추가하고, `submit_quiz()` (`app.py:1281`)에서 `timed_out = bool(d.get('timed_out'))` 수신 후 `RoomTransaction.note` 에 `'퀴즈 시간초과'`/`'퀴즈 오답'` 으로 구분 기록. 클라이언트 1줄·서버 3줄 수정.
+
+## 2026-07-30
+
+### 추가하면 좋을 기능
+
+- **`api.get()/api.post()` 서버 상세 오류 메시지 미전달 — 학생에게 "HTTP 400"만 노출** (`app.js:30-44`): `!r.ok` 시 `return {error: 'HTTP ${r.status}'}` 로 서버의 JSON body를 버림. 예를 들어 매수 실패 시 서버는 `{"error": "잔액 부족 — 필요: 1,500,000원 / 보유: 800,000원"}` (400)를 반환하지만(`app.py:749`), `execTrade()` (`app.js:1435`)의 피드백 필드에는 "HTTP 400"만 표시됨. `const body = await r.json().catch(()=>({})); return {error: body.error || 'HTTP ${r.status}'}` 로 교체하면 백엔드 전 엔드포인트의 상세 메시지가 UI에 표출되어 수업 중 학생 혼란 즉각 감소. 클라이언트 2줄 수정, 서버 변경 없음.
+
+- **순위/호스트 멤버 조회 N+1 쿼리 최적화** (`app.py:107-118`, `app.py:815-823`, `app.py:542-562`): `get_rankings()`와 `host_members()` 모두 for 루프 안에서 `member_total_value(rid, uid)`를 호출하며, 이 함수는 내부적으로 `RoomHolding.query.filter_by(room_id=rid, user_id=uid)`·`Deposit.query.filter_by(room_id=rid, user_id=uid)` 두 쿼리를 실행. 학생 30명 기준 1회 순위 갱신마다 최소 60 추가 쿼리. `RoomHolding.query.filter_by(room_id=rid).all()`·`Deposit.query.filter_by(room_id=rid, status='active').all()` 을 루프 진입 전 각 1회 실행하고 `user_id`로 딕셔너리화하면 전체 쿼리를 2개로 고정. Render 무료 SQLite 환경에서 10초 폴링 × 30명 = 분당 1,800개 → 120개로 감축.
+
+- **게임 종료 결과 화면에서 개인 거래 요약 표시** (`app.js:798-804`, `publishResults()`; `app.py:828-847`, `get_transactions()`): `screen-results`는 현재 전체 순위 바차트·발표 버튼·Excel 다운로드만 있음. 학생이 자신의 매매 결정을 되짚는 성찰 기회가 없어 교육 효과 반감. `loadResults()` 완료 후 `GET /api/rooms/{rid}/transactions` 를 호출해 거래 내역(시간·종목·수량·단가)을 결과 화면 하단 "내 투자 돌아보기" 섹션으로 추가. 서버 변경 없음, 클라이언트 약 20줄.
+
+- **진행자 로비에서 게임 설정 변경 기능** (`app.py:363-390`, `create_room()`; `app.py:475-488`, `start_room()`): 방 생성 후 `status='waiting'` 동안 게임 시간·시작 자금·예금 금리 변경 불가. 수업 시간 조정이나 학생 수 변화에 대응 곤란. `PATCH /api/rooms/<rid>` 엔드포인트를 추가해 `waiting` 상태에서만 `duration_minutes`·`starting_cash`·`deposit_rate` 업데이트 허용 후 `_invalidate_room_cache(rid)` 호출. 로비 화면에 작은 "⚙️ 설정 변경" 토글로 구현. 서버 약 15줄, 클라이언트 약 25줄.
+
+- **룰렛 자동 자산 청산 전 확인 모달 추가** (`app.py:1022-1058`, `minigame_spin()`; `app.js:1032-1097`, `doRouletteSpin()`): 베팅금이 보유 현금을 초과하면 서버가 보유 주식→예금 순으로 자동 청산(`app.py:1026-1058`). 학생은 "왜 내 삼성전자 주식이 팔렸냐"는 당혹감을 겪음. 클라이언트 `doRouletteSpin()` 에서 `bet > S.tradeCash`(현금만) 조건 시 `confirm('현금이 부족해 보유 주식이 자동으로 청산됩니다. 계속하시겠습니까?')` 확인 다이얼로그 추가. 서버 변경 없음, 클라이언트 3줄.
+
+### 제거/단순화할 것들
+
+- **퀴즈 타임아웃 시 `answer=false` 전송 → `a: False` 정답 문항에서 보상 지급 버그** (`app.js:877`, `app.py:1282-1286`, `education_data.py:190,193,195,199,202,204,205,206` 등): 30초 타임아웃 시 클라이언트가 `{answer: false}` 전송(`app.js:877`). 서버 `submit_quiz()`는 `user_answer = bool(d.get('answer'))` → `False` 로 평가 후 `correct = user_answer == q['a']` 계산. `education_data.py`의 퀴즈 40여 문항 중 절반 이상이 `'a': False` (예: id 2·5·7·9·12·14·16·17·19 등) 이므로, 해당 문제를 받은 학생이 30초 무응답·타임아웃해도 `False == False = True` → **정답 판정 후 보상 지급**. 수정: `app.js:877`을 `{answer: false, timed_out: true}` 로 변경하고 서버 `app.py:1282` 에서 `if bool(d.get('timed_out')): correct = False` 분기 추가. 클라이언트 1줄·서버 2줄.
+
+- **`host_adjust()` delta NaN/Infinity 입력 시 회원 cash DB 오염** (`app.py:593-603`): `delta = float(d.get('delta', 0))` 는 `float('nan')`, `float('inf')` 를 유효한 파이썬 값으로 허용. `m.cash = max(0, m.cash + float('nan'))` = `nan` 이 DB에 저장되면 이후 `member_total_value()`·순위 계산·Excel 내보내기에서 `TypeError`·표시 오류 연쇄 발생. 수정: 변환 직후 `import math; if not math.isfinite(delta): return jsonify({'error': '잘못된 금액'}), 400` 1줄 추가. 현재 `trade()` (`app.py:739`)와 `create_deposit()` (`app.py:888-889`)도 동일 패턴 미적용 상태.
+
+- **`loadPortfolio()` 자산 추이 라인 차트 매 탭 전환마다 파괴·재생성** (`app.js:1505-1540`): 포트폴리오 탭 진입마다 `S.assetLineChart.destroy()` 후 `new Chart(...)` 재실행. Chart.js 인스턴스 생성 비용(DOM 조작·캔버스 초기화) 이 불필요하게 반복. `S.hostBarChart` (`app.js:440-447`)처럼 인스턴스가 이미 있으면 `data.labels`·`datasets[0].data`를 업데이트 후 `update()` 호출하는 패턴으로 교체. 탭 전환 애니메이션도 끊기지 않게 됨.
+
+- **`lobby_members()` 호스트 또는 방 멤버 여부 미검증 — 임의 rid로 전체 참여자 닉네임 열람 가능** (이전 29일 항목 심화): `app.py:577-585` 는 `@login_required`만 적용. 방 멤버·호스트 체크 없음. 그러나 참가자 로비(`enterParticipantLobby()`)도 이 엔드포인트를 사용하므로(`app.js:579`) **완전 차단 불가**. 해결책: `user = cur_user()` 조회 후, `room.host_id == user.id OR RoomMember.query.filter_by(room_id=rid, user_id=user.id).exists()` 조건으로 방 관계자만 허용하는 guard 추가. 비관계자 403 반환. 서버 5줄.
+
+- **`refreshMyRank()` 와 `enterParticipantGame()` 폴링 내 `/rankings` 중복 호출** (이전 분석에서 지적됐으나 해결책 구체화): `app.js:613` 의 10초 interval 콜백이 `refreshMyRank()` (`app.js:647`, 내부 `GET /rankings`)와 `S.currentPage === 'rankings'`인 경우 `loadParticipantRankings()` (역시 `GET /rankings`)를 모두 호출 → 순위 탭 활성화 시 10초마다 동일 API 2회 중복 호출. `room_dict()` (`app.py:288-305`)에 `my_rank` 필드를 추가하고 `GET /api/rooms/{rid}` 폴링을 재사용하면 `refreshMyRank()` 전용 호출 제거 가능. 현재 `room_dict()`가 이미 uid를 파라미터로 받으므로 (`app.py:278`) 서버 측 구현 용이.
