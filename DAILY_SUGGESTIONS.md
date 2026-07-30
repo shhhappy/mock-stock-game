@@ -2,6 +2,40 @@
 
 ---
 
+## 2026-07-30
+
+### 추가하면 좋을 기능
+
+- **포트폴리오 탭 실시간 자동 갱신** (`app.js:613-651`, `showPage()` / `enterParticipantGame()` 폴링 루프): 현재 포트폴리오 탭은 `showPage('portfolio')` 호출 시 한 번만 `loadPortfolio()`를 실행하고 이후 갱신이 없음. 10초 폴링 루프(`app.js:648-649`)에 `if (S.currentPage === 'market')`, `if (S.currentPage === 'rankings')` 분기는 있지만 `portfolio`는 빠져 있어, 탭을 열어 둔 채 가격이 변해도 보유 종목 평가액이 그대로임. `if (S.currentPage === 'portfolio') loadPortfolio();` 한 줄을 `app.js:649` 바로 다음에 추가하면 서버 변경 없이 보유 주식 실시간 평가가 가능해짐. 다른 탭들과 일관된 UX 제공.
+
+- **진행자 공지 브로드캐스트 기능** (`app.py` 신규 `POST /api/rooms/<rid>/host/announce`, 진행자 설정 탭): 진행자가 수업 중 모든 학생에게 텍스트 메시지를 전달할 방법이 없음. `_notices: dict = {}  # room_id -> {text: str, ts: float}` in-memory 딕셔너리를 추가하고, `POST /api/rooms/<rid>/host/announce` 에서 `_notices[rid] = {'text': text, 'ts': time.time()}`로 저장한 뒤, 참여자 폴링 응답(`get_room()`)에 `notice`를 포함시키면 됨. 프론트에서 `r.notice`가 이전 `ts`와 다르면 토스트 또는 고정 배너로 표시. 서버 약 15줄, 클라이언트 `<input>` + `<button>` 추가. "지금부터 반도체 섹터 설명합니다!" 같은 수업 연계 공지 전달 가능.
+
+- **순위 변동 화살표 실시간 표시** (`app.js:loadParticipantRankings()`, `app.py:808-824`, `get_rankings()`): 현재 순위판은 현재 순위만 표시하고 이전 순위 대비 변동(▲2, ▼1, ─)이 없음. 클라이언트 측에서 `let _prevRanks = {}` 로 이전 순위를 캐시하고, `loadParticipantRankings()` 렌더링 시 `_prevRanks[e.user_id]`와 비교해 `▲${prev-cur}`, `▼${cur-prev}`, `─`로 변동을 표시한 뒤 `_prevRanks`를 갱신하면 됨. 서버 변경 없이 약 10줄로 구현 가능. 순위가 오르면 녹색 화살표, 내리면 빨간 화살표로 게임 긴장감이 크게 높아짐.
+
+- **퀴즈 오답 이력 및 복습 노트** (`app.py:1270-1342`, `submit_quiz()`, `app.js:870-890`, `submitQuiz()`): 현재 퀴즈 오답 해설(`data.explanation`)은 창 닫힘과 동시에 사라지고 재확인 방법이 없음. `submit_quiz()` 에서 `RoomTransaction(action='QUIZ', note=f"{'O' if correct else 'X'}: {q['q'][:80]}")` 로 응답 이력을 기록하고(`app.py:1339` 직전 추가), 거래 내역 탭에서 `action='QUIZ'` 필터로 조회하거나 별도 "내 퀴즈 기록" 섹션을 교육 탭에 추가하면 됨. 게임 종료 후 "틀린 문제 다시 보기"가 가능해 교육 효과 직결.
+
+- **섹터 이벤트 예고 카운트다운** (`app.py:1345-1360`, `host_market_event()`, 진행자 UI): 현재 섹터 이벤트(`force_sector_event()`)는 즉시 적용됨. `countdown_seconds` 파라미터를 추가해 진행자가 "3초 후 IT 섹터 급락!" 예고를 먼저 보낸 뒤 실제 이벤트가 발생하도록 하면 학생들이 실시간 판단을 연습할 수 있음. `threading.Timer(countdown, lambda: get_room_service(rid).force_sector_event(sector, pct))`로 약 5줄 구현. `countdown <= 0`이면 즉시 적용하는 기존 동작 유지. 뉴스 캐시 무효화와 연계해 카운트다운 도중 "⚠️ N초 후 이벤트 예정" 뉴스를 먼저 발송하면 교육 효과 극대화.
+
+- **진행자 게임 중 포트폴리오 스냅샷 기록** (`app.py` 신규 `POST /api/rooms/<rid>/host/snapshot`, `RoomTransaction` 활용): 진행자가 게임 중간에 "지금 모든 학생 자산 기록" 버튼을 누르면 전 멤버의 `total_value`와 `holdings` 요약을 `{label, members: [{uid, total_value, top_sector}]}` 형태로 in-memory `_snapshots[rid] = []` 에 추가. 게임 종료 후 결과 화면에서 "1차 스냅샷 vs 최종" 비교 차트를 보여주면 투자 결정의 시계열 학습이 가능. 서버 20줄, 클라이언트 버튼 하나 추가. 엑셀 내보내기에 스냅샷 시트를 추가하면 더욱 가치 있음.
+
+### 제거/단순화할 것들
+
+- **`api.get/post()` 에서 `r.json()` 파싱 실패 시 unhandled Promise rejection으로 UI 침묵 실패** (`app.js:31,36`): `api.get/post`는 서버가 HTML 오류 페이지를 반환해도 `r.ok` 검사 없이 `return r.json()`을 호출함. 실제로 `r.ok`가 `false`일 때도 `return {error: ...}`를 반환하지만, `r.json()` 자체가 JSON이 아닌 응답에서 `SyntaxError`를 던지면 try-catch가 없어 호출 스택 전체가 unhandled rejection으로 처리되고 `if (data.error)` 체크가 수행되지 않은 채 조용히 실패함. `return r.json().catch(() => ({error: 'parse error'}))` 로 교체하면 Flask 500 오류 HTML 응답에서도 안전하게 에러 메시지가 반환됨 (`app.js:31`, `36` 두 줄만 수정).
+
+- **`minigame_spin()` shortfall 조달 시 정수 버림으로 `m.cash` 음수 가능** (`app.py:1040-1044`): `shares_to_sell = max(1, int(shortfall / price))` 계산에서 `int()` 버림으로 `actual_value = price * shares_to_sell < shortfall` 인 경우가 발생. 예: shortfall=1,000원, price=700원이면 shares_to_sell=1, actual_value=700원으로 300원 미달. 이후 `m.cash = m.cash - bet + winnings`에서 `m.cash`가 음수가 될 수 있음. `shares_to_sell = math.ceil(shortfall / price)` 로 바꾸거나, 실제 조달된 금액이 shortfall보다 부족하면 shortfall을 실제 보유액으로 재조정하는 로직(`shortfall = max(0, shortfall - actual_value)`) 추가가 필요함. `import math`를 `app.py` 상단에 추가하면 됨.
+
+- **`showBombNews()` 에서 서버 headline이 innerHTML에 비이스케이프 삽입 — XSS 잠재 위험** (`app.js:1159,1163`): `<div class="bomb-news-headline">${item.headline}</div>` 와 `<div class="bomb-news-headline ${cls}">${arrow} ${item.headline}</div>` 에서 `item.headline`이 직접 innerHTML에 삽입됨. `StockService._generate_news()`가 하드코딩된 템플릿을 사용해 현재는 위험이 낮지만, 향후 진행자 커스텀 뉴스 기능(2026-07-18 제안)이 추가되면 사용자 입력이 그대로 노출됨. `escHtml()` 함수(`app.js:897`)가 이미 존재하므로 `${escHtml(item.headline)}`으로 교체하는 두 줄 수정으로 방어 가능.
+
+- **`_next_price()` ±40% 클램핑이 `force_price()` ±70%와 불일치하여 강제 상승 직후 자동 급락** (`stock_service.py:138-139,224-225`): `_next_price()`는 `max(base * 0.6, min(base * 1.4, new_price))`로 base 대비 ±40% 범위를 강제하는데, `force_price()`는 `max(base * 0.3, min(base * 3.0, new_price))`로 ±70%(하한 70%)까지 허용. 진행자가 `force_price('+40%')`로 가격을 base * 1.4에 올려놓아도 다음 `get_price()` 호출에서 `_next_price()`가 다시 `max(base * 0.6, ...)` 클램핑을 적용해 즉시 내려갈 수 있음. `_next_price()` 클램핑도 `base * 0.3 ~ base * 3.0`으로 `force_price()`와 일치시키면 강제 이벤트의 지속성이 확보됨 (`stock_service.py:139` 한 줄 수정).
+
+- **`enterParticipantGame()` 재진입 시 `S.depCash` 미초기화로 예금 탭 현금 오표시** (`app.js:590-598`): `enterParticipantGame()` 에서 `S.depRate = S.room.deposit_rate`를 설정하지만 `S.depCash`는 초기화하지 않음. 학생이 게임 도중 페이지를 새로고침해 재진입하면 이전 세션의 `S.depCash` 값이 남아 예금 탭의 "보유 현금" 표시가 잘못될 수 있음. `S.depCash = 0;` 한 줄을 `app.js:597` 직후에 추가하면 `loadDepositsPage()` 최초 호출이 올바른 초기 상태에서 시작됨.
+
+- **`force_sector_event()` 에서 `self._prev` 미업데이트로 섹터 이벤트 후 change_pct 누적 오류** (`stock_service.py:244-276`): `force_sector_event()`가 `self._prices[sym] = (time.time(), new_price)`로 현재가를 갱신하지만 `self._prev[sym]`은 게임 시작 시 설정한 초기가를 그대로 유지. 결과적으로 섹터 이벤트 직후 `change_pct`는 "방금 전 대비"가 아닌 "게임 시작 이후 누적 변동률"을 표시해, +30% 섹터 이벤트 발동 후 이미 +30%였다면 UI에서 +60%로 표시됨. `stock_service.py:253` 직후에 `self._prev[sym] = price  # 이벤트 전 가격을 prev로 설정` 추가하면 이벤트 기준 변동률이 정확해짐.
+
+- **서버 재시작 후 `_rlt_active[rid] = {'count': 0}` 복구로 첫 `minigame_close()` 호출 시 즉시 게임 종료** (`app.py:467-468`): `get_room()` 에서 `rlt_triggered=True`인 방이 재시작 후 처음 폴링되면 `_rlt_active[rid] = {'count': 0, 'auto_paused': True}`로 초기화. 그러나 재시작 전에 룰렛을 열고 있던 학생들이 `minigame_close()` 를 호출하면 `state['count'] = max(0, 0 - 1) = 0`이 되어 `count == 0 and auto_paused` 조건이 만족되면서 예기치 않게 게임이 종료됨. 복구 시 `count`는 현재 열린 룰렛 오버레이를 알 수 없으므로 `auto_paused: True` 대신 `auto_paused: False`로 초기화하고, `rlt_triggered=True` 상태에서 `minigame_close()`의 종료 분기를 별도 DB 조회로 판단하는 것이 안전함 (`app.py:467`).
+
+---
+
 ## 2026-07-18
 
 ### 추가하면 좋을 기능
