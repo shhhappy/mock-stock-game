@@ -3253,3 +3253,36 @@
 - **`lobby_members()` 호스트 또는 방 멤버 여부 미검증 — 임의 rid로 전체 참여자 닉네임 열람 가능** (이전 29일 항목 심화): `app.py:577-585` 는 `@login_required`만 적용. 방 멤버·호스트 체크 없음. 그러나 참가자 로비(`enterParticipantLobby()`)도 이 엔드포인트를 사용하므로(`app.js:579`) **완전 차단 불가**. 해결책: `user = cur_user()` 조회 후, `room.host_id == user.id OR RoomMember.query.filter_by(room_id=rid, user_id=user.id).exists()` 조건으로 방 관계자만 허용하는 guard 추가. 비관계자 403 반환. 서버 5줄.
 
 - **`refreshMyRank()` 와 `enterParticipantGame()` 폴링 내 `/rankings` 중복 호출** (이전 분석에서 지적됐으나 해결책 구체화): `app.js:613` 의 10초 interval 콜백이 `refreshMyRank()` (`app.js:647`, 내부 `GET /rankings`)와 `S.currentPage === 'rankings'`인 경우 `loadParticipantRankings()` (역시 `GET /rankings`)를 모두 호출 → 순위 탭 활성화 시 10초마다 동일 API 2회 중복 호출. `room_dict()` (`app.py:288-305`)에 `my_rank` 필드를 추가하고 `GET /api/rooms/{rid}` 폴링을 재사용하면 `refreshMyRank()` 전용 호출 제거 가능. 현재 `room_dict()`가 이미 uid를 파라미터로 받으므로 (`app.py:278`) 서버 측 구현 용이.
+
+## 2026-07-31
+
+### 추가하면 좋을 기능
+
+- **거래 요청 1초 쿨다운 (Rate limiting)** (`app.py:724-767`, `trade()`): `/api/rooms/<rid>/trade` 엔드포인트에 사용자별 속도 제한이 없음. 학생이 매수/매도 버튼을 빠르게 반복 클릭하면 동시 SQLite 쓰기가 발생해 `busy_timeout` 한도를 초과할 위험이 있음. `_trade_cooldown: dict = {}  # (rid, uid) -> float` in-memory 딕셔너리를 추가하고, `trade()` 진입 시 `time.time() - _trade_cooldown.get((rid,uid), 0) < 1.0`이면 `{'error': '1초 후 다시 시도하세요.'}` 반환(약 6줄 추가). 클라이언트에서도 버튼 disabled 처리와 연계하면 완벽. 교실에서 30명이 동시 접속하는 상황에 필수.
+
+- **실시간 가격 변동 히스토리 차트** (`stock_service.py:281-310`, `get_history()`): 현재 차트 엔드포인트는 `random.gauss()`로 매 호출마다 완전히 다른 OHLCV 데이터를 생성함. 같은 종목 차트를 두 번 열면 완전히 다른 그래프가 표시되어 교육 목적으로 신뢰도가 없음. `StockService._price_log: list = []`에 `(timestamp, price)` 튜플을 `get_price()` 호출 때마다 append하고 최근 120개만 유지하면, `get_history()`에서 실제 게임 내 가격 움직임을 반환할 수 있음. 서버 약 10줄 수정으로 "내가 산 직후 주가가 어떻게 됐는지" 실제 추이 학습 가능.
+
+- **진행자 이벤트 예고 카운트다운** (`app.py:1345-1360`, `host_market_event()`): 현재 섹터 이벤트는 버튼 클릭 즉시 적용되어 학생들이 반응할 시간이 없음. `countdown_seconds` 옵션(기본 0)을 추가해 `threading.Timer(countdown, lambda: ...)` 로 N초 후 가격 변동을 적용하고, 그 전에 "⚠️ {N}초 후 {sector} 섹터 이벤트 예정!" 뉴스를 먼저 발송하면 학생들이 매수/매도 판단을 실습할 수 있음. 약 8줄 추가.
+
+- **참여자 로비 화면에 방 코드 표시** (`static/index.html:340-352`, `screen-p-lobby`): 참여자 대기 화면에 방 이름·진행자 이름은 있지만 방 코드가 없음. 학생이 실수로 나갔다 재입장 시 코드를 다시 물어봐야 하는 불편함 발생. `plobby-room-name` div 아래에 `<div class="muted" style="font-size:12px">방 코드: <strong id="plobby-room-code" style="letter-spacing:2px">–</strong></div>` 한 줄 추가하고 `enterParticipantLobby()` (`app.js:555-576`)에서 세팅하면 됨. 서버 변경 불필요.
+
+- **호스트 순위 바 차트 스크롤** (`app.js:433-478`, `renderHostBarChart()`, `static/index.html:157`): `<canvas id="host-bar-chart" style="margin-top:16px;max-height:300px">` 설정으로 30명 이상 참여 시 학생 이름이 10px 이하로 줄어들어 판독 불가. canvas를 감싸는 `<div style="max-height:400px;overflow-y:auto">` wrapper를 추가하고 Chart.js `maintainAspectRatio: false` + 동적 height(`data.length * 28`)로 설정하면 많은 학생도 스크롤 가능하게 표시 가능.
+
+- **퀴즈 오답·정답 이력 거래내역에 기록** (`app.py:1339`, `submit_quiz()`, `RoomTransaction`): 현재 퀴즈 결과는 모달이 닫히면 사라짐. `submit_quiz()`의 `db.session.commit()` 직전에 `db.session.add(RoomTransaction(room_id=rid, user_id=user.id, symbol='QUIZ', action='ADJ', amount=reward if correct else -penalty, note=f"{'정답' if correct else '오답'}: {q['q'][:60]}"))` 한 줄 추가. 거래 내역에서 `QUIZ` 항목으로 자신의 퀴즈 성과 확인 가능. 서버 2줄, 클라이언트 `t.action === 'QUIZ'` 배지 색상 처리 5줄 추가.
+
+- **서버 재시작 후 룰렛 설정 복구** (`app.py:250-259`, `_roulette_config`, `models.py:25-41`): `_roulette_config`, `_quiz_settings`은 순수 in-memory dict로, Render 무료 플랜의 슬립/재시작 시 초기화됨. `Room` 모델에 `roulette_config_json = db.Column(db.Text, nullable=True)` 컬럼을 추가하고(ALTER TABLE 패턴 기존과 동일), 진행자가 `doSetRltConfig()` 저장 시 DB에도 JSON으로 저장하면 재시작 후에도 설정이 유지됨. 서버 약 15줄 수정.
+
+### 제거/단순화할 것들
+
+- **`_ending_soon` set 제거** (`app.py:90`, `room_dict():304`, `end_room():527`): `_ending_soon`은 1분 카운트다운 중인 방 ID를 추적하는 in-memory set. 그런데 이 상태는 `room.end_time`에 이미 인코딩되어 있음 (`end_time = now + 60s`로 업데이트됨). `room_dict()`에서 `'ending_soon': room.id in _ending_soon` 대신 `'ending_soon': bool(room.status == 'active' and room.end_time and (room.end_time - datetime.utcnow()).total_seconds() <= 65)` 로 대체하면 `_ending_soon` set 전체 제거 가능. 재시작 후 복구 문제도 동시 해결.
+
+- **`lottery_rounds_done` VARCHAR(50) → Integer count로 단순화** (`models.py:41`, `app.py:34-36`, `app.py:225-229`, `_lot_round_due():171-199`): `lottery_rounds_done = "1,2,3"` 같은 쉼표 구분 문자열은 `split(',')`, `isdigit()`, `join()` 파싱이 필요하고 50자 제한으로 이론상 12회 초과 시 truncation 발생. 복권 회차는 단순 카운트(`completed_lottery_count int`)면 충분하며, 완료 여부는 `round_n <= completed_count`로 판별 가능. 기존 파싱 로직 전체 삭제 및 단순화.
+
+- **`goHome()` 자동 로그아웃 제거** (`app.js:108-112`): `goHome()`은 `api.post('/api/auth/logout', {})` 을 호출해 세션을 파괴함. 학생이 실수로 "← 나가기" 버튼을 누르면 학번/이름을 다시 입력해야 해서 수업 흐름이 끊김. `goHome()`에서 logout API 호출을 제거하고, 다음 번 `/api/auth/me` 호출 시 기존 세션으로 복구되도록 하면 됨. 명시적 로그아웃은 별도 버튼으로만 허용. 서버 변경 없이 클라이언트 3줄 수정.
+
+- **뉴스 폴링과 방 상태 폴링 통합** (`app.js:8-9`, `startNewsPolling()`, `S.pollInterval`): 현재 두 개의 독립적인 `setInterval` 체인이 동시 실행됨 — 방 상태 폴링(`S.pollInterval`, 10초)과 뉴스 폴링(`S.newsInterval`, 별도 주기). `loadNews()` 호출을 방 상태 폴링 루프(`app.js:613-651`) 안으로 통합하면 타이머 하나를 제거할 수 있음. 현재 뉴스 간격이 방 상태보다 짧아야 하는 경우라면 방 상태 폴링을 5초로 단축하고 통합. 코드 복잡도 감소.
+
+- **스타트업 ALTER TABLE 마이그레이션 방식 개선** (`app.py:31-40`): `ALTER TABLE ... ADD COLUMN`을 `try/except`로 감싸 오류를 무시하는 방식은 "이미 컬럼 존재" 외의 실제 오류도 묻어버림. `PRAGMA table_info(rooms)` 로 컬럼 목록을 먼저 조회한 뒤 없을 때만 ALTER 실행하는 함수로 교체하면 오류 가시성이 높아짐. 약 10줄로 `_add_column_if_missing(db, 'rooms', 'col_name', 'BOOLEAN DEFAULT 0')` 헬퍼 함수 작성.
+
+- **CDN 스크립트 SRI 해시 추가** (`static/index.html:971-972`): `chart.js@4.4.0`와 `qrcodejs@1.0.0`이 `integrity=""` 없이 CDN에서 로드됨. CDN이 변조되거나 버전 핀이 풀리면 악성 스크립트 실행 가능. `<script src="..." integrity="sha384-..." crossorigin="anonymous">` 형태로 SRI 해시를 추가하면 됨. jsdelivr.net의 SRI 생성기(srihash.com)에서 즉시 취득 가능.
+
