@@ -3286,3 +3286,35 @@
 
 - **CDN 스크립트 SRI 해시 추가** (`static/index.html:971-972`): `chart.js@4.4.0`와 `qrcodejs@1.0.0`이 `integrity=""` 없이 CDN에서 로드됨. CDN이 변조되거나 버전 핀이 풀리면 악성 스크립트 실행 가능. `<script src="..." integrity="sha384-..." crossorigin="anonymous">` 형태로 SRI 해시를 추가하면 됨. jsdelivr.net의 SRI 생성기(srihash.com)에서 즉시 취득 가능.
 
+
+## 2026-07-31 (2차)
+
+### 추가하면 좋을 기능
+
+- **진행자 공지 메시지 브로드캐스트** (`app.py` 신규 엔드포인트, `app.js:808-819 startNewsPolling()`): 진행자가 자유 텍스트로 모든 학생에게 공지를 보낼 수 있는 기능이 없음. `POST /api/rooms/<rid>/host/announce` 엔드포인트를 추가해 공지 텍스트를 in-memory dict에 저장하고, 학생 10초 폴링 루프에서 `GET /api/rooms/<rid>/announce`로 최신 공지 timestamp를 비교해 새 공지가 있으면 파란색 배너로 표시. 현재는 뉴스 이벤트(폭탄뉴스)만 전달 수단이므로 "지금 IT 섹터에 집중하세요" 같은 수업 가이드 메시지를 보낼 방법이 없음.
+
+- **복권 미제출 학생 실시간 표시** (`app.py:1116-1147 get_lottery()`, `app.js:2079 _showLotHostPickingUI()`): `get_lottery()` 응답에는 `cur['picks']` dict로 제출한 학생 ID 목록이 있으나, 진행자용 응답(`room.host_id == user.id` 분기, line 1144)에는 `all_results`만 반환하고 picking 단계에서 `picked_uids`는 노출하지 않음. `state == 'picking'`일 때도 `'picked_uids': list(cur['picks'].keys())` 를 포함해 반환하고, 진행자 모달(`_showLotHostPickingUI()`)에서 전체 참여자 목록과 비교해 "미제출: 홍길동, 김철수" 를 실시간 표시. 60초 타이머 내에 독촉 가능.
+
+- **거래량 기반 동적 주가 편향 (수요·공급 시뮬레이션)** (`stock_service.py:129-139 _next_price()`, `app.py:763-764 trade()`): 현재 모든 주가 변동은 뉴스 방향 힌트와 Gaussian 난수만으로 결정되어 실제 학생들의 거래가 가격에 영향을 미치지 않음. `StockService`에 `_net_buys: dict = {}` (symbol → int 순매수 합계) 를 추가하고, `trade()` 에서 BUY/SELL 시 `svc.record_trade(symbol, action)` 호출; `_next_price()` 에서 `net_buys > 5`면 `drift += 0.02` 추가 편향 적용 후 초기화. 학생들이 "많은 사람이 사면 오른다"는 수요·공급 원리를 체감 가능.
+
+- **게임 중 예금 금리 실시간 변경** (`app.py:878-902 create_deposit()`, `models.py:34 Room.deposit_rate`): 현재 `deposit_rate`는 방 생성 시 고정되고 이후 변경 불가. `POST /api/rooms/<rid>/host/deposit-rate` 엔드포인트를 추가해 `room.deposit_rate`를 업데이트하고 `db.session.commit()`. 기존 예금은 생성 당시 잠긴 `dep.rate`를 사용하므로 소급 적용 없음. 진행자가 "금리 인상 발표!" 뉴스 이벤트 직후 금리를 올리면 학생들이 중앙은행 결정과 예금 인센티브 관계를 실습할 수 있음.
+
+- **학생 개인 거래 내역 CSV 다운로드** (`app.py:829-847 get_transactions()`, `app.js:1838-1840 downloadExcel()`): Excel 내보내기는 진행자 전용 최종 순위 파일만 제공. 학생은 자신의 거래 내역을 파일로 받을 수 없음. `GET /api/rooms/<rid>/my-transactions/export` 를 추가해 Python `csv` 모듈로 "시각, 종목, 구분, 수량, 단가, 금액, 메모" 컬럼 CSV를 `send_file()`로 반환. 포트폴리오 페이지 거래 내역 하단에 "📥 내 거래 내역 다운로드" 버튼 추가. 학생 반성 자료 및 수행평가 증빙으로 활용 가능.
+
+- **종목 목표가 알림 (클라이언트 전용)** (`app.js:1279-1283 toggleWatchlist()`, `app.js:1229-1241 loadMarket()`): 관심 종목 즐겨찾기(`watchlist`)는 화면 필터링만 지원하고 알림 기능 없음. 관심 종목 별표 버튼 롱클릭 또는 모달에서 목표가를 입력하면 `localStorage`에 `{symbol: targetPrice}` 저장; `loadMarket()` 에서 현재가와 비교해 목표가 도달 시 `toast('⭐ ${name} 목표가 도달!', 'info')` 표시. 서버 변경 없이 클라이언트 약 20줄로 구현. 학생들이 "삼성전자 80,000원 되면 알려줘" 식의 전략적 거래 훈련 가능.
+
+### 제거/단순화할 것들
+
+- **`_prev` 기준가 게임 시작 후 영구 고정 → 누적 변동률 표시 오류** (`stock_service.py:127-128 _init_prices()`, `app.py:661-670 get_stocks()`): `StockService._init_prices()` 에서 `self._prev[sym] = start` 를 초기화 시 한 번만 세팅하고 `get_price()` 호출 시 절대 갱신하지 않음. 따라서 `get_stocks()` 의 `ch = price - prev`, `ch_pct = ch / prev * 100` 은 게임 시작 기준 **누적** 변동을 표시. 30분 게임에서 변동성 높은 종목(TSLA `vol=0.055`)이 +38% 표시될 수 있어 학생들이 "등락률"을 잘못 해석. `get_price()` 에서 캐시 TTL 만료마다 `self._prev[sym] = price` 교체하면 직전 주기 대비 등락으로 수정됨.
+
+- **`get_room()` 내 `cur_user()` 3회 중복 DB 쿼리** (`app.py:439, 444, 473`): `cur_user()` 는 내부적으로 `db.session.get(User, session['user_id'])` DB SELECT를 실행. `get_room()` 에서 line 439, 444, 473 세 곳에서 각각 호출되어 단일 요청당 User 테이블 SELECT가 최대 3번 발생. 함수 진입부에 `user = cur_user()` 한 번만 호출한 뒤 재사용하도록 수정하면 DB 쿼리 2회 절약. 학생 30명이 10초마다 `/api/rooms/<rid>` 를 폴링하면 초당 최대 9회의 불필요한 User SELECT 발생.
+
+- **`enter()` TOCTOU 경쟁 조건 → 동시 가입 시 IntegrityError 500** (`app.py:334-340`): `User.query.filter_by(username=u).first()` 로 유저 존재 여부 확인 후 없으면 `User(username=u)` 생성. 두 요청이 동시에 동일 닉네임으로 들어오면 둘 다 "없음"으로 판단해 INSERT 시도 → UNIQUE 제약 위반 `IntegrityError` 발생. `join_room()` (`app.py:404`) 에는 `except IntegrityError: db.session.rollback()` 처리가 있으나 `enter()` 에는 없어 학생이 500 페이지를 봄. `try: db.session.add(user); db.session.commit() / except IntegrityError: db.session.rollback(); user = User.query.filter_by(username=u).first()` 로 수정 필요.
+
+- **강제 청산 후 `RoomHolding` 고아 행 잔류(shares=0 미삭제)** (`app.py:1037`, `app.py:1318`): `trade()` 에서 매도 완료 시 `if holding.shares == 0: db.session.delete(holding)` 처리(`app.py:762`). 그러나 룰렛 강제 청산(`app.py:1037`: `h.shares = 0; h.avg_price = 0`)과 퀴즈 오답 패널티 청산(`app.py:1318`)에서는 `db.session.delete(h)` 없이 shares=0 행이 DB에 잔류. `get_portfolio()` 는 `if h.shares <= 0: continue` 로 걸러주지만(`app.py:782`) DB에 불필요한 행이 누적되고, 쿼리 결과 셋이 커짐. 두 청산 경로 모두 `if h.shares <= 0: db.session.delete(h)` 추가로 해결.
+
+- **`host_force_price()`, `host_market_event()` 후 뉴스 캐시 미무효화** (`app.py:684-687 host_force_price()`, `app.py:1357 host_market_event()`): `host_send_news()` 는 `_invalidate_news_cache(rid)` 를 명시적으로 호출(`app.py:700`). 반면 `host_force_price()` 와 `host_market_event()` 는 `StockService` 내부적으로 `self._news` 를 업데이트하지만 `_invalidate_news_cache(rid)` 미호출. 결과적으로 학생들이 `NEWS_CACHE_TTL = 2.0초` 동안 진행자가 발동한 섹터 이벤트 뉴스를 보지 못함. 두 엔드포인트 말미에 `_invalidate_news_cache(rid)` 한 줄씩 추가로 즉각 해결.
+
+- **금전 컬럼 전체 `Float` 타입 → 부동소수점 오차 누적** (`models.py:33, 52, 65, 77, 87-88`): `Room.starting_cash`, `RoomMember.cash`, `RoomHolding.avg_price`, `RoomTransaction.amount`, `Deposit.amount` 모두 `db.Column(db.Float)`. IEEE 754에서 `10_000_000.0 - 333_333.3 - 333_333.3 - 333_333.3` 는 정확히 0이 아닐 수 있어, 반복 거래 후 `-0.000001원` 같은 음수 잔액이 생성될 수 있음. `max(0, m.cash)` 가드(`app.py:599`)가 일부 보호하나 일관성 없음. `db.Numeric(precision=18, scale=2)` 로 교체 또는 모든 연산 결과에 `round(x, 0)` 적용 통일.
+
+- **클라이언트 타이머가 학생 기기 로컬 시계 사용** (`app.js:769`): `rem = Math.max(0, Math.floor((new Date(S.room.end_time) - new Date()) / 1000))` 에서 `new Date()` 는 학생 기기 로컬 시계. 기기 시계가 서버 UTC 기준과 ±30초 오차나면 타이머 표시가 틀려 거래 가능한 시간을 오해. 서버가 이미 `remaining_seconds` 를 `room_dict()` 에서 계산해 반환하므로(`app.py:285-286`), 10초 폴링 시 수신한 `r.remaining_seconds` 로 타이머를 재보정하되 두 폴링 사이는 `setInterval(tick, 1000)` 로 감산하는 hybrid 방식이 정확. 현재 일시정지 상태에서만 `remaining_seconds` 를 사용(`app.js:765`)하고 active 상태에서는 로컬 시계를 사용하는 불일치가 있음.
