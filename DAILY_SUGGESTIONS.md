@@ -3318,3 +3318,29 @@
 - **금전 컬럼 전체 `Float` 타입 → 부동소수점 오차 누적** (`models.py:33, 52, 65, 77, 87-88`): `Room.starting_cash`, `RoomMember.cash`, `RoomHolding.avg_price`, `RoomTransaction.amount`, `Deposit.amount` 모두 `db.Column(db.Float)`. IEEE 754에서 `10_000_000.0 - 333_333.3 - 333_333.3 - 333_333.3` 는 정확히 0이 아닐 수 있어, 반복 거래 후 `-0.000001원` 같은 음수 잔액이 생성될 수 있음. `max(0, m.cash)` 가드(`app.py:599`)가 일부 보호하나 일관성 없음. `db.Numeric(precision=18, scale=2)` 로 교체 또는 모든 연산 결과에 `round(x, 0)` 적용 통일.
 
 - **클라이언트 타이머가 학생 기기 로컬 시계 사용** (`app.js:769`): `rem = Math.max(0, Math.floor((new Date(S.room.end_time) - new Date()) / 1000))` 에서 `new Date()` 는 학생 기기 로컬 시계. 기기 시계가 서버 UTC 기준과 ±30초 오차나면 타이머 표시가 틀려 거래 가능한 시간을 오해. 서버가 이미 `remaining_seconds` 를 `room_dict()` 에서 계산해 반환하므로(`app.py:285-286`), 10초 폴링 시 수신한 `r.remaining_seconds` 로 타이머를 재보정하되 두 폴링 사이는 `setInterval(tick, 1000)` 로 감산하는 hybrid 방식이 정확. 현재 일시정지 상태에서만 `remaining_seconds` 를 사용(`app.js:765`)하고 active 상태에서는 로컬 시계를 사용하는 불일치가 있음.
+
+## 2026-08-01
+
+### 추가하면 좋을 기능
+
+- **진행자 `host_adjust()` 초과 차감 시 실제 금액으로 트랜잭션 보정** (`app.py:599-600`): `m.cash = max(0, m.cash + delta)` 로 현금을 0 하한 클램핑하지만, 바로 다음 줄 `RoomTransaction(amount=delta, ...)` 에서는 실제 차감된 금액이 아닌 원래 입력값 `delta` 그대로 기록함. 예: 현금 500,000원인 학생에게 -1,000,000원 조정 시 실제 차감은 500,000원이지만 거래 내역에는 -1,000,000원이 남아 나중에 학생이 거래 내역을 보면 잔액 합계가 맞지 않음. `actual_delta = max(-m.cash, delta)` 를 구한 후 `m.cash = max(0, m.cash + delta)` 와 `RoomTransaction(amount=actual_delta, ...)` 로 분리해 기록하면 일관성 확보 (`app.py:599-600` 두 줄 수정).
+
+- **차트 히스토리 마지막 봉 종가와 현재 표시 주가 연결** (`stock_service.py:289-308 get_history()`): `get_history()` 는 현재가(`current`)를 기준으로 과거 봉을 역방향으로 합성하지만 마지막 봉(`bars[-1].close`)은 난수 변동이 적용되어 `current`와 불일치함. 학생이 차트의 마지막 봉 종가와 현재가 표시가 다른 것을 보면 혼란스러울 수 있음. `bars[-1]['close'] = round(current)` 로 마지막 봉 종가를 현재가로 고정하면 차트와 시세 카드가 일치해짐 (`stock_service.py:308` 이전에 한 줄 추가).
+
+- **예금 탭을 10초 폴링 루프에 포함** (`app.js:648-650`): 참여자 폴링 루프에서 `if (S.currentPage === 'market') loadMarket()`, `if (S.currentPage === 'rankings') loadParticipantRankings()` 분기는 있으나 `'deposit'` 탭이 누락됨. 예금 탭을 열어 두면 만기 예정 정보나 이자 예상치가 자동 갱신되지 않음. `if (S.currentPage === 'deposit') loadDeposits()` 한 줄 추가로 해결 (`app.js:649` 직후). 단, `loadDeposits()` 함수가 이미 `pg-deposit` 탭 진입 시(`showPage('deposit')`) 호출되므로 서버 부하는 기존 polller 주기 10초와 동일.
+
+- **`1일·1주·1달·3달·1년` 차트 탭 봉 수 재조정** (`stock_service.py:293, app.py:715`): `get_chart()` 에서 UI 탭값 `'1d'→'1d'`, `'1w'→'5d'` 로 변환 후 `get_history(period)` 에 전달. `get_history()` 의 `n_bars` 매핑 `{'1d': 30, '5d': 5, '1mo': 30, '3mo': 90}` 에서 `'1d'` 는 30봉, `'5d'` 는 5봉으로 역전. 결과적으로 "1일" 탭이 30개 봉, "1주" 탭이 5개 봉을 표시해 1일보다 1주가 더 적은 데이터를 보여주는 직관 위반 발생. `{'1d': 7, '5d': 35, '1mo': 30, '3mo': 90, '1y': 52}` 로 수정하면 각 탭 레이블과 봉 수가 일치 (`stock_service.py:293` 한 줄).
+
+- **데이터 로드 실패 시 UI 오류 메시지 표시** (`app.js:loadMarket, loadPortfolio, loadDeposits` 등): 현재 `loadMarket()`, `loadPortfolio()` 등 대부분의 load 함수는 `if (data.error) return;` 으로 에러 시 조용히 종료하고 화면을 이전 상태로 방치함. 학생이 네트워크 오류나 Render free tier 슬립으로 데이터를 못 받아도 아무 안내 없이 빈 화면을 보게 됨. 각 load 함수의 에러 분기에 `toast('데이터를 불러오지 못했습니다. 잠시 후 다시 시도해주세요.', 'error')` 또는 컨테이너 안에 재시도 버튼 포함 empty-state HTML 삽입으로 UX 개선.
+
+### 제거/단순화할 것들
+
+- **복권 기본 상금 `member_count × 3,000만원` → 투자 게임 균형 파괴** (`app.py:419`): 자동 복권 시작 시 `default_prize = member_count * 30_000_000`. 30명 수업이면 기본 상금 9억원. 시작 자금(기본 1,000만원)의 90배를 단 1회 추첨으로 받을 수 있어, 복권 당첨 한 번이 전략적 투자 전체를 압도하는 구조. 교육 목적상 주식 투자 전략의 의미가 퇴색. `default_prize = member_count * 1_000_000` (인당 100만원 기준)이나 `room.starting_cash * 0.1` (시작 자금 10%) 같이 게임 스케일에 비례한 값으로 변경 권장 (`app.py:419` 한 줄). 자동 복권 안내 노티스(`index.html:866`)의 설명도 함께 업데이트 필요.
+
+- **`get_history()` 차트 봉에 주말 날짜 포함 — 실제 증권시장과 불일치** (`stock_service.py:297`): `date_str = datetime.utcfromtimestamp(now - i * 86400).strftime('%Y-%m-%d')` 로 오늘부터 n일 전까지 연속 날짜를 생성하므로 토·일요일도 봉으로 표시됨. 한국 고등학생에게 "주식 시장은 평일에만 열린다"고 설명하면서 차트에는 주말 봉이 있어 교육 내용 모순 발생. `datetime.utcfromtimestamp(now - i * 86400)` 을 생성할 때 `.weekday() >= 5` 이면 건너뛰는 로직 추가, 또는 `n_bars` 를 더 늘려 주말을 skip해도 목표 봉 수가 채워지도록 수정 (`stock_service.py:296-298` 약 5줄 변경).
+
+- **`minigame_close()` 에서 deprecated `Room.query.get(rid)` 사용** (`app.py:977`): 코드 전반에서 `db.session.get(Room, rid)` 패턴(SQLAlchemy 2.x 권장)을 사용하지만, `minigame_close()` 함수 line 977 에서만 `Room.query.get(rid)` (레거시 API, SQLAlchemy 2.0에서 삭제 예고)를 사용. `db.session.get(Room, rid)` 로 교체하면 일관성 확보 (`app.py:977` 한 줄). `get_room()` (`app.py:435`) 등 `Room.query.get_or_404()` 도 `db.session.get_or_404(Room, rid)` 또는 직접 404 처리로 통일 권장.
+
+- **학번+이름 단일 문자열 저장 구조에서 공백 포함 이름 시 Excel 분리 오류** (`app.py:1435-1438, models.py:19`): `username` 컬럼에 `"학번 이름"` 형식으로 저장하고 Excel 내보내기 시 `u.username.split(' ', 1)` 으로 분리. 학생이 이름 필드에 "홍 길동"(띄어쓰기 포함) 입력 시 split 결과 `['학번', '홍']` + `'길동'` 이 아닌 `['학번홍', '길동']` 으로 잘못 분리됨 (학번 필드에 공백 없으면 실질 발생 사례 희박하나, `doAuth('', '홍 길동')` 처럼 학번 없이 이름에 공백 있으면 확실히 오기록). 단기 해결: `enter()` 에서 이름 필드의 앞뒤 공백만 `strip()` 하고 중간 공백도 `re.sub(r'\s+', '', name)` 으로 제거, 또는 구분자를 `'|'` 처럼 실명에 쓰이지 않는 문자로 변경.
+
+- **`refreshMyRank()` 가 `/api/rooms/<rid>/rankings` 를 매번 전체 계산 — N×M 가격 조회 반복** (`app.py:808-824, app.js:735-753`): `get_rankings()` 는 `RoomMember.query.filter_by(room_id=rid).all()` 로 전 멤버를 가져와 각각 `member_total_value()` 를 호출하고, `member_total_value()` 내부에서 `get_room_service(rid).get_price(h.symbol)` 을 holding별로 호출. 30명 × 평균 5종목 = 150회 `get_price()` 가 10초마다 실행됨. `_get_room_cached()` 같은 순위 캐시가 없어 Render free tier 단일 워커 환경에서 응답 지연 유발 가능. 순위 전용 TTL=5초 캐시(`_rankings_cache: dict = {}`)를 추가하거나, `refreshMyRank()` 가 이미 받는 랭킹 배열에서 `is_me` 항목만 꺼내는 현재 구조를 유지하되 `/api/rooms/<rid>` 응답에 `my_rank`, `my_total_value`, `my_gain_pct` 를 포함시켜 별도 API 호출을 제거하는 방안 고려.
