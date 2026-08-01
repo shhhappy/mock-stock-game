@@ -3344,3 +3344,36 @@
 - **학번+이름 단일 문자열 저장 구조에서 공백 포함 이름 시 Excel 분리 오류** (`app.py:1435-1438, models.py:19`): `username` 컬럼에 `"학번 이름"` 형식으로 저장하고 Excel 내보내기 시 `u.username.split(' ', 1)` 으로 분리. 학생이 이름 필드에 "홍 길동"(띄어쓰기 포함) 입력 시 split 결과 `['학번', '홍']` + `'길동'` 이 아닌 `['학번홍', '길동']` 으로 잘못 분리됨 (학번 필드에 공백 없으면 실질 발생 사례 희박하나, `doAuth('', '홍 길동')` 처럼 학번 없이 이름에 공백 있으면 확실히 오기록). 단기 해결: `enter()` 에서 이름 필드의 앞뒤 공백만 `strip()` 하고 중간 공백도 `re.sub(r'\s+', '', name)` 으로 제거, 또는 구분자를 `'|'` 처럼 실명에 쓰이지 않는 문자로 변경.
 
 - **`refreshMyRank()` 가 `/api/rooms/<rid>/rankings` 를 매번 전체 계산 — N×M 가격 조회 반복** (`app.py:808-824, app.js:735-753`): `get_rankings()` 는 `RoomMember.query.filter_by(room_id=rid).all()` 로 전 멤버를 가져와 각각 `member_total_value()` 를 호출하고, `member_total_value()` 내부에서 `get_room_service(rid).get_price(h.symbol)` 을 holding별로 호출. 30명 × 평균 5종목 = 150회 `get_price()` 가 10초마다 실행됨. `_get_room_cached()` 같은 순위 캐시가 없어 Render free tier 단일 워커 환경에서 응답 지연 유발 가능. 순위 전용 TTL=5초 캐시(`_rankings_cache: dict = {}`)를 추가하거나, `refreshMyRank()` 가 이미 받는 랭킹 배열에서 `is_me` 항목만 꺼내는 현재 구조를 유지하되 `/api/rooms/<rid>` 응답에 `my_rank`, `my_total_value`, `my_gain_pct` 를 포함시켜 별도 API 호출을 제거하는 방안 고려.
+
+## 2026-08-01 (2차)
+
+### 추가하면 좋을 기능
+
+- **주식 상세 모달 내 관심종목 토글 버튼** (`app.js:1327-1357`, `openStockModal()`; `app.js:1279-1285`, `toggleWatchlist()`): 관심종목 추가/제거는 시장 그리드 카드의 ☆ 버튼에서만 가능하고, 주식 상세 모달(`modal-stock`)을 열었을 때는 관심종목 컨트롤이 없어 모달을 닫고 돌아가야 함. `openStockModal()` 마지막에 `const starred = S.watchlist.has(symbol); document.getElementById('ms-watchlist-btn').textContent = starred ? '★ 관심해제' : '☆ 관심추가'` 와 같이 버튼 상태를 동기화하면 됨. `toggleWatchlist()` 함수를 재사용하므로 서버 변경 없이 HTML 버튼 1개 + JS 3줄 추가로 구현 가능. 거래 중 관심종목 등록까지 한 화면에서 처리해 불필요한 화면 전환 제거.
+
+- **게임 종료 후 진행자용 인게임 통계 요약 카드** (`app.py:807-824`, `get_rankings()`; `app.js` 결과 화면): 게임 종료 후 진행자 결과 화면에는 순위표와 Excel 내보내기만 있고, 게임 전체 통계(가장 많이 거래된 종목, 총 거래 횟수, 최고·최저 수익률, 평균 수익률)를 한눈에 볼 수 없음. `GET /api/rooms/<rid>/host/stats` 엔드포인트를 추가해 `RoomTransaction.query.filter_by(room_id=rid).all()` 로 종목별 거래 횟수를 집계하고, `member_total_value()` 배치 결과에서 수익률 분포를 계산해 반환. 결과 화면 상단에 "🏆 게임 통계" 카드를 렌더링하면 수업 마무리 토론 자료로 즉시 활용 가능. 서버 약 20줄·클라이언트 약 25줄.
+
+- **종목 가격 상·하한 범위 안내 표시** (`stock_service.py:139`, `_next_price()`; `app.py:658-671`, `get_stocks()`): 게임 내 주가는 `max(base*0.6, min(base*1.4, new_price))` 로 제한되지만(`stock_service.py:139`) 학생들이 이 한도를 알 수 없어 주식이 왜 더 이상 오르지 않는지 이해하지 못함. `get_stocks()` 응답에 `price_floor: round(base*0.6)`, `price_cap: round(base*1.4)` 를 추가하고(서버 2줄), 주식 상세 모달의 현재가 아래에 "하한가 X원 | 상한가 Y원" 을 작은 글씨로 표시(클라이언트 3줄). 주식시장의 상·하한가 개념을 자연스럽게 교육하는 효과.
+
+- **섹터 필터 버튼에 종목 수 배지 표시** (`app.js:1243-1249`, `renderSectors()`): 섹터 필터 버튼(`<button class="sector-btn">반도체</button>`)에 해당 섹터에 속하는 종목 수가 표시되지 않아 어느 섹터가 더 다양한지 파악하기 어려움. `renderSectors()` 내에서 `const cnt = s === '전체' ? S.stocks.length : S.stocks.filter(st => st.sector === s).length` 를 계산해 버튼 텍스트를 `반도체 (3)` 형태로 표시. 서버 변경 없이 클라이언트 3줄 수정으로 구현 가능. 섹터별 다양성을 시각화해 분산 투자 교육에 활용.
+
+- **포트폴리오 보유 종목 정렬 옵션** (`app.js:1542-1563`, `holdings-list` 렌더링; `app.py:802`, `get_portfolio()`): 보유 종목은 항상 현재 가치 내림차순으로만 표시됨(`sorted(..., key=lambda x: x['current_value'], reverse=True)`). `loadPortfolio()` 의 보유 종목 섹션 상단에 정렬 기준 `<select>` (현재가치·수익률·수익금액·보유수량)를 추가하고, 선택 시 클라이언트에서 `data.holdings`를 재정렬해 렌더링. `S.portSortKey` 상태 변수를 추가해 새로고침 시에도 선택 유지. 서버 변경 없이 약 12줄 추가로 학생이 가장 손실이 큰 종목을 쉽게 파악 가능.
+
+- **진행자 학생 전체 공지 메시지 브로드캐스트** (`app.py:630-646`, `host_send_news()`; `app.js:807-818`, `startNewsPolling()`): 교사가 게임 중 학생들에게 텍스트 공지를 보낼 방법이 없어 수업 안내는 구두로만 가능. 기존 뉴스 폴링 인프라를 재활용해 `GET /news` 응답에 `announcement: str | null` 필드를 추가하고, 새 `POST /api/rooms/<rid>/host/announce` 엔드포인트(`{"message": "지금 삼성전자 주목!"}`)에서 이 값을 `StockService` 인스턴스에 임시 저장(5분 TTL). 클라이언트는 `announcement` 수신 시 뉴스 팝업과 별개의 파란색 배너로 30초 표시. 서버 15줄·클라이언트 10줄 추가.
+
+### 제거/단순화할 것들
+
+- **XSS 취약점: 사용자명 HTML 이스케이프 누락** (`app.js:421`, `app.js:426`, `loadHostMembers()`; `app.js:225-231`, `loadLobbyMembers()`; `app.py:333-334`, `enter()`): `m.username` 을 `innerHTML` 템플릿에 직접 삽입(`${m.username}`)하고 있어, `<img src=x onerror=alert(1)>` 같은 닉네임으로 가입한 학생이 진행자 화면에서 임의 JS 실행 가능. `app.py:333` 의 닉네임 검증은 길이(2~30자)만 확인하고 특수문자를 허용. `escHtml()` 함수가 `app.js:897-899` 에 이미 정의되어 있으므로 모든 `${m.username}` 인라인 보간을 `${escHtml(m.username)}` 으로 교체. `onclick` 속성의 문자열 보간(`'${m.username.replace(...)}`)은 `data-username` 어트리뷰트 방식으로 전환하거나 `app.py:333` 에서 정규식 검증 추가 필요.
+
+- **`datetime.utcnow()` 전면 deprecated — Python 3.12 대응 필요** (`app.py:125, 279, 421, 437, 458, 482, 498, 511, 521, 534, 953, 985, 1101, 1103`; `models.py:20, 38, 53`): `datetime.utcnow()` 와 `default=datetime.utcnow` 는 Python 3.12에서 deprecated되어 향후 제거 예정. `app.py:2` 에서 `timezone` 이 이미 임포트되어 있으므로 일괄 치환: `datetime.utcnow()` → `datetime.now(timezone.utc)`, `models.py` 의 컬럼 기본값 `default=datetime.utcnow` → `default=lambda: datetime.now(timezone.utc)`. `sed -i 's/datetime\.utcnow()/datetime.now(timezone.utc)/g' app.py` 로 대부분 일괄 처리 가능. 동시에 `_end_room()` 의 `now = datetime.utcnow()` 포함 전체 16개소 수정.
+
+- **`member_total_value()` N+1 쿼리 성능 문제** (`app.py:107-118`, `member_total_value()`; `app.py:542-562`, `host_members()`; `app.py:807-824`, `get_rankings()`): `get_rankings()` 와 `host_members()` 는 각 멤버마다 `member_total_value()` 를 개별 호출하고, 이 함수는 내부에서 `RoomHolding.query.filter_by(room_id, user_id)` + `Deposit.query.filter_by(room_id, user_id)` 쿼리를 실행. 30명 교실에서 `get_rankings()` 1회 호출 시 SQL 쿼리 약 60회 이상 발생. 수정: `RoomHolding.query.filter_by(room_id=rid).all()` 과 `Deposit.query.filter_by(room_id=rid, status='active').all()` 로 방 전체 데이터를 각 2회 쿼리로 가져와 Python dict로 uid별 집계하면 O(N) → O(1) 로 단축.
+
+- **`models.py:8-13` `gen_code()` TOCTOU 경쟁 조건 + `create_room()` 미처리 `IntegrityError`** (`models.py:8-13`, `gen_code()`; `app.py:363-390`, `create_room()`): `gen_code()` 는 코드 중복 확인 쿼리와 INSERT 사이에 다른 요청이 동일 코드를 선점할 수 있는 TOCTOU 경쟁 조건 존재. `Room.code` 의 `unique=True` 제약으로 DB에서 걸러지지만, `create_room()` 에는 `join_room()` 과 달리 `IntegrityError` 핸들러가 없어 서버 500 오류 반환. 수정: `create_room()` 에 `except IntegrityError: db.session.rollback(); return jsonify({'error': '방 코드 생성 충돌, 재시도해 주세요.'}), 409` 추가. 추가로 `gen_code()` 에 `db.session.execute()` + UUID 기반으로 변경 검토.
+
+- **`app.py:977` deprecated `Query.get()` 단독 잔존** (`app.py:977`, `minigame_close()`): 전체 코드에서 `db.session.get()` 패턴을 사용하지만 `minigame_close()` 함수 한 곳에서만 `room = Room.query.get(rid)` (구 Query.get API)를 사용 중. SQLAlchemy 2.0부터 deprecated이며 2.1에서 제거 예정. `db.session.get(Room, rid)` 로 교체하면 됨. 동일 함수 내 다른 DB 접근 패턴과 통일.
+
+- **`app.py:13` 하드코딩 기본 시크릿 키 (보안)** (`app.py:13`): `app.secret_key = os.environ.get('SECRET_KEY', 'mock-stock-game-secret-2024')` — `SECRET_KEY` 환경변수 미설정 시 세션 서명 키가 GitHub 소스코드에 공개된 값으로 고정됨. 공격자가 이 값으로 Flask 세션 쿠키를 직접 위조해 임의 `user_id` 로 인증 가능. 최소 수정: `SECRET_KEY` 미설정 시 `import warnings; warnings.warn('SECRET_KEY 환경변수 미설정 — 운영 환경에서 반드시 지정하세요', stacklevel=2)` 출력. 개발 환경 전용 fallback으로 `os.urandom(32)` 도 가능 (재시작마다 세션 무효화됨).
+
+- **`stock_service.py:297` `datetime.utcfromtimestamp()` deprecated** (`stock_service.py:297`, `get_history()`): `datetime.utcfromtimestamp(now - i * 86400).strftime('%Y-%m-%d')` 의 `utcfromtimestamp()` 도 Python 3.12 deprecated 대상. `from datetime import timezone` 을 `stock_service.py` 임포트에 추가하고 `datetime.fromtimestamp(now - i * 86400, tz=timezone.utc).strftime('%Y-%m-%d')` 로 교체. `app.py` 의 `datetime.utcnow()` 일괄 치환과 함께 Python 3.12 완전 호환성 확보.
+
