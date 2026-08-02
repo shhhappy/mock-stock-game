@@ -3377,3 +3377,29 @@
 
 - **`stock_service.py:297` `datetime.utcfromtimestamp()` deprecated** (`stock_service.py:297`, `get_history()`): `datetime.utcfromtimestamp(now - i * 86400).strftime('%Y-%m-%d')` 의 `utcfromtimestamp()` 도 Python 3.12 deprecated 대상. `from datetime import timezone` 을 `stock_service.py` 임포트에 추가하고 `datetime.fromtimestamp(now - i * 86400, tz=timezone.utc).strftime('%Y-%m-%d')` 로 교체. `app.py` 의 `datetime.utcnow()` 일괄 치환과 함께 Python 3.12 완전 호환성 확보.
 
+
+## 2026-08-02
+
+### 추가하면 좋을 기능
+
+- **게임 진행 중 참여자 강퇴 기능 확장** (`app.py:564-575`, `kick_member()`): `kick_member()` 가 `room.status != 'waiting'` 이면 `"대기 중인 방에서만 강퇴할 수 있습니다."` 에러를 반환해 게임 시작 후 문제 학생을 내보낼 방법이 전혀 없음. 실제 수업에서 기기 오작동·비협조 학생 처리 방법 부재. 수정안: `active/paused` 상태에서도 강퇴를 허용하되, 강퇴 시 `RoomHolding`을 현재가로 현금화하고(`_end_room()` 내 청산 로직 재활용) `RoomMember`를 삭제. `rankings` 응답에 해당 학생이 사라지므로 순위가 자동 재편. 진행자 UI의 강퇴 버튼은 현재 대기 로비에만 있어(`app.js:228-229`) 게임 화면 랭킹 열에도 추가 필요.
+
+- **참여자 로비 폴링 주기 단축** (`app.js:562-576`, `enterParticipantLobby()`): 현재 `setInterval(..., 5000)` 으로 5초마다 방 상태를 폴링해 진행자가 게임 시작 버튼을 누른 후 최대 5초 지연이 발생. 학생 30명이 동시에 5초 폴링하면 초당 6회 요청이 들어오므로 단순히 간격만 줄이면 안 됨. 대신 `enterParticipantLobby()` 에서 첫 폴링 직전 2초 지연 후 2000ms 주기로 3회만 빠르게 시도한 뒤 5000ms로 복귀하는 backoff 전략, 또는 서버가 `/api/rooms/<rid>` 응답에 `ETag` 헤더를 붙이고 클라이언트가 `If-None-Match`로 조건부 요청해 304 응답 시 내용 처리를 생략하면 서버 부하 유지하면서 지연 단축 가능.
+
+- **방 최대 참여자 수 설정** (`models.py:25-42`, `app.py:363-406`): `Room` 모델에 `max_members` 컬럼이 없어 학급 규모에 상관없이 무제한 참여 가능. 반이 합쳐지는 경우 의도치 않은 과다 참여 발생 가능. `models.py` 의 `Room` 에 `max_members = db.Column(db.Integer, nullable=True)` 추가, `create_room()` (`app.py:363`) 에서 `d.get('max_members')` 로 선택적 수신, `join_room()` (`app.py:394`) 에서 `if room.max_members and RoomMember.query.filter_by(room_id=room.id).count() >= room.max_members: return 400` 체크 추가. UI 방 만들기 폼(`index.html:64-75`)에 선택 항목으로 추가하면 됨.
+
+- **포트폴리오 탭에 수익률 미니 추세 스파크라인** (`app.js:735-752`, `refreshMyRank()`; `app.js:S.assetHistory`): `S.assetHistory` 배열에 10초마다 총자산 스냅샷이 최대 120개까지 누적되지만(`app.js:751`) 이 데이터는 현재 아무 UI에도 표시되지 않음. 포트폴리오 탭 상단 "총자산" 카드 아래에 `<canvas id="asset-sparkline" height="40">` 를 추가하고, `loadPortfolio()` 마지막에 `S.assetHistory` 를 Chart.js line 차트(pointRadius:0, borderWidth:1)로 렌더링하면 10줄 내외. 학생이 자신의 자산 증감 추이를 직관적으로 파악 가능.
+
+- **진행자 퀴즈 설정에 문제 미리보기 기능** (`app.py:1399-1414`, `quiz_settings()`; `education_data.py`): 진행자 설정 탭에서 `reward_pct`와 `penalty_pct`만 조정 가능하고, 어떤 퀴즈 문제가 출제될지 미리 볼 수 없음. `GET /api/education/quiz-preview` 엔드포인트(login 불필요)를 추가해 `QUIZ_QUESTIONS` 전체를 반환하고, 진행자 설정 탭에 "퀴즈 문제 목록 보기" 버튼과 모달을 추가. 이미 `get_glossary()` 같은 교육 엔드포인트가 인증 없이 공개되어 있으므로(`app.py:1224-1227`) 일관성도 맞음. 진행자가 수업 내용과 연관된 문제인지 사전 확인 가능.
+
+### 제거/단순화할 것들
+
+- **`get_history()` 에서 `'1y'` 기간 봉 수 누락 — 30봉 fallback 적용** (`stock_service.py:293`, `app.py:715-718`): `get_chart()` 에서 `period_map = {..., '1y': ('1y', '1wk')}` 로 1년 탭을 지원하나, `get_history()` 내 `n_bars = {'1d': 30, '5d': 5, '1mo': 30, '3mo': 90}.get(period, 30)` 에 `'1y'` 키가 없어 `.get(period, 30)` 의 default=30 fallback으로 30봉만 생성됨. 연간 차트인데 한 달치 봉 수밖에 안 보이는 버그. `stock_service.py:293` 의 dict에 `'1y': 52` (주봉 52주) 를 추가하면 해결. 이미 어제 제안된 `n_bars` 리매핑 (`'1d': 7, '5d': 35`) 수정 시 함께 적용 권장.
+
+- **`app.js:21` `S.quizTimerInterval` 상태 변수 선언 후 미사용** (`app.js:21`, `app.js:829-830`): `const S = {..., quizTimerInterval: null, ...}` 로 상태 객체에 선언되어 있으나 실제 퀴즈 타이머는 `let _quizTimerTick = null` (모듈 스코프 변수, `app.js:829`) 를 사용. `S.quizTimerInterval` 은 초기화 후 단 한 번도 읽거나 쓰이지 않음. 상태 객체에서 해당 필드 제거로 코드 명확성 향상. 실제 동작에는 영향 없음.
+
+- **`host_adjust()` 에서 `target_uid = None` 일 때 명시적 검증 누락** (`app.py:593-603`, `host_adjust()`): `d.get('user_id')` 가 None 이면 `RoomMember.query.filter_by(room_id=rid, user_id=None)` 쿼리가 실행됨. SQLite/PostgreSQL 모두 `user_id = NULL` 조건은 행을 찾지 못해 `if not m: return 404` 로 처리되지만, 의도와 다른 쿼리가 실행되는 것 자체가 혼란. `if target_uid is None: return jsonify({'error': '대상 참여자를 지정하세요.'}), 400` 를 `app.py:595` 이후에 추가해 조기 반환. 클라이언트 `openAdjust()` 는 항상 uid를 전달하므로 정상 경로에 영향 없음.
+
+- **복권 진행 중 상태(`_lots[rid]['current']`)가 서버 재시작 시 소실** (`app.py:174-179`, `_lot_round_due()`; `app.py:166-170`, `_lots` 선언): `done` 집합은 `Room.lottery_rounds_done` 컬럼으로 DB 영속화되어 서버 재시작 후 `_lot_round_due()` 에서 복원(`app.py:175-178`). 그러나 `_lots[rid]['current']` (진행 중인 복권 단계·마감시각·제출 번호 등)는 인메모리에만 존재해 서버 재시작 시 사라짐. Render free tier 는 무활동 15분 후 컨테이너를 슬립시켜 재시작이 잦음. 복권 picking/drawing 중 재시작 발생 시 학생이 선택한 번호와 상금이 무효화됨. 단기 해결: 재시작 후 `lottery_rounds_done` 의 가장 큰 round보다 큰 round가 진행 중이었다면 해당 round를 `done`에 추가해 건너뜀으로써 무한 대기를 방지. 장기: `Room` 모델에 `lottery_current_json = db.Column(db.Text, nullable=True)` 추가해 `current` dict를 직렬화 저장.
+
+- **`_auto_start_lottery_if_due()` 내 `_invalidate_room_cache()` 와 호출부 `get_room()` 의 중복 invalidation** (`app.py:430`, `_auto_start_lottery_if_due()`; `app.py:469-472`, `get_room()`): `_auto_start_lottery_if_due()` 는 `room.status` 를 `'paused'` 로 변경 후 `_invalidate_room_cache(rid)` 를 직접 호출(`app.py:430`). `get_room()` 도 `prev_status = room.status` 비교(`app.py:469`)로 상태 변화 감지 시 `_invalidate_room_cache(rid)` 재호출(`app.py:472`). 동일 요청에서 캐시 무효화가 2회 실행됨. 버그는 아니나 `_auto_start_lottery_if_due()` 내의 `_invalidate_room_cache(rid)` 호출을 제거하고 호출부 `get_room()` 의 한 번 invalidation에 위임하면 중복 제거. 단, 다른 경로에서 `_auto_start_lottery_if_due()` 가 직접 호출될 가능성이 없음을 확인 후 적용.
