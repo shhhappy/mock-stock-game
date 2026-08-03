@@ -3463,3 +3463,29 @@
 - **`create_deposit()` 예금 후 현금 0원 허용 — 거래 완전 불가 상태** (`app.py:878-902`, `create_deposit()`): `if m.cash < amount` 체크만 있어 전액 예금이 가능. 1,000만원 전액 예금 후 현금 0원 상태에서 매수 시 "잔액 부족" 오류만 표시되고 해결 방법 안내 없음(예금 해지 기능을 모르는 학생은 게임 참여 불가). 최소 잔액 `min_reserve = room.starting_cash * 0.05` (예: 50만원) 를 예금 허용 금액 상한으로 설정하거나, 0원 예금 완료 시 프론트에 "예금 탭에서 해지 가능" 안내 토스트(`app.js`)를 자동 표시하면 학습 중단 방지. 서버 1줄, 클라이언트 1줄.
 
 - **`get_history()` 차트 데이터 캐시 미스 시 매번 다른 랜덤 생성 — 교육용 일관성 저해** (`stock_service.py:281-310`): `_history_cache` TTL 120초 만료 또는 가격 변경(`get_price()` line 187-189, `force_price()` line 227-228)으로 캐시 무효화 후 `get_history()` 재호출 시 완전히 새로운 랜덤 봉차트를 생성함. 같은 종목을 두 번 차트로 열면 전혀 다른 "과거" 패턴이 표시되어 교사가 "이 차트의 패턴을 보세요"라고 설명하는 도중 학생마다 다른 화면을 보게 됨. 해결책: 룸 시작 시 `_init_prices()`에서 종목별 시드값 `random.seed(hash((room_id, sym)) % 2**32)`를 고정하거나, 생성된 히스토리를 캐시 무효화 없이 유지하고 현재 가격만 마지막 봉으로 덮어쓰는 방식으로 일관성 확보.
+
+## 2026-08-03 (2차)
+
+### 추가하면 좋을 기능
+
+- **거래 빈도 쿨다운 제한 설정 (호스트 설정 탭)** (`app.py:724-767` `trade()`; `app.js:1424-1454` `execTrade()`): 현재 거래에 횟수·빈도 제한이 전혀 없어 학생이 매수/매도 버튼을 초당 수회 클릭해 서버에 불필요한 DB 부담을 줌. 진행자 설정 탭에 "거래 쿨다운(초)" 입력란을 추가하고, 서버에 `_trade_ts: dict = {}` (in-memory `{(rid, uid): last_ts}`)를 두어 `trade()` 진입 시 `now - last < cooldown` 이면 429 반환하면 됨. 클라이언트 `execTrade()` 에서도 버튼을 쿨다운 동안 비활성화 처리 가능. 서버 10줄, 클라이언트 5줄 수준의 소규모 변경.
+
+- **결과 화면에 학급 전체 통계 섹션 추가** (`app.py:1419-1488` `export_rankings()`; `app.js:1702-1795` `loadResults()`): 게임 종료 후 결과 화면에 진행자 전용 통계 블록 (평균 수익률, 수익·손실 인원 수, 전체 거래 건수 합계, 가장 많이 거래된 종목 TOP 3)을 추가하면 수업 피드백에 즉각 활용 가능. 현재 이 정보는 Excel 파일 안에서만 계산 가능하며 화면에는 없음. `GET /api/rooms/<rid>/stats` 신규 엔드포인트에서 `RoomTransaction.query.filter_by(room_id=rid)` 집계 후 JSON 반환, `loadResults()` 말미에서 호출해 `results-my-stats` 아래 삽입.
+
+- **게임 로비에서 폭탄뉴스 팝업 미리보기** (`app.py:691-701` `host_send_news()`; `static/index.html:103-111` 로비 화면): 현재 `host_send_news()` 는 room status 체크 없이 StockService에 뉴스를 트리거하므로 `waiting` 상태에서도 호출 가능. 진행자 로비 화면(`screen-host-lobby`)에 "뉴스 팝업 테스트" 버튼 1개를 추가하고 `doSendNews()` 와 동일한 API 호출을 실행하면, 게임 시작 전에 팝업 애니메이션·소리 동작을 확인 가능. HTML 1줄 + JS 2줄 추가.
+
+- **룰렛 베팅 시 강제 주식 청산 내역 팝업 안내** (`app.py:1022-1058` `minigame_spin()`; `app.js:1043-1048`): 베팅 금액이 현금을 초과할 때 서버가 주식·예금을 자동 청산하지만, 클라이언트에는 단순히 `data.cash` 만 반환되어 학생이 어떤 종목이 얼마에 청산됐는지 모름. `minigame_spin()` 응답에 `liquidated: [{'symbol': sym, 'shares': n, 'amount': v}]` 필드를 추가하고, `doRouletteSpin()` 결과 표시 시 청산 내역이 있을 경우 "⚠️ 베팅 자금 마련을 위해 X주 청산됨" 안내 토스트를 추가 표시. 서버 5줄, 클라이언트 5줄.
+
+- **참여자 로비에서 방 코드 재표시** (`static/index.html:340-352`; `app.js:555-576` `enterParticipantLobby()`): 참여자 대기 화면(`screen-p-lobby`)에 방 이름과 진행자 이름은 표시되지만 방 코드가 없음. 학생이 실수로 뒤로 가기를 누른 뒤 재입장하려면 코드를 다시 물어봐야 하는 불편이 있음. `plobby-room-name` 아래 `<div class="muted" style="font-size:12px">방 코드: <strong style="letter-spacing:2px">XXXXXX</strong></div>` 한 줄 추가 후 `enterParticipantLobby()` 에서 `S.room.code` 를 세팅하면 됨. HTML 3줄, JS 1줄.
+
+### 제거/단순화할 것들
+
+- **`Room.query.get_or_404(rid)` 전체 deprecated SQLAlchemy Query API 패턴** (`app.py:435, 478, 490, 504, 519, 542, 545, 564, 587, 630, 673, 691, 703, 710, 724, 772, 808, 829, 878, 904, 921, 938, 965, 996, 1078, 1149, 1185, 1209, 1270, 1345, 1363, 1386, 1399, 1419`): SQLAlchemy 2.x / Flask-SQLAlchemy 3.x 에서 `Model.query.get_or_404()` 는 deprecated이며, 권장 대체는 `db.get_or_404(Room, rid)`. 추가로 `app.py:977` 의 `Room.query.get(rid)` 도 `db.session.get(Room, rid)` 로 교체 필요. 현재 동작은 하지만 버전 업그레이드 시 warning이 쏟아지고 미래에는 제거될 예정. `sed -i` 등으로 일괄 치환 가능하며, 교체 후 동작 차이 없음.
+
+- **`loadLobbyMembers()` / `loadHostMembers()` innerHTML XSS 취약점 — `escHtml()` 미적용** (`app.js:225, 228, 417`): `${m.username}` 을 HTML 템플릿 리터럴에 직접 삽입. 닉네임에 `<img src=x onerror=alert(1)>` 같은 문자열이 들어오면 XSS 실행 가능. `loadParticipantRankings()` (line 1685)와 `loadResults()` (line 1748)에서는 이미 `escHtml(e.username)` 을 올바르게 사용 중이나 로비·호스트 대시보드에서 누락됨. `escHtml()` 함수가 `app.js:897-899`에 이미 구현되어 있으므로, `${m.username}` → `${escHtml(m.username)}` 교체 5곳으로 즉시 해결. 교실 환경에서 학생이 의도적으로 HTML 닉네임을 사용할 가능성이 있음.
+
+- **`minigame_spin()` 주식 청산 후 `shares=0` 인 `RoomHolding` 레코드 DB에 방치** (`app.py:1037-1038`): 룰렛 베팅 자금 마련을 위해 보유 주식 전량 청산 시 `h.shares = 0; h.avg_price = 0` 으로 설정만 하고 `db.session.delete(h)` 가 없음 (비교: `_end_room()` line 152에서는 delete 처리). `get_portfolio()` 에서 `if h.shares <= 0: continue` 로 필터링(line 782)하지만 DB에 쓸모없는 레코드가 쌓이고 `RoomHolding.query.filter_by(room_id=rid, user_id=uid).all()` 쿼리 결과에 포함되어 루프 비용 증가. `h.shares = 0` 이 되는 라인(`app.py:1037`) 다음에 `db.session.delete(h)` 한 줄 추가로 즉각 해결.
+
+- **`host_adjust()` `note` 파라미터 200자 미만 검증 누락 — DB 스키마 불일치** (`app.py:596-603`): `RoomTransaction.note = db.Column(db.String(200))` 이지만 `host_adjust()` 에서 `note = d.get('note', '진행자 자산 조정')` 의 길이를 검증하지 않음. SQLite는 String(200) 제한을 강제하지 않으므로 현재는 무해하지만, PostgreSQL 등 다른 DB로 마이그레이션 시 200자 초과 note 저장 시 에러 발생. `app.js:491` 의 `adj-note` 입력란에도 `maxlength` 속성이 없음. 서버에서 `note = d.get('note', '진행자 자산 조정')[:200]` 으로 truncate하고, HTML `<input id="adj-note" ... maxlength="200">` 한 줄 추가로 완전 해결.
+
+- **`get_history()` `interval` 파라미터 수신 후 무시 — API 계약 불일치** (`stock_service.py:281, 292`; `app.py:718`): `get_history(symbol, period, interval)` 에서 `interval` 을 인자로 받지만 `n_bars = {'1d': 30, '5d': 5, '1mo': 30, '3mo': 90}` 고정값만 사용. 클라이언트에서 `period='1d'`를 요청하면 interval='5m' (하루 78봉 기대)이지만 실제로는 30개 봉 반환 — 레이블이 일봉이므로 "오늘 하루" 차트가 30일 월봉처럼 보임. `interval` 파라미터를 삭제하거나, `n_bars` 를 `{'1d': 78, '5d': 390, '1mo': 30, '3mo': 90}` 으로 interval에 맞게 조정하여 계약 일관성 확보. 교육용이므로 큰 영향은 없으나 `stock_service.py:281` 서명 수정이 필요.
