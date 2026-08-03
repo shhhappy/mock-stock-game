@@ -3435,3 +3435,31 @@
 - **룰렛·복권 트랜잭션 거래 내역에 "자산조정"으로 잘못 표시** (`app.py:840-841`, `get_transactions()`; `app.js:1584`, `loadTxn()`): `get_transactions()` 에서 `'name': STOCKS.get(t.symbol, {}).get('name', '자산조정') if t.action != 'ADJ' else '자산조정'` — action이 `'RLT'`(룰렛)이면 `STOCKS.get('ROULETTE', {})` → `'자산조정'` 반환. 학생 거래 내역에서 룰렛 상금과 복권 당첨금이 "자산조정"으로 표시돼 진행자 조정과 구별 불가. `ACTION_NAMES = {'ADJ': '자산조정', 'RLT': '룰렛', 'BUY': None, 'SELL': None}` dict를 추가해 symbol 조회보다 action 조회를 우선하도록 수정. 클라이언트도 `t.action === 'RLT' ? '룰렛' : t.action === 'ADJ' ? '조정' : ...` 분기 필요(`app.js:1584`).
 
 - **`_quiz_settings` · `_roulette_config` 서버 재시작 시 초기화** (`app.py:1246`, `_quiz_settings`; `app.py:250`, `_roulette_config`): 진행자가 퀴즈 보상/패널티 비율(`reward_pct`, `penalty_pct`)과 룰렛 배율·확률을 수업 시작 전 커스터마이즈해도, Render free tier 슬립 후 재시작 시 기본값으로 리셋됨. 복권 완료 회차(`lottery_rounds_done`)는 `Room` DB 컬럼으로 영속화한 선례(`models.py:41`)가 있으므로 동일 패턴 적용: `Room` 모델에 `quiz_settings_json = db.Column(db.Text, nullable=True)`, `roulette_config_json = db.Column(db.Text, nullable=True)` 추가. 각 설정 엔드포인트에서 `json.dumps()` 로 저장, 조회 시 인메모리 `_quiz_settings.get(rid)` 없으면 DB `json.loads(room.quiz_settings_json)` 로 fallback. 마이그레이션 SQL은 기존 `ALTER TABLE` 패턴(`app.py:31-40`) 재사용.
+
+---
+
+## 2026-08-03
+
+### 추가하면 좋을 기능
+
+- **Excel 내보내기에 학생별 거래 내역 시트 추가** (`app.py:1419-1488`, `export_rankings()`): 현재 Excel은 "최종 순위" 시트 1장만 생성함. `openpyxl.Workbook()`에 학생별 시트를 추가해 각 학생의 매수/매도/룰렛/퀴즈 트랜잭션을 시간순으로 기록하면 수업 후 "왜 이 수익률이 나왔는가?" 피드백 근거를 제공할 수 있음. `RoomTransaction.query.filter_by(room_id=rid, user_id=m.user_id).order_by(...).all()`로 쿼리하고, `wb.create_sheet(f'{name}({sid})')`로 시트를 추가하면 기존 로직 재활용. 무료 배포 환경이므로 메모리 효율을 위해 학생 수 30명 이하로 제한 경고 추가 권장.
+
+- **진행자 게임 중 시간 연장 기능** (`app.py:519-537`, `end_room()`; `app.py:475-488`, `start_room()`): 현재 호스트 UI에 게임 종료("end") 버튼만 있고 시간 추가 옵션이 없음. `POST /api/rooms/<rid>/host/extend` 엔드포인트를 추가해 `room.end_time += timedelta(minutes=int(d.get('minutes', 5)))`로 5분·10분 연장하면 수업이 늦게 시작되거나 흥미로운 장면에서 시간이 부족할 때 유용. `_invalidate_room_cache(rid)` 호출 포함. 클라이언트는 호스트 설정 탭에 "+5분" / "+10분" 버튼 2개 추가로 완성.
+
+- **`refreshMyRank()` 대신 경량 개인 순위 전용 엔드포인트 추가** (`app.py:808-824`, `get_rankings()`; `app.js:735-752`): `refreshMyRank()`는 10초마다 전체 랭킹 목록을 받아 자신의 항목만 추출함. 30명 방 기준 1인당 매 폴링이 30명 전체 `member_total_value()`를 호출하므로 실질적으로 전체 N²회 DB 쿼리를 발생시킴. `GET /api/rooms/<rid>/my-rank` 신규 엔드포인트에서 요청자 1명의 `total_value`와 현재 순위(서브쿼리 또는 전체 정렬 후 인덱스)를 반환하면 DB 부하를 N분의 1로 줄일 수 있음. 단, 순위 산정을 위해 전체 조회가 불가피하므로 캐시 적용(`ROOM_CACHE_TTL` 활용)이 중요.
+
+- **게임 진행 중 호스트 킥 기능 (active 상태)** (`app.py:564-575`, `kick_member()`; `app.js:228-230`): `kick_member()`는 `room.status != 'waiting'`이면 400 반환(line 570)해 게임 시작 후에는 강퇴 불가. 수업 중 접속만 하고 아무 거래도 하지 않거나 이탈한 학생을 처리할 수 없어 순위판이 오염됨. `status == 'active'` 시 킥 허용 + 해당 학생의 보유 주식 전량 현금화(현재 `_end_room()` 내 정산 로직 재사용) + `RoomHolding` 삭제 후 `RoomMember` 삭제 순서로 처리하면 데이터 일관성 유지. `Deposit`도 `status='withdrawn'` 처리 필요.
+
+- **개인 퀴즈 응답 타임스탬프 서버 기록** (`app.py:1248-1342`, `get_quiz()`, `submit_quiz()`): 현재 서버는 퀴즈 문제를 전송한 시각을 기록하지 않아 학생이 문제를 본 뒤 무제한 시간 후 제출 가능. `_quiz_state[key] = {'qid': q['id'], 'cooldown_until': 0, 'seen': seen, 'sent_at': time.time()}`로 발송 시각을 저장하고, `submit_quiz()` 에서 `time.time() - state['sent_at'] > 35`이면 시간 초과로 자동 오답 처리하면 클라이언트 타이머 우회를 방지할 수 있음. 서버 2줄 추가로 구현 가능.
+
+### 제거/단순화할 것들
+
+- **`lottery_skip()` 스킵 회차 DB 미저장 — 서버 재시작 후 재트리거** (`app.py:1209-1219`, `lottery_skip()`): `lot.setdefault('done', set()).add(round_n)` 으로 인메모리 `_lots[rid]['done']` 만 업데이트하고, 복권 완료 시 DB에 저장하는 `room.lottery_rounds_done`(`app.py:228-229`)에는 반영하지 않음. Render free tier 슬립 후 재시작 시 `_lot_round_due()` 가 `DB.lottery_rounds_done`에서 done set을 복원(`app.py:175-178`)하므로 스킵한 회차가 다시 due로 감지돼 복권이 재트리거됨. `lottery_skip()` 내에서도 `room = db.session.get(Room, rid); room.lottery_rounds_done = ...; db.session.commit()` 패턴을 `_do_reveal()`과 동일하게 추가해야 함 (`app.py:1218` 직후).
+
+- **`doRouletteSpin()` 2회차 이상 베팅 한도 불일치** (`app.js:1065`, `app.js:1038`, `app.js:1066-1068`): 룰렛 첫 스핀 후 `_rltCash = data.cash` (현금만, line 1065)로 갱신되고 2회차 베팅 시 `if (bet > _rltCash)` (line 1038)로 현금만 기준 검증. 그러나 서버 `minigame_spin()`은 `total_assets`(현금+주식+예금) 기준으로 베팅 허용(`app.py:1020`). 현금 0원·주식 500만원 보유 학생이 2회차 스핀 시 클라이언트는 "잔액 부족" 오류를 표시하지만 서버는 주식 자동 청산 후 처리 가능. 비동기로 `total_assets`를 재조회하는 로직이 line 1066-1068에 있지만 await가 없어 베팅 입력 시점에 `_rltCash`가 구버전일 수 있음. `openRouletteModal()` 최초 로드 시 받은 `total_assets`를 별도 변수로 유지하고 스핀 결과 후 `await api.get(.../minigame)`의 응답을 기다린 뒤 다음 스핀 UI를 활성화하면 해결됨.
+
+- **`showBombNews()` 뉴스 2건 이상일 때 3초 표시 시간 부족** (`app.js:1175-1177`): `setTimeout(() => popup.style.display = 'none', 3000)` 고정. 뉴스 아이템이 2건인 경우 팝업 높이가 증가하지만 시간이 동일해 두 번째 헤드라인을 읽기 전에 사라짐. `const displayMs = 2500 + items.length * 1200;` 와 같이 아이템 수에 비례해 표시 시간을 늘리고(`app.js:1175`), `bar` 애니메이션 duration도 `bomb-news-bar` 인라인 스타일로 같이 조정하면 가독성이 개선됨. 변경은 JS 3줄.
+
+- **`create_deposit()` 예금 후 현금 0원 허용 — 거래 완전 불가 상태** (`app.py:878-902`, `create_deposit()`): `if m.cash < amount` 체크만 있어 전액 예금이 가능. 1,000만원 전액 예금 후 현금 0원 상태에서 매수 시 "잔액 부족" 오류만 표시되고 해결 방법 안내 없음(예금 해지 기능을 모르는 학생은 게임 참여 불가). 최소 잔액 `min_reserve = room.starting_cash * 0.05` (예: 50만원) 를 예금 허용 금액 상한으로 설정하거나, 0원 예금 완료 시 프론트에 "예금 탭에서 해지 가능" 안내 토스트(`app.js`)를 자동 표시하면 학습 중단 방지. 서버 1줄, 클라이언트 1줄.
+
+- **`get_history()` 차트 데이터 캐시 미스 시 매번 다른 랜덤 생성 — 교육용 일관성 저해** (`stock_service.py:281-310`): `_history_cache` TTL 120초 만료 또는 가격 변경(`get_price()` line 187-189, `force_price()` line 227-228)으로 캐시 무효화 후 `get_history()` 재호출 시 완전히 새로운 랜덤 봉차트를 생성함. 같은 종목을 두 번 차트로 열면 전혀 다른 "과거" 패턴이 표시되어 교사가 "이 차트의 패턴을 보세요"라고 설명하는 도중 학생마다 다른 화면을 보게 됨. 해결책: 룸 시작 시 `_init_prices()`에서 종목별 시드값 `random.seed(hash((room_id, sym)) % 2**32)`를 고정하거나, 생성된 히스토리를 캐시 무효화 없이 유지하고 현재 가격만 마지막 봉으로 덮어쓰는 방식으로 일관성 확보.
