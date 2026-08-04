@@ -3489,3 +3489,31 @@
 - **`host_adjust()` `note` 파라미터 200자 미만 검증 누락 — DB 스키마 불일치** (`app.py:596-603`): `RoomTransaction.note = db.Column(db.String(200))` 이지만 `host_adjust()` 에서 `note = d.get('note', '진행자 자산 조정')` 의 길이를 검증하지 않음. SQLite는 String(200) 제한을 강제하지 않으므로 현재는 무해하지만, PostgreSQL 등 다른 DB로 마이그레이션 시 200자 초과 note 저장 시 에러 발생. `app.js:491` 의 `adj-note` 입력란에도 `maxlength` 속성이 없음. 서버에서 `note = d.get('note', '진행자 자산 조정')[:200]` 으로 truncate하고, HTML `<input id="adj-note" ... maxlength="200">` 한 줄 추가로 완전 해결.
 
 - **`get_history()` `interval` 파라미터 수신 후 무시 — API 계약 불일치** (`stock_service.py:281, 292`; `app.py:718`): `get_history(symbol, period, interval)` 에서 `interval` 을 인자로 받지만 `n_bars = {'1d': 30, '5d': 5, '1mo': 30, '3mo': 90}` 고정값만 사용. 클라이언트에서 `period='1d'`를 요청하면 interval='5m' (하루 78봉 기대)이지만 실제로는 30개 봉 반환 — 레이블이 일봉이므로 "오늘 하루" 차트가 30일 월봉처럼 보임. `interval` 파라미터를 삭제하거나, `n_bars` 를 `{'1d': 78, '5d': 390, '1mo': 30, '3mo': 90}` 으로 interval에 맞게 조정하여 계약 일관성 확보. 교육용이므로 큰 영향은 없으나 `stock_service.py:281` 서명 수정이 필요.
+
+---
+
+## 2026-08-04
+
+### 추가하면 좋을 기능
+
+- **진행자 대시보드에 학급 전체 종목 보유 현황(히트맵) 추가** (`app.py:542-562` `host_members()`; `app.py:107-118` `member_total_value()`): 현재 진행자는 개인별 총자산·수익률만 볼 수 있고 학급 전체가 어떤 종목을 얼마나 보유하는지 집계 데이터가 없음. `GET /api/rooms/<rid>/host/holdings-summary` 신규 엔드포인트에서 `RoomHolding.query.filter_by(room_id=rid).all()` 로 전체 보유 현황을 `{symbol: total_shares}` 형태로 집계하고, 진행자 시장 탭에 "학급 보유 TOP 5 종목" 테이블을 추가하면 "이 종목에 투자한 학생이 10명" 같은 수업 화제를 제공할 수 있음. 서버 약 15줄, 클라이언트 소형 테이블 렌더링.
+
+- **퀴즈 설정 및 룰렛 설정을 DB에 저장** (`app.py:250-251` `_roulette_config`; `app.py:1245-1246` `_quiz_settings`; `models.py:25-42` `Room`): `_quiz_settings`와 `_roulette_config`는 순수 인메모리로 Render 무료 티어의 15분 비활성 후 서버 재시작 시 초기화됨. `lottery_rounds_done`(`app.py:228-229`)처럼 DB 컬럼에 JSON 직렬화해 저장하면 재시작 후에도 설정 유지 가능. `Room` 모델에 `quiz_settings = db.Column(db.String(200), default='{}')`, `roulette_config = db.Column(db.String(500), default='{}')` 컬럼 추가 후, `quiz_settings()` POST / `host_roulette_config()` POST에서 `db.session.commit()` 처리. `ALTER TABLE` 마이그레이션을 기존 `app.py:31-40` 패턴으로 추가하면 됨.
+
+- **참여자 게임 화면에서 주가 자동 폴링 추가** (`app.js:269-274` `enterHostGame()`; 참여자 게임 폴링 루프): 진행자 화면은 10초마다 `loadHostMarket()`을 호출하지만(`app.js:269`), 참여자 시장 탭은 수동 새로고침 버튼(↻)에만 의존함. 참여자의 10초 폴링 루프 안에서 `if (S.currentPage === 'market') loadMarket();` 한 줄을 추가하면 탭을 열어 둔 채 20초 주기로 가격이 자동 갱신됨(주가 TTL=20초와 동기화). `loadMarket()` 함수는 이미 구현됨.
+
+- **거래 내역에서 룰렛·복권·예금 트랜잭션에 올바른 한글 라벨 표시** (`app.py:619-622` `host_member_transactions()`; `app.py:840-842` `get_transactions()`): `action='RLT'`일 때 `symbol='ROULETTE'`이지만 `STOCKS.get('ROULETTE', {}).get('name', '자산조정')`로 '자산조정' 라벨이 나와 룰렛 거래가 자산조정으로 보임. `SPECIAL_SYMBOLS = {'ROULETTE': '룰렛 미니게임', 'LOTTO': '복권 추첨', 'DEPOSIT': '예금 관련'}` 딕셔너리를 `stock_service.py` 또는 `app.py` 상단에 추가하고, 해당 두 곳에서 `SPECIAL_SYMBOLS.get(t.symbol) or STOCKS.get(t.symbol, {}).get('name', '자산조정')`로 교체하면 됨. 각 2줄 수정으로 거래 내역 가독성 향상.
+
+- **호스트 게임 화면에서 실시간 순위 자동 갱신 간격 단축 (가변 설정)** (`app.js:269-274` `enterHostGame()`; `app.py:808-824` `get_rankings()`): 현재 진행자 랭킹 폴링이 `setInterval(..., 10000)` 고정. 게임 종료 직전 흥분되는 순간에는 5초, 한가한 중반에는 15초 등 진행자가 폴링 속도를 조절하면 서버 부하와 UX 모두 개선. 진행자 설정 탭에 "순위 갱신 주기(초)" 슬라이더(5~30)를 추가하고, `clearInterval(S.pollInterval); S.pollInterval = setInterval(..., newMs)` 패턴으로 재설정. 서버 변경 없이 클라이언트 약 15줄.
+
+### 제거/단순화할 것들
+
+- **`app.secret_key` 기본값이 하드코딩된 공개 문자열** (`app.py:13`): `'mock-stock-game-secret-2024'`가 코드에 명시되어 있어 환경변수 미설정 시 누구나 Flask 세션을 위조 가능. Render 무료 환경에서 `SECRET_KEY` 미설정 배포가 쉽게 발생할 수 있음. `os.environ.get('SECRET_KEY')` 만 사용하고 없으면 `os.urandom(32).hex()` 로 매 시작마다 새 키를 생성하거나 (재시작 시 세션 무효화 허용), 환경 변수 미설정 시 명시적 `ValueError` 경고를 `logging.warning()`으로 출력해 운영자에게 알리는 것이 안전함. 단순 수정이지만 보안 필수.
+
+- **`member_total_value()` 에서 매번 개별 DB 쿼리 — 랭킹 조회 시 O(N×M) 쿼리 발생** (`app.py:107-118` `member_total_value()`; `app.py:808-824` `get_rankings()`): `get_rankings()`는 멤버 N명 각각에 대해 `member_total_value()`를 호출하고, 내부에서 `RoomHolding.query.filter_by(room_id, user_id)`, `Deposit.query.filter_by(room_id, user_id)` 를 개별 실행. 30명 방이면 랭킹 1회 조회에 최소 60+ DB 쿼리 발생. `RoomHolding.query.filter_by(room_id=rid).all()`과 `Deposit.query.filter_by(room_id=rid, status='active').all()`을 한 번씩 벌크 조회 후 `{user_id: [...]}` 딕셔너리로 변환해 `member_total_value` 계산을 일괄 처리하면 2회 쿼리로 줄어듦. `get_rankings()` (`app.py:808`) 내부에서 직접 구현 권장.
+
+- **`enter()` 에서 `username` 내부 공백 정규화 누락** (`app.py:329-342` `enter()`; `app.js:73-79` `doAuth()`): `request.json.get('username','').strip()`으로 앞뒤 공백만 제거하고 내부 연속 공백은 그대로 둠. 학번·이름을 `f"{sid} {name}"`으로 합칠 때(`app.js:75`) 학번에 공백이 포함되면 "20715  홍길동" 과 "20715 홍길동"이 다른 유저로 등록됨. `username = ' '.join(u.split())` 한 줄 추가(`app.py:334` 직후)로 내부 공백 정규화 가능. 동일 교실 학생이 오타로 중복 계정을 만드는 상황 방지.
+
+- **`_lots`, `_quiz_state` 등 인메모리 딕셔너리에 waiting 상태 room의 항목 누적** (`app.py:155-162` `_end_room()`): `_end_room()`이 호출될 때 `_quiz_settings.pop(room.id)`, `_roulette_config.pop(room.id)` 등을 정리하지만, `waiting` 상태로 방치된 방(호스트가 방 만들고 게임 시작 안 한 채 이탈)은 `_end_room()`이 절대 호출되지 않아 in-memory에 적재되지 않음. 대신 해당 방에 quiz 설정을 POST 한 뒤 방이 abandoned되면 딕셔너리에 항목이 남음. 서버가 24시간 운영된다면 의미 없는 항목이 쌓임. `create_room()`의 stale 방 정리 로직(`app.py:371-379`)을 `waiting` 상태의 오래된 방에도 적용하면 해결됨 (`Room.status == 'waiting'`, `created_at < 6시간 전` 조건).
+
+- **`get_room()` 에서 `_auto_start_lottery_if_due()` 호출이 매 GET 폴링마다 DB commit 유발** (`app.py:432-473` `get_room()`; `app.py:408-430` `_auto_start_lottery_if_due()`): 모든 학생이 10초마다 `GET /api/rooms/<rid>`를 호출하고, 각 호출에서 `_auto_start_lottery_if_due()`가 실행됨. 복권 트리거 조건이 충족되기 전까지는 아무 일도 없지만, 충족 시 `with _lottery_lock:` 내에서 `room.status = 'paused'; db.session.commit()`을 여러 스레드가 경쟁적으로 실행할 수 있음. 이미 `lottery_lock`으로 보호되어 중복 실행 방지는 됨. 그러나 `_lot_round_due()` 계산 결과가 None이 아닐 때만 `_lottery_lock` 진입하도록, 트리거 조건 체크를 lock 밖으로 이동하면 lock 경합을 줄일 수 있음. (`app.py:408-414`, 조건 분기 재배치)
