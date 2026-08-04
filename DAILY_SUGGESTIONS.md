@@ -3517,3 +3517,35 @@
 - **`_lots`, `_quiz_state` 등 인메모리 딕셔너리에 waiting 상태 room의 항목 누적** (`app.py:155-162` `_end_room()`): `_end_room()`이 호출될 때 `_quiz_settings.pop(room.id)`, `_roulette_config.pop(room.id)` 등을 정리하지만, `waiting` 상태로 방치된 방(호스트가 방 만들고 게임 시작 안 한 채 이탈)은 `_end_room()`이 절대 호출되지 않아 in-memory에 적재되지 않음. 대신 해당 방에 quiz 설정을 POST 한 뒤 방이 abandoned되면 딕셔너리에 항목이 남음. 서버가 24시간 운영된다면 의미 없는 항목이 쌓임. `create_room()`의 stale 방 정리 로직(`app.py:371-379`)을 `waiting` 상태의 오래된 방에도 적용하면 해결됨 (`Room.status == 'waiting'`, `created_at < 6시간 전` 조건).
 
 - **`get_room()` 에서 `_auto_start_lottery_if_due()` 호출이 매 GET 폴링마다 DB commit 유발** (`app.py:432-473` `get_room()`; `app.py:408-430` `_auto_start_lottery_if_due()`): 모든 학생이 10초마다 `GET /api/rooms/<rid>`를 호출하고, 각 호출에서 `_auto_start_lottery_if_due()`가 실행됨. 복권 트리거 조건이 충족되기 전까지는 아무 일도 없지만, 충족 시 `with _lottery_lock:` 내에서 `room.status = 'paused'; db.session.commit()`을 여러 스레드가 경쟁적으로 실행할 수 있음. 이미 `lottery_lock`으로 보호되어 중복 실행 방지는 됨. 그러나 `_lot_round_due()` 계산 결과가 None이 아닐 때만 `_lottery_lock` 진입하도록, 트리거 조건 체크를 lock 밖으로 이동하면 lock 경합을 줄일 수 있음. (`app.py:408-414`, 조건 분기 재배치)
+
+---
+
+## 2026-08-04 (2차)
+
+### 추가하면 좋을 기능
+
+- **진행자 "학생 포트폴리오 관찰" 모달** (`app.py:772-803` `get_portfolio()`; `app.js:408-431` `loadHostMembers()`): `GET /api/rooms/<rid>/host/members/<uid>/portfolio` 신규 엔드포인트를 추가해 진행자 권한으로 특정 학생의 현금·보유주식·예금·수익률을 조회. 진행자 순위 패널 각 행에 "📊 보기" 버튼을 추가하면 클릭 시 해당 학생의 포트폴리오가 모달로 표시됨. "이 학생의 전략을 살펴봅시다" 수업 활용 가능. 기존 `get_portfolio()`에서 `user_id` 파라미터만 외부 주입하도록 리팩터링하면 서버 약 10줄, 클라이언트 모달 25줄로 완성.
+
+- **뉴스 수신 히스토리 보관 및 "뉴스 아카이브" UI** (`app.js:1148-1178` `showBombNews()`; 참여자 게임 화면): 현재 폭탄뉴스는 3초 표시 후 사라지고 기록이 없음. `S.newsHistory = []` 배열에 `showBombNews()` 호출 시마다 `{ts: new Date(), items}` 를 push하고, 시장 탭 우상단 "📰" 버튼 클릭 시 시간 역순 뉴스 타임라인 모달을 표시. "10분 전 뉴스를 보고 어떤 판단을 했는지 복기해봅시다" 수업 피드백에 직결됨. `showBombNews()` 말미에 1줄 추가, 아카이브 모달 약 20줄.
+
+- **호스트 대시보드 "학급 자산 구성 도넛차트"** (`app.py:542-562` `host_members()`; `app.js:433-478` `renderHostBarChart()`): `host_members()` 응답에 각 멤버의 `cash_total`, `stock_total`, `deposit_total` 집계 필드를 포함하고, 진행자 순위탭 상단에 전체 학급의 현금/주식/예금 비율 도넛차트를 추가. "학급 현금 보유 75% → 대부분 학생이 아직 주식 진입을 주저" 같은 즉각 파악 가능. 서버 3필드 추가, 클라이언트 Chart.js 도넛 약 20줄.
+
+- **주가 변동 시 Web Audio API 비프음 피드백** (`app.js:1313-1323` `renderGrid()` flash 처리 부분): `renderGrid()` 내 `flash-up`/`flash-down` 클래스 추가 직후 `AudioContext`로 짧은 비프음 (오름: 880Hz 0.1초, 내림: 440Hz 0.1초) 출력. 외부 라이브러리 불필요. 헤더에 소리 ON/OFF 토글 버튼(🔊/🔇)을 추가하고 `localStorage`로 설정 저장. 시각 장애 학생 접근성 향상 및 수업 몰입감 상승. JS 약 15줄.
+
+- **퀴즈 "4지선다" 유형 지원** (`education_data.py` QUIZ_QUESTIONS; `app.py:1248-1268` `get_quiz()`; `app.js:832-868` `openQuiz()`): `QUIZ_QUESTIONS` 항목에 `'type': 'mc', 'choices': ['가', '나', '다', '라']` 선택적 필드를 추가. `get_quiz()` 응답에 `choices` 포함 시 클라이언트 `openQuiz()`가 O/X 버튼 대신 최대 4개 선택지 버튼을 렌더링. `submit_quiz()`에서 `answer`를 index로 처리하도록 `q['a']` 타입 분기. 기존 O/X 문제와 완전 하위호환. 단순 O/X보다 교육적 깊이 향상.
+
+- **게임 로비에서 "학번-이름 형식 확인" 시각 강조** (`app.js:219-231` `loadLobbyMembers()`; `app.py:577-585` `lobby_members()`): 현재 로비에서 참여자 닉네임이 단순 리스트로만 표시됨. 진행자 로비 화면에 "형식 확인" 토글을 추가해 ON 시 닉네임을 공백 기준으로 파싱해 `[학번]`과 `이름`을 색상 분리 표시. 학생이 `"1234 홍길동"` 대신 `"홍길동"` 또는 `"ㅋㅋㅋ 홍길동"`처럼 잘못 입력한 케이스를 게임 시작 전에 육안으로 파악 가능. HTML 3줄, JS 5줄.
+
+### 제거/단순화할 것들
+
+- **`trade()` BUY 동시 요청 시 현금 이중 차감 race condition** (`app.py:747-750`, `app.py:765`): 두 스레드가 동시에 BUY 요청 시 `member.cash` READ → 잔액 체크 → DB write 흐름이 직렬화되지 않음. SQLite WAL이 write를 직렬화하지만 Flask 스레드 두 개가 동시에 READ하면 같은 잔액 값을 읽고 둘 다 통과 → cash가 의도보다 두 배 차감 가능. `RoomMember.query.filter_by(room_id=rid, user_id=user.id).with_for_update().first()` (PostgreSQL 이전 대비) 혹은 `(rid, user.id)` 키 단위 `threading.Lock()`으로 trade 섹션을 감싸면 해결. SQLite 사용 중에는 `PRAGMA busy_timeout=5000`(이미 설정)이 write 충돌은 막으나 read 충돌에는 무효.
+
+- **`StockService._prev` 딕셔너리가 게임 시작 가격으로 고정 — 변동률이 현재-직전 비교가 아닌 현재-시작 누적 비교** (`stock_service.py:108-127, 278`): `_init_prices()`에서만 `_prev[sym]` 설정, `get_price()` 에서 가격이 갱신되어도 `_prev` 미갱신. 결과적으로 학생이 보는 "▲ +12.5%" 배지가 직전 20초 주기 대비가 아닌 게임 시작 이후 누적 등락률을 나타냄. 교육적으로 잘못된 정보 제공. `get_price()` 내 `new_price = self._next_price(...)` 계산 직전(`stock_service.py:184`)에 `self._prev[sym] = price` 한 줄 추가.
+
+- **`get_stocks()` · `get_chart()` 방 멤버십 검증 없이 room_id만으로 타 방 시세·차트 열람 가능** (`app.py:651-671` `get_stocks()`; `app.py:710-719` `get_chart()`): 두 엔드포인트 모두 `Room.query.get_or_404(rid)` 후 호스트·멤버 여부 미확인. 로그인된 임의 사용자가 다른 방 ID를 추측하면 전체 시세 목록과 봉차트를 열람 가능. `host_members()`(`app.py:547`) 패턴으로 각 엔드포인트에 `if room.host_id != user.id and not RoomMember.query.filter_by(room_id=rid, user_id=user.id).first(): return jsonify({'error': '권한 없음'}), 403` 추가.
+
+- **`submit_quiz()` 쿨다운 체크 비원자적 — 타이머 자동 제출과 버튼 클릭 동시 도달 시 보상 2회 지급 가능** (`app.py:1278-1341`): `_quiz_state[key]` 읽기(`state.get('cooldown_until', 0) > time.time()`, `app.py:1279`)와 갱신(`_quiz_state[key] = {..., 'cooldown_until': time.time() + 60}`, `app.py:1341`) 사이에 Lock 없음. 클라이언트 30초 타이머 만료 자동 제출(`app.js:864`)과 사용자 버튼 클릭이 동시에 서버 도달 시 두 요청 모두 `cooldown_until=0`을 읽고 통과 → 최대 보상/패널티 2회 지급. `_quiz_state_lock = threading.Lock()`(`app.py:1245` 근처) 추가 후 `submit_quiz()` 내 state 조회부터 갱신까지 `with _quiz_state_lock:` 로 감싸면 해결.
+
+- **`loadParticipantRankings()` 오류 응답 수신 시 `TypeError: data.map is not a function` 발생** (`app.js:1678-1691`): `const data = await api.get(...)` 후 `if (!data.length)` 조건에서 `data`가 `{error: 'HTTP 500'}` 객체이면 `.length`는 `undefined`(falsy)로 평가되어 else 분기 진입 → `data.map(e => ...)` 에서 `TypeError` 발생, 화면 완전 멈춤. `if (!Array.isArray(data) || data.error)` 조건으로 교체하면 안전하게 빈 상태 표시.
+
+- **`create_room()` stale 방 정리 조건에 `waiting` 상태 미포함 — 게임 시작 없이 이탈 시 영구 재입장 불가** (`app.py:371-381`): stale 방 정리 조건이 `Room.status.in_(['active','paused'])` 이고 `end_time < stale_cutoff` 이므로 `status='waiting'` 인 방은 제외됨. 진행자가 방을 만들고 게임을 시작하지 않은 채 이탈하면 재접속 시 "이미 진행 중인 방이 있습니다." 오류를 영구적으로 받게 됨. 같은 블록에 `or Room.query.filter(Room.host_id == user.id, Room.status == 'waiting', Room.created_at < datetime.utcnow() - timedelta(hours=6)).first()` 조건을 추가해 오래된 대기방도 자동 정리.
