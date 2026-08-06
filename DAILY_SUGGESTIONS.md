@@ -3635,3 +3635,33 @@
 - **`_quiz_settings` · `_roulette_config` in-memory 저장 — Render cold start 후 설정 초기화** (`app.py:250`, `1246`): 진행자가 퀴즈 보상/패널티 비율(`_quiz_settings`)과 룰렛 확률(`_roulette_config`)을 변경해도 Render free tier 재시작(비활성 30분 후 자동 종료) 시 기본값으로 리셋됨. 수업 시작 전 설정하고 중간에 서버가 재시작되면 설정이 날아감. 기존 `ALTER TABLE` 마이그레이션 패턴(`app.py:31-40`)으로 `rooms` 테이블에 `quiz_reward_pct FLOAT DEFAULT 1.0`, `quiz_penalty_pct FLOAT DEFAULT 0.5`, `rlt_config VARCHAR(200) DEFAULT ''` 컬럼을 추가하면 서버 재시작 후에도 설정 유지. `models.py:25-41` Room 모델에 컬럼 추가 필요.
 
 - **`get_room()` 의 `Room.query.get_or_404()` 레거시 패턴 혼용** (`app.py:435` 외 다수): `Room.query.get_or_404(rid)` (SQLAlchemy legacy Query API)와 `db.session.get(Room, rid)` (SQLAlchemy 2.0 스타일)가 혼용됨. `app.py`에서 `Room.query.get_or_404` 12회, `Room.query.get` 2회, `db.session.get(Room, ...)` 다수 혼재. Flask-SQLAlchemy 3.x에서 `Query.get()`은 deprecated 경고를 발생시키며 SQLAlchemy 2.0에서 제거됨. `db.get_or_404(Room, rid)`로 전면 교체하면 코드 일관성과 향후 업그레이드 안정성 확보. 전체 교체 대상 약 15곳, 기능 변경 없음.
+
+---
+
+## 2026-08-06 (2차)
+
+### 추가하면 좋을 기능
+
+- **진행자 마켓 탭에 시장 온도계 위젯 (상승/하락/보합 종목 수)** (`app.js:314-358`, `loadHostMarket()`): 현재 진행자 마켓 탭은 종목 카드만 나열할 뿐, 전체 시장 흐름을 한 눈에 보여주는 집계 정보가 없음. `loadHostMarket()` 에서 `data.stocks`를 수신한 뒤 `const up = data.stocks.filter(s => s.change_pct > 0).length` 등으로 집계해 카드 그리드 위에 `<div class="breadth-bar">📈 상승 ${up}개 · 📉 하락 ${dn}개 · ─ 보합 ${flat}개</div>` 형태의 한 줄 위젯을 추가하면 됨. 서버 변경 없이 클라이언트 약 8줄 추가. 교사가 "지금 시장 전체가 오르고 있다" 등의 설명을 즉시 제공할 수 있어 수업 진행 보조 효과.
+
+- **관심 종목(watchlist) 가격 급등락 알림** (`app.js:1279-1285`, `toggleWatchlist()`; `app.js:1229-1241`, `loadMarket()`): 관심 종목 `S.watchlist`은 localStorage에 영구 저장되지만, 가격이 크게 변해도 아무 알림이 없음. `filterStocks(prev)` 에서 `prevPrices` 비교 시 관심 종목이 `|change_pct| >= 5`이면 `toast(`⭐ ${st.name} ${pct(st.change_pct)} 급변!`, 'warn')` 한 줄 추가로 즉시 구현 가능. `app.js:1313-1323` 의 flash 애니메이션 루프와 함께 처리하면 중복 없이 자연스럽게 통합됨. 수업 중 학생들이 특정 종목을 팔로우하며 매매 타이밍을 놓치지 않도록 도움.
+
+- **포트폴리오 보유 종목에서 1클릭 전량 매도 버튼** (`app.js:1546-1562`, `loadPortfolio()`): 보유 종목 카드의 "▼ 매도" 버튼이 `openStockModal()`을 열어 수량 입력 → 확인 3단계를 거쳐야 함. 게임 종료 임박 시 빠른 청산이 어려움. `<button class="btn btn-sm" style="flex:1;..." onclick="quickSell('${h.symbol}',${h.shares})" ...>⚡ 전량매도</button>` 버튼을 추가하고 `async function quickSell(symbol, shares) { const data = await api.post(..., {symbol, action:'SELL', shares}); if(data.error){toast(data.error,'error');}else{toast(data.message,'success');refreshMyRank();loadPortfolio();} }` 약 5줄로 구현 가능. 서버 변경 없음. 교사가 "지금 전부 팔아봐!" 활동 지시 시 즉각 반응 가능.
+
+- **퀴즈 문항별 정오 통계 — 교사용 집계 엔드포인트** (`app.py:1270-1342`, `submit_quiz()`; `_quiz_state`): 현재 퀴즈 결과는 `_quiz_state` in-memory에만 저장되며 진행자가 집계를 볼 수 없음. `RoomTransaction` 에서 `action='ADJ'` + `note LIKE '퀴즈%'` 필터로는 정/오 구분 불가. 수정 방향: `submit_quiz()` 내 `db.session.add(RoomTransaction(..., note=f'퀴즈{"정답" if correct else "오답"} Q{q["id"]}'))` 처럼 note에 문항 ID를 포함하면(`app.py:1339` 직후 1줄 변경), `GET /api/rooms/<rid>/host/quiz-stats` 엔드포인트에서 `note LIKE '퀴즈% Q%'` 쿼리로 문항별 정오 집계 가능. 교사가 "Q7번을 가장 많이 틀렸네, 복리에 대해 다시 설명하겠습니다" 같은 즉각 피드백 제공.
+
+- **일시정지 배너에 중단 이유 표시** (`app.js:653-666`, `showPausedBanner()`; `app.py:490-501`, `pause_room()`): 현재 `showPausedBanner()`는 단순히 "⏸ 게임이 일시정지되었습니다" 를 표시. 복권 중인지, 룰렛 중인지, 진행자가 수동으로 일시정지했는지 학생이 알 수 없어 혼란 발생. `app.py:room_dict()` 에 `pause_reason: 'lottery'|'roulette'|'manual'` 필드를 추가(`room.rlt_triggered`로 룰렛 구분, `_lots[rid]` 상태로 복권 구분, 나머지는 manual)하고, `showPausedBanner()`에서 이유별 텍스트("🎰 룰렛 진행 중", "🎟️ 복권 추첨 중", "⏸ 진행자 일시정지")를 표시하면 학생 경험 개선. 서버 3줄 + 클라이언트 3줄 수정.
+
+### 제거/단순화할 것들
+
+- **룰렛/퀴즈 패널티 주식 청산 후 `db.session.delete(h)` 누락 — 0주 레코드 DB 누적** (`app.py:1037-1038`, `app.py:1318-1319`): `minigame_spin()` (`app.py:1037`)과 `submit_quiz()` (`app.py:1318`)의 자산 청산 분기에서 `h.shares = 0; h.avg_price = 0`을 설정하지만 `db.session.delete(h)` 를 호출하지 않음. 반면 `trade()` 정상 매도 (`app.py:762`)와 `_end_room()` 청산 (`app.py:152`)은 올바르게 삭제 중. 결과적으로 `room_holdings` 테이블에 `shares=0` 레코드가 누적되고, `get_portfolio()` 에서 `if h.shares <= 0: continue` 방어 코드로 표시는 막히나 불필요한 DB 공간과 쿼리 부하가 증가. 두 곳에 각각 `if h.shares <= 0: db.session.delete(h)` 조건부 삭제 1줄 추가로 해결.
+
+- **`datetime.utcnow()` 17곳 사용 — Python 3.12 DeprecationWarning 전면 발생** (`app.py:125`, `498`, `511`, `533` 외 다수): `datetime.utcnow()`는 Python 3.12에서 공식 deprecated 되어 `DeprecationWarning`을 발생시키고 향후 제거 예정. `models.py:38` 등 모델 default 함수에서도 동일 패턴 사용. 교육 환경에서 당장 장애는 없으나, Render 배포 로그에 경고가 반복 출력됨. `from datetime import datetime, timezone`으로 변경 후 `datetime.utcnow()` → `datetime.now(timezone.utc)`로 전면 교체 필요. `grep -n 'utcnow' app.py`로 17곳 확인. `models.py:38`의 `default=datetime.utcnow`도 `default=lambda: datetime.now(timezone.utc)` 로 교체 필요.
+
+- **`export_rankings()` 진행 중인 게임에서 상태 체크 없이 접근 가능 — 중간 순위 유출 위험** (`app.py:1419-1428`): `room.status != 'ended'` 체크 없이 호스트가 게임 진행 중에도 `/api/rooms/<rid>/export`를 호출해 현재 순위를 Excel로 내보낼 수 있음. 실수로 화면 공유 중 다운로드 버튼을 누르거나 학생 수업 도중 중간 결과가 외부로 유출될 수 있음. `app.py:1428` 바로 아래에 `if room.status not in ('ended', 'active'): pass` 수준의 soft 체크가 아닌 `if room.status == 'active': return jsonify({'error': '게임 진행 중에는 내보낼 수 없습니다.'}), 400` 한 줄로 차단. `active` 한정 차단이므로 `paused`(복권/룰렛 중)에서는 허용해 진행자가 중간 점검 가능.
+
+- **`refreshMyRank()` 와 `loadParticipantRankings()` 가 같은 `/rankings` API를 이중 폴링** (`app.js:735-753`, `refreshMyRank()`; `app.js:1673-1692`, `loadParticipantRankings()`): `enterParticipantGame()` 의 10초 폴링 루프 (`app.js:613-650`) 마지막에서 `refreshMyRank()`가 항상 호출(`app.js:647`)되고, 랭킹 탭에 있을 때 `loadParticipantRankings()`도 추가로 호출(`app.js:649`). 두 함수 모두 `GET /api/rooms/<rid>/rankings` 를 호출하므로 랭킹 탭 활성 상태에서 매 10초마다 같은 API가 2회씩 중복 호출됨. `refreshMyRank()` 에서 받은 전체 data를 `if (S.currentPage === 'rankings') renderRankingsFromData(data)` 형태로 재사용하면 한 번의 응답으로 두 목적을 달성 가능. 학생 30명 교실 기준 분당 3회×2 = 6회 감소.
+
+- **`gen_code()` 10회 재시도 후 중복 확인 없이 코드 반환** (`models.py:8-13`): 방 코드 생성 시 `for _ in range(10):` 루프에서 고유한 코드를 찾지 못하면 10번째 시도 후 `return ''.join(random.choices(..., k=k))`를 실행하는데 이 마지막 코드는 uniqueness 확인 없이 반환됨. 6자리 코드(A-Z0-9, 36^6 = 약 21억 가지)이므로 충돌 확률이 실제로는 매우 낮지만, DB에 unique constraint가 있어(`code = db.Column(..., unique=True)`) 충돌 시 `IntegrityError`가 `create_room()` 에서 잡히지 않고 500 오류로 이어짐. 10번 루프를 `while True` + 탈출 조건 또는 `for _ in range(20):` 루프로 변경하고, 10회 실패 시 `raise RuntimeError('코드 생성 실패')` 명시적 예외 발생으로 대체하는 것이 안전.
+
+- **`host_adjust()` delta=0 허용 — 무의미한 ADJ 트랜잭션 기록** (`app.py:595-601`): `delta = float(d.get('delta', 0))`에서 0을 받아도 `if delta == 0` 검증이 없어 `m.cash += 0` + `RoomTransaction(amount=0, note='진행자 자산 조정')` 트랜잭션이 DB에 기록됨. 진행자가 금액 입력 없이 조정 버튼을 누른 경우 `ADJ` 기록이 무분별하게 쌓여 학생 거래 내역 모달(`host_member_transactions()`)을 오염. 클라이언트에서 이미 `doAdjust()` (`app.js:491-495`)의 `if (isNaN(delta))` 검사가 있으나 delta=0인 경우는 통과. 서버에서도 `if delta == 0: return jsonify({'error': '조정 금액을 입력하세요.'}), 400`을 `app.py:595` 다음에 추가하는 서버 측 이중 방어 필요.
