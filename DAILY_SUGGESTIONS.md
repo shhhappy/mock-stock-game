@@ -3607,3 +3607,31 @@
 - **`create_deposit()` 활성 예금 건수 제한 없음 — 소액 예금 수천 건으로 DB·UI 부하 유발 가능** (`app.py:878-902`): 학생이 현금이 있는 한 `POST /api/rooms/<rid>/deposits`를 반복 호출해 1원짜리 예금을 수천 건 생성할 수 있음. `_end_room()`의 예금 정산 루프(`app.py:135`)와 `get_deposits()` 쿼리가 모두 `filter_by(status='active')` 전체를 가져오므로 건수가 많을수록 처리 지연 발생. 수정: `if Deposit.query.filter_by(room_id=rid, user_id=user.id, status='active').count() >= 10: return jsonify({'error': '활성 예금은 최대 10건까지 가능합니다.'}), 400`을 `app.py:885` 직후에 추가 (한 줄). 또한 최소 예금 금액 검증(`if amount < 10000: return 400`)도 같이 추가하면 교육적 맥락에도 부합.
 
 - **`host_members()` 에서 `member_total_value()` 가 학생 N명당 3개 쿼리 실행 — N×3 쿼리 병목** (`app.py:543-562`, `app.py:107-118`): `loadHostMembers()` 는 진행자 폴링(`setInterval(..., 10000)`)마다 호출되고, 내부에서 `for m in members: member_total_value(rid, m.user_id)` 를 실행. `member_total_value()`는 각 학생마다 `RoomMember.query.filter_by()` + `RoomHolding.query.filter_by()` + `Deposit.query.filter_by()` = 3 쿼리. 학생 30명이면 매 10초마다 90개 쿼리 발생. 개선안: 루프 전에 `holdings_map = defaultdict(list); [holdings_map[h.user_id].append(h) for h in RoomHolding.query.filter_by(room_id=rid).all()]`와 `deposits_map` 을 한 번씩 조회해 딕셔너리화한 뒤 루프에서 참조하면 3→1개 쿼리로 절감(90 → 3 쿼리). `get_rankings()` (`app.py:811-824`)도 동일 패턴 적용 권장.
+
+---
+
+## 2026-08-06
+
+### 추가하면 좋을 기능
+
+- **학번/이름 localStorage 자동 저장 및 재사용** (`app.js:122-155`, `doCreateRoom()`, `doJoinRoom()`): 관심종목은 이미 `localStorage.setItem('watchlist', ...)`(`app.js:1283`)로 세션 간 유지되지만, 학번·이름은 매번 재입력해야 함. `doAuth()` 성공 후 `localStorage.setItem('lastSid', sid); localStorage.setItem('lastName', name);` 두 줄을 추가하고, `showScreen('screen-join')`·`showScreen('screen-host-create')` 진입 시 저장된 값으로 필드를 채우면 됨. 수업 중 같은 학생이 QR 재스캔이나 새로고침 후 재진입할 때 특히 유용.
+
+- **결과 화면 "홈으로" 강제 로그아웃 → 재참가 불가 문제 해소** (`app.js:108-112`, `goHome()`): 결과 화면의 "홈으로" 버튼이 `goHome()`→`api.post('/api/auth/logout')`을 호출해 세션을 소멸시킴. 같은 수업 시간에 두 번째 게임에 참가하려면 학번·이름을 다시 입력해야 함. `goHomeSoft()` 함수 (세션 유지, `S.user = null; S.room = null; showLanding();` 만 수행)를 추가하고 결과 화면 `index.html:635`의 "홈으로" 버튼에 적용. 게임 로비로 돌아가지 않고 랜딩만 표시하므로 보안상 문제 없음.
+
+- **룰렛 베팅 전 확인 단계 추가 — 전액 베팅 실수 방지** (`app.js:1032-1050`, `doRouletteSpin()`, `app.py:1022-1058`, `minigame_spin()`): 베팅 버튼 클릭 즉시 서버로 전송되며, 서버는 현금 부족 시 보유 주식 전량 청산→예금 인출까지 자동 수행. 실수로 "전액" 버튼 클릭 후 베팅하면 포트폴리오 전체가 소멸됨. `doRouletteSpin()` 상단 `app.js:1033` 직후에 `if (!confirm(`${krw(bet)}를 베팅합니다. 주식·예금이 자동 청산될 수 있습니다. 계속하시겠습니까?`)) return;` 한 줄(또는 `modal-adjust` 패턴 재사용)을 추가하면 방어 가능. 특히 `베팅 ≥ 총자산 × 50%`일 때만 확인을 요구하는 조건부 적용도 고려.
+
+- **`find_active_room()` 에 최근 종료 방 포함 → 이탈 후 재접속 학생이 결과 화면 자동 표시** (`app.py:307-313`, `find_active_room()`): 현재 `Room.status.in_(['waiting','active','paused'])` 만 조회하므로 게임 종료 후 재접속한 학생(브라우저 탭 복구, 교실 이동 후 재연결 등)은 `active_room = None` 응답을 받아 랜딩 화면에 머묾. `app.py:313` 뒤에 `ended` + `end_time >= now - 2h` 조건으로 최근 종료 방을 추가 조회하고, `results_published` 여부에 따라 결과 또는 대기 화면으로 자동 이동시키면 됨. 서버 약 5줄, 클라이언트 `onLogin()` (`app.js:82-90`)의 `active_room` 처리 로직 재사용으로 구현 가능.
+
+- **결과 화면에 개인 거래 내역 요약 표시** (`app.py:829-847`, `get_transactions()`, `index.html:628`, `results-my-stats` div): 현재 결과 화면(`screen-results`)에는 전체 순위·차트만 있고 본인 거래 통계가 없음. `GET /api/rooms/<rid>/transactions`는 이미 전체 내역을 반환하므로 서버 변경 없이 클라이언트에서 집계 가능. `loadResults()` 내에서 거래 내역을 가져와 총 매수/매도 횟수, 가장 많이 거래한 종목, 최대 단일 손익 거래를 `results-my-stats` 카드에 표시하면 "이번 게임에서 삼성전자를 7번 매매했습니다" 같은 교육적 피드백 제공. 퀴즈 정오·룰렛 결과도 `action='RLT'`/`'ADJ'` 필터로 함께 표시 가능.
+
+### 제거/단순화할 것들
+
+- **`confirm()` 다이얼로그 4개 — 모바일 WebView에서 차단 또는 원점 없이 표시** (`app.js:115,235,247,1663`): `confirmLeaveGame()`, `doKickMember()`, `doStartGame()`, `doWithdrawDeposit()` 모두 네이티브 `confirm()`을 사용. iOS Safari WebView 등 일부 환경에서 `confirm()`이 차단되거나 앱 도메인 없이 `"이 페이지가 다음을 묻습니다"` 로 표시돼 신뢰성이 낮음. 기존 `modal-adjust` 패턴(index.html:776-796)을 참고해 `openConfirmModal(msg, callback)` 범용 헬퍼를 한 번 구현하면 4곳을 일관된 UI로 교체 가능. 코드 추가 약 20줄, 교체 약 4줄.
+
+- **`import openpyxl` / `from io import BytesIO` 함수 내부 지연 임포트** (`app.py:1422-1424`): `export_rankings()` 함수 본문에 위치. Python 임포트 캐시로 두 번째 호출부터는 무비용이지만, 정적 분석 도구·의존성 스캐너가 패키지 누락을 감지 못하고, 배포 직후 첫 엑셀 다운로드 시에만 `ModuleNotFoundError` 가 발생해 교사가 뒤늦게 알아챌 수 있음. `app.py:1-10` 상단으로 이동하면 서버 시작 시 즉시 감지됨. `from io import BytesIO`도 표준 라이브러리이므로 함께 이동.
+
+- **`_rlt_active[rid]['count']` 비대칭 — 학생 강제 이탈 시 카운터 고착으로 게임 재개 불가** (`app.py:948-993`, `minigame_open()`, `minigame_close()`): `minigame_open()`이 count +1, `minigame_close()`가 count -1. 학생이 룰렛 오버레이를 연 채 탭을 닫으면 `minigame_close()` 미호출 → count 영구 고착 → 나머지 학생이 모두 닫아도 `count > 0`이 유지돼 게임이 재개되지 않음. `minigame_open()` 호출 시 해당 학생이 이미 스핀을 3회 사용했으면(`spins_used >= 3`) count 증가를 건너뛰거나, count 상한을 `RoomMember` 수로 클램핑하면(`state['count'] = min(state['count'], member_count)`) 방어 가능. `app.py:950-951` 부근 2줄 수정.
+
+- **`_quiz_settings` · `_roulette_config` in-memory 저장 — Render cold start 후 설정 초기화** (`app.py:250`, `1246`): 진행자가 퀴즈 보상/패널티 비율(`_quiz_settings`)과 룰렛 확률(`_roulette_config`)을 변경해도 Render free tier 재시작(비활성 30분 후 자동 종료) 시 기본값으로 리셋됨. 수업 시작 전 설정하고 중간에 서버가 재시작되면 설정이 날아감. 기존 `ALTER TABLE` 마이그레이션 패턴(`app.py:31-40`)으로 `rooms` 테이블에 `quiz_reward_pct FLOAT DEFAULT 1.0`, `quiz_penalty_pct FLOAT DEFAULT 0.5`, `rlt_config VARCHAR(200) DEFAULT ''` 컬럼을 추가하면 서버 재시작 후에도 설정 유지. `models.py:25-41` Room 모델에 컬럼 추가 필요.
+
+- **`get_room()` 의 `Room.query.get_or_404()` 레거시 패턴 혼용** (`app.py:435` 외 다수): `Room.query.get_or_404(rid)` (SQLAlchemy legacy Query API)와 `db.session.get(Room, rid)` (SQLAlchemy 2.0 스타일)가 혼용됨. `app.py`에서 `Room.query.get_or_404` 12회, `Room.query.get` 2회, `db.session.get(Room, ...)` 다수 혼재. Flask-SQLAlchemy 3.x에서 `Query.get()`은 deprecated 경고를 발생시키며 SQLAlchemy 2.0에서 제거됨. `db.get_or_404(Room, rid)`로 전면 교체하면 코드 일관성과 향후 업그레이드 안정성 확보. 전체 교체 대상 약 15곳, 기능 변경 없음.
