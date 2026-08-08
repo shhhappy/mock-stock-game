@@ -5,7 +5,16 @@ services:
     plan: free
     region: singapore
     buildCommand: python -m pip install -r requirements.txt
-    startCommand: gunicorn app:app --workers 1 --timeout 120 --bind 0.0.0.0:$PORT
+    startCommand: gunicorn app:app --workers 1 --threads 32 --worker-class gthread --timeout 120 --bind 0.0.0.0:$PORT
     envVars:
       - key: SECRET_KEY
         sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: mock-stock-game-db
+          property: connectionString
+
+databases:
+  - name: mock-stock-game-db
+    plan: free
+    region: singapore

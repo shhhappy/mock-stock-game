@@ -17,8 +17,15 @@ import time, random as _random
 
 app = Flask(__name__, static_folder='static')
 app.secret_key = os.environ.get('SECRET_KEY', 'mock-stock-game-secret-2024')
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///game.db')
+_db_url = os.environ.get('DATABASE_URL', 'sqlite:///game.db')
+if _db_url.startswith('postgres://'):
+    # Render/Heroku 계열은 postgres:// 스킴을 주는데 SQLAlchemy 1.4+는 postgresql://만 인식함
+    _db_url = _db_url.replace('postgres://', 'postgresql://', 1)
+app.config['SQLALCHEMY_DATABASE_URI'] = _db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+if _db_url.startswith('postgresql://'):
+    # 유휴 연결이 끊긴 뒤에도 다음 요청에서 에러 대신 자동 재연결되도록
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'pool_pre_ping': True, 'pool_size': 10, 'max_overflow': 20}
 db.init_app(app)
 
 def _set_sqlite_pragmas(dbapi_conn, _):
