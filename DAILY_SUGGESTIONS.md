@@ -2,6 +2,40 @@
 
 ---
 
+## 2026-08-08
+
+### 추가하면 좋을 기능
+
+- **시장 탭 섹터 필터 버튼에 섹터 평균 변동률 뱃지 표시** (`app.js:1243-1248`, `renderSectors()`): 현재 섹터 필터 버튼(`renderSectors()`)은 섹터명만 표시함. `S.stocks`는 이미 클라이언트에 모두 내려와 있으므로, 서버 변경 없이 `const sectorAvg = (s) => { const ss = S.stocks.filter(x => x.sector===s); return ss.length ? ss.reduce((a,x)=>a+x.change_pct,0)/ss.length : 0; }` 를 계산해 `<button ... >${s} <span class="${sectorAvg(s)>=0?'chip-up':'chip-down'}" style="font-size:10px">${sectorAvg(s)>=0?'+':''}${sectorAvg(s).toFixed(1)}%</span></button>` 형태로 렌더링하면 됨. 학생들이 "반도체 +3.2%" 처럼 섹터 강/약세를 한눈에 파악해 섹터 로테이션 전략 교육에 즉각 활용 가능. `loadMarket()` 호출마다 `renderSectors()`가 실행되므로 자동 갱신.
+
+- **보유 종목 목표가 알림 기능 (`localStorage` 기반)** (`app.js:1311-1323`, `renderGrid()` 또는 10초 폴링 루프): 학생이 특정 종목의 목표 가격을 설정하면 가격 도달 시 토스트 알림을 표시하는 기능. `let _priceAlerts = JSON.parse(localStorage.getItem('priceAlerts') || '{}')` 로 `{symbol: targetPrice}` 딕셔너리를 유지하고, `renderGrid()` 내 또는 10초 폴링 루프(`app.js:648`)에서 `S.stocks.forEach(st => { if (_priceAlerts[st.symbol] && st.price >= _priceAlerts[st.symbol]) { toast(\`⭐ ${st.name} 목표가 ${krw(_priceAlerts[st.symbol])} 도달!\`, 'success'); delete _priceAlerts[st.symbol]; } })` 를 추가. 주식 모달에 "목표가 설정" 입력창을 추가. 서버 변경 불필요, 약 20줄 구현. "언제 팔아야 하나?" 판단 타이밍 교육에 직결.
+
+- **학생용 거래 내역 CSV 내보내기** (`app.py:829-847`, `get_transactions()`, `app.js` 결과/포트폴리오 화면): 게임 종료 후 진행자만 Excel을 다운로드할 수 있고 학생 개인의 전체 거래 기록을 보존할 방법이 없음. `GET /api/rooms/<rid>/transactions/export` (또는 기존 `?export=csv` 파라미터 추가)를 신규 추가해 `RoomTransaction` 전체를 CSV(`timestamp,symbol,action,shares,price,amount,note`)로 반환. Flask의 `Response(csv_string, mimetype='text/csv', headers={'Content-Disposition':'attachment;filename=...'})` 패턴으로 30줄 구현. 포트폴리오 탭 또는 결과 화면에 "📥 내 거래 기록 저장" 버튼 추가로 완성. 학생이 수업 후 분석 자료 보유 가능.
+
+- **진행자 "특정 종목 거래 차단" 기능** (`app.py:724-767`, `trade()`, 진행자 설정 탭): 수업 중 특정 종목이 극단적 가격 이동을 보이거나 상장폐지 시뮬레이션을 하고 싶을 때 해당 종목만 매매를 막을 기능이 없음. `_banned_symbols: dict = {}  # rid -> set` in-memory 딕셔너리를 추가하고 `POST /api/rooms/<rid>/host/ban-symbol`로 set에 추가, `trade()`에서 `if symbol in _banned_symbols.get(rid, set()): return jsonify({'error': '해당 종목은 거래가 제한되었습니다.'}), 400` 체크 추가. 진행자 시장 탭의 종목별 제어 버튼에 "거래 차단/해제" 토글 추가. 서버 약 15줄 + 클라이언트 버튼 하나. "상장폐지", "거래 정지" 개념 실습에 활용 가능.
+
+- **포트폴리오 집중도 경고 표시 (단순 HHI 계산)** (`app.py:772-803`, `get_portfolio()`, `app.js:1456-1566`, `loadPortfolio()`): 현재 포트폴리오 탭은 보유 종목 목록만 표시하고 집중도 리스크에 대한 피드백이 없음. 서버 응답에는 이미 `holdings[].current_value`와 `total_value`가 있으므로, 클라이언트에서 `hhi = holdings.reduce((s,h) => s + (h.current_value/total_value)**2, 0)`를 계산해 `hhi > 0.5` 이면 "⚠️ 집중 투자 위험 — 단일 종목 비중 과다" 배너를 포트폴리오 상단에 표시. `app.js:1542` 이후 holdings 렌더링 직전에 약 5줄 추가. 분산 투자 개념을 실시간 피드백으로 가르칠 수 있어 교육 효과 직결.
+
+- **복권 라운드별 당첨 번호 히스토리 표시 (진행자 복권 모달)** (`app.py:1114-1147`, `get_lottery()`, 진행자 복권 UI): 복권이 `revealed` 상태가 되면 `cur['results']`와 `cur['winning']`이 이미 메모리에 있으나, 다음 라운드 시작 시 `lot['current']`가 교체되어 이전 당첨 번호를 볼 방법이 없음. `_lots[rid]`에 `'history': [{'round': n, 'winning': [...], 'top_prize_uid': uid}]` 리스트를 추가해 `_do_reveal()` 완료 시 기록하고, `get_lottery()` 호스트 응답에 `'history': _lots[rid].get('history', [])` 필드를 포함. 진행자 복권 모달 하단에 "이전 회차" 섹션으로 표시하면 "1회차 당첨번호: 3, 12, 17, 25, 38, 41" 처럼 통계 수업에 활용 가능. `_do_reveal()` 약 3줄, `get_lottery()` 1줄 추가.
+
+### 제거/단순화할 것들
+
+- **`txn-list`·`stxn-list` 렌더링에서 `t.note` innerHTML 직접 삽입 — XSS 취약점** (`app.js:526`, `app.js:1581`): `loadStudentTxn()`(`app.js:526`)과 `loadTxn()`(`app.js:1581`) 양쪽에서 `<div ...>${t.timestamp}${t.note ? ' · ' + t.note : ''}</div>` 형태로 `t.note`가 innerHTML에 직접 삽입됨. `t.note`는 `host_adjust()`에서 진행자가 임의 입력하는 값(`app.py:596`: `note = d.get('note', '진행자 자산 조정')`)이며 서버에서 아무 검증 없이 DB에 저장됨. 악의적인 진행자가 `note="<img src=x onerror=alert(document.cookie)>"` 를 입력하면 모든 학생의 거래 내역 탭에서 스크립트가 실행됨. 이미 `escHtml()` 함수(`app.js:897`)가 존재하므로 두 줄을 `${escHtml(t.note ? ' · ' + t.note : '')}` 형태로 교체하면 해결. `app.py:596`에서 `note = d.get('note','').strip()[:200]` 길이 제한 추가도 권장.
+
+- **`submit_quiz()` 오답 패널티 청산 시 `int()` 버림으로 shortfall 미해소 가능** (`app.py:1320`): `shares_to_sell = max(1, int(shortfall / price))` 에서 `int()` 버림으로 `actual = price * shares_to_sell < shortfall`이 되는 경우가 발생. 예: shortfall=9,999원, price=5,000원이면 shares_to_sell=1, actual=5,000원 → shortfall 4,999원 미해소. 이미 `minigame_spin()`(`app.py:1040`)에서 동일 버그가 2026-07-30 항목에 지적됐으나 `submit_quiz()`의 `app.py:1320`은 별도로 존재하는 같은 버그. `math.ceil(shortfall / price)`로 교체하거나, 청산 후에도 `shortfall > 0`이면 그 잔여분을 현금(`m.cash`)에서 추가 차감(`m.cash = max(0, m.cash - shortfall)`)하는 방어 로직 추가 필요.
+
+- **`get_chart()`·`get_room_news()` 방 멤버 검증 없음** (`app.py:710-719`, `app.py:703-707`): `get_stocks()`(2026-07-17에 지적)와 같은 패턴으로, `get_chart()`는 `Room.query.get_or_404(rid)`만 수행하고 요청자가 해당 방 멤버인지 확인하지 않음(`app.py:713`). `get_room_news()`도 동일(`app.py:706`). 로그인된 임의 사용자가 다른 방의 종목 차트 데이터와 뉴스를 조회할 수 있어 대회/시험 상황에서 스파이 가능. 두 함수 모두 `get_portfolio()`(`app.py:777-778`)와 동일한 패턴으로 `member = RoomMember.query.filter_by(room_id=rid, user_id=user.id).first(); if not member: return jsonify({'error':'참여자가 아닙니다.'}), 403` 를 각각 추가하면 해결 (단, `get_chart()`는 호스트 진행자도 접근 가능해야 하므로 `room.host_id == user.id` 도 허용).
+
+- **`room_dict()` 내 `_lot_round_due()` 호출이 전역 `_lots[rid]` 초기화 사이드 이펙트 유발** (`app.py:300`, `app.py:175-178`): `room_dict()`는 순수 직렬화 함수처럼 보이지만, `app.py:300`의 `_lot_round_due(room, remaining, total_s)` 호출이 내부적으로 `if rid not in _lots: _lots[rid] = {'done': done_set, 'current': None}` (`app.py:175-178`)을 실행해 전역 `_lots` 딕셔너리를 변경함. `get_room()` → `_get_room_cached(room, uid)` → `room_dict()` 경로로 캐시 히트 시에도 간접 호출될 수 있고, 테스트나 로깅 목적으로 `room_dict()`를 호출하면 예상치 못한 상태 변경이 발생함. `_lot_round_due()` 내 초기화 로직을 `get_room()` 라우트 내부 또는 `_auto_start_lottery_if_due()` 진입부로 이동해 `room_dict()`를 순수 함수로 유지할 것을 권장.
+
+- **`loadPortfolio()` 에서 `portChart`·`assetLineChart` 매번 destroy-재생성** (`app.js:1486`, `app.js:1509`): `S.portChart`와 `S.assetLineChart`를 매 `loadPortfolio()` 호출 시 `destroy()` 후 `new Chart()`로 재생성함. 진행자 `renderHostBarChart()`는 2026-06-11에 이미 update 패턴으로 개선했으나 포트폴리오 차트 두 개는 그대로임. 포트폴리오 탭 진입 때마다 (10초 폴링 루프 포함 시) 차트가 깜빡이고 DOM 재계산 비용 발생. `if (S.portChart) { S.portChart.data.datasets[0].data = values; S.portChart.data.labels = labels; S.portChart.update(); } else { S.portChart = new Chart(...) }` 패턴으로 교체하고, `assetLineChart`도 동일하게 처리하면 포트폴리오 탭이 부드럽게 갱신됨.
+
+- **거래 내역에서 `RLT` 액션이 '조정'으로 표시되어 학생 혼동** (`app.js:529`, `app.js:1584`): `loadStudentTxn()`과 `loadTxn()` 양쪽에서 뱃지를 `t.action==='BUY'?'매수':t.action==='SELL'?'매도':'조정'` 삼항 연산자로 처리함. `RLT`(룰렛), `ADJ`(자산조정) 모두 `'조정'`으로 표시되어 룰렛으로 잃은 금액과 진행자 보정이 동일하게 보임. `const ACTION_LABELS = {BUY:'매수',SELL:'매도',RLT:'룰렛',ADJ:'조정'}; const badge = ACTION_LABELS[t.action] || t.action;` 로 교체하고 CSS에 `.txn-badge.rlt { background: var(--warn) }` 색상을 추가하면 룰렛·복권(`ADJ` with note 포함)·조정이 시각적으로 구분됨. `app.js:529`와 `app.js:1584` 두 곳 수정.
+
+- **`lottery_pick()` 에서 `cur['picks']` 딕셔너리 락 없이 동시 수정** (`app.py:1170`): `cur['picks'][str(user.id)] = nums` 할당이 `_lottery_lock` 밖에서 수행됨. 같은 학생이 두 탭에서 거의 동시에 POST를 보내면 두 요청이 병렬로 `cur['picks']`를 수정해 경합 조건이 발생할 수 있음. Python GIL이 dict 단건 쓰기에서 원자성을 보장하지만, `get_lottery()` 내 `_lottery_lock` 블록의 전체 멤버 제출 체크(`eligible > 0 and len(cur['picks']) >= eligible`)가 picks 수정과 동기화되지 않아 "모든 참여자 제출 → 즉시 drawing 전환" 분기가 중복 트리거될 수 있음. `app.py:1170` 할당을 `with _lottery_lock: cur['picks'][str(user.id)] = nums` 블록으로 이동하고, 아래 `app.py:1178`의 `with _lottery_lock` 을 기존 락으로 합치면 전체 원자성 보장.
+
+---
+
 ## 2026-07-30
 
 ### 추가하면 좋을 기능
