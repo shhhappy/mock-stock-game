@@ -3834,3 +3834,39 @@
 - **`app.js:49, 364, 377` — 지역변수 `pct` 가 전역 포매터 함수 `pct` 를 가림** (`app.js:49`, `const pct = n => ...` 전역 정의; `app.js:364`, `doForcePrice()` 내 `const pct = quickPct !== undefined ? ...`; `app.js:377`, `doMarketEvent()` 동일 패턴): `const pct = n => (n >= 0 ? '+' : '') + n.toFixed(2) + '%'` 으로 전역에 정의된 포매터 함수를 같은 이름의 지역변수로 덮어씌워, 해당 함수 내부에서 `pct(...)` 포매터 호출이 불가능해짐. 현재는 해당 함수 내에서 전역 `pct`를 포매터로 사용하지 않아 런타임 오류가 없지만, 향후 `doForcePrice()` 내에서 `msg.textContent = pct(result)` 형태의 코드를 추가하면 `TypeError: pct is not a function` 이 즉시 발생하는 시한폭탄. `doForcePrice()`와 `doMarketEvent()` 함수 시그니처를 `doForcePrice(quickPctVal)` 로 바꾸고 내부 지역변수를 `const pctValue = quickPctVal !== undefined ? quickPctVal : parseFloat(...)` 로 이름을 분리하면 해소.
 
 - **`join_room()` — 진행자가 자신의 방에 참여자로 중복 가입 가능** (`app.py:493-507`, `join_room()`): `join_room()` 의 분기 로직 `if room.host_id != user.id and not RoomMember.query...` 은 호스트가 본인 방에 참여자로 join을 시도하면 `room.host_id != user.id` 가 True가 되지 않아 진입 안 하는 것처럼 보이지만, 실제로는 조건이 `False and ...` 로 단락 평가되어 `RoomMember` 가 생성되지 않음 — 이 부분은 맞음. 그러나 진행자가 다른 브라우저에서 학생 코드로 로그인한 뒤 동일 코드로 join하면 `user.id`가 다른 사용자이므로 참여자 등록이 될 수 있음. 더 심각한 경로: 호스트가 실수로 학생 화면에서 방 코드를 입력하면 `room.host_id == user.id` 이므로 `RoomMember`는 추가되지 않지만 `room_dict(room, user.id)` 가 `is_host: True` 를 반환해 학생 UI가 진행자 화면으로 전환됨. `join_room()` 맨 앞에 `if room.host_id == user.id: return jsonify({'error': '진행자는 참여자 코드로 입장할 수 없습니다.'}), 400` 을 추가하면 혼동 방지.
+
+---
+
+## 2026-08-10
+
+### 추가하면 좋을 기능
+
+- **참여자 순위 탭 자동 갱신** (`app.js:271-276`, `enterHostGame()` 폴링 루프; `app.js` 참여자 폴링 섹션): 진행자 화면은 10초마다 `loadHostMembers()`를 자동 갱신하지만, 참여자의 순위 탭(`pg-rankings`)은 `showPage('rankings')` 전환 시 1회만 로드 후 자동 갱신이 없음. 참여자 10초 폴링 루프(`S.pollInterval` setInterval) 내 `if (S.currentPage === 'rankings') loadRankings()` 조건 1줄 추가로 해결 가능. 서버 변경 불필요, 학생들이 순위 변동을 실시간 체감.
+
+- **대형 거래 확인 대화상자** (`app.js` `execTrade()` 함수, `index.html:734-736` 매수·매도 버튼): 현재 "▲ 매수" 버튼 클릭 시 즉시 `execTrade('BUY')` 실행. 총 자산의 30% 초과 거래 발생 시 `if (amount > S.room.starting_cash * 0.3 && !confirm(\`${krw(amount)} 매수하시겠습니까?\`)) return;` 한 줄 추가로 실수 방지. 청소년 학습 환경에서 '잘못 눌러서 전 재산 날렸어요' 민원 예방에 직결.
+
+- **참가자 개인 거래 내역 CSV 내보내기** (`app.py:916-935`, `get_transactions()`; `app.py:1474-1542`, `export_rankings()`; `index.html:386-403` 포트폴리오 탭): 진행자만 Excel 다운로드 가능하고 학생 개인의 전체 거래 기록을 수업 후 보관할 방법 없음. 기존 `GET /api/rooms/<rid>/transactions` 에 `?export=csv` 파라미터 추가 시 30줄 미만: Flask `Response(csv_text, mimetype='text/csv', headers={'Content-Disposition': f'attachment;filename={room.name}_내거래.csv'})` 반환. 포트폴리오 탭 하단에 "📥 내 거래 기록 저장" 버튼 추가. 학생이 수업 후 본인 전략 복기 가능.
+
+- **진행자 퀴즈 응답 현황 대시보드** (`app.py:1316`, `_quiz_history: dict`; `app.py:1391-1397`, `get_quiz_history()`; `app.py:643-649`, `host_members()`): `_quiz_history[(room_id, user_id)]`에 모든 학생 퀴즈 기록이 저장되어 있으나 진행자가 볼 수 있는 API가 없음. `GET /api/rooms/<rid>/host/quiz-stats` 엔드포인트 추가: 학생별 정답 수 / 오답 수 / 정답률을 `_quiz_history` 에서 집계해 반환(10줄). 진행자 설정 탭에 "🧠 퀴즈 현황" 섹션 추가. 교사가 어떤 학생이 경제 개념을 어려워하는지 파악 가능.
+
+- **게임 진행 중 참여자 강퇴 기능** (`app.py:651-662`, `kick_member()`): 현재 `if room.status != 'waiting': return jsonify({'error': ...}), 400` 제약으로 게임 중 강퇴 불가. 진행 중 강퇴 시에는 보유 주식을 시장가로 정산하고 `RoomMember` 삭제 + `RoomHolding` 삭제 + 해당 멤버 `_member_locks` 정리 로직 추가 필요(약 20줄). 문제 학생 발생 시 교사가 대응 불가한 상황 해소.
+
+- **보유 종목 평균 매수가 기준선을 차트에 표시** (`app.js` `loadChart()` 및 `openStockModal()`; `app.py:866-899`, `get_portfolio()`): 종목 차트 모달에 현재가만 표시, 학생이 보유 중일 때 "지금 팔면 수익인지 손실인지" 시각화 없음. `openStockModal()` 에서 포트폴리오 보유 데이터의 `avg_price`를 읽어 Chart.js `datasets[1]` 점선(`borderDash: [5,5]`)으로 수평선 추가(10줄). 서버 변경 불필요. "내 평균 매수가가 여기고 지금 가격이 여기니까 수익이야" 직관적 학습 가능.
+
+- **외부 CDN 스크립트 로컬 파일로 대체** (`index.html:998-999`): `chart.js@4.4.0`과 `qrcodejs@1.0.0`을 CDN에서 로드. 학교 와이파이가 외부 CDN을 차단하는 경우 차트와 QR이 모두 작동 불가. `static/js/` 하위에 두 파일을 저장하고 `src` 경로를 `/static/js/chart.umd.min.js`, `/static/js/qrcode.min.js`로 변경(파일 2개 추가, HTML 2줄 수정). 오프라인 교실 환경 대응.
+
+### 제거/단순화할 것들
+
+- **`get_history()` 가짜 차트 데이터 — 게임 내 실제 가격 이력으로 교체 권장** (`stock_service.py:303-332`, `get_history()`): 종목 차트 클릭 시 `get_history()`가 매번 새로 생성한 랜덤 OHLC 데이터를 반환함. 이 데이터는 실제 게임 내 가격 변동(`_prices` 딕셔너리)과 전혀 연관이 없어, 학생이 "삼성전자 차트가 계속 오르니까 매수!"라고 판단해도 실제 게임 가격은 하락 중일 수 있음. `StockService.__init__()` 에 `_price_history: dict = {}` (symbol → deque(maxlen=200)) 추가, `get_price()` 내 가격 갱신 시점마다 `self._price_history[sym].append((now, new_price))`로 기록. `get_history()`는 이 실제 기록을 가공해 반환. 서버 약 15줄 수정, 차트 신뢰도 대폭 향상.
+
+- **`_member_locks` 딕셔너리 무한 증가** (`app.py:109-119`, `_get_member_lock()`; `app.py:259-261`, `_end_room()`): `_member_locks`는 `(room_id, user_id)` 키로 증가하며 `_end_room()` 에서만 정리됨. 방이 정상 종료되지 않고 서버가 재시작된 경우(Render 무료 플랜에서 빈번) 이전 게임의 락 객체가 남음. 실용적 해결: `_member_locks_meta` Lock 하에 `_member_locks[key]`의 `weakref` 래핑 또는, 더 간단하게 `RoomMember` 조회 실패 시 락 자동 제거 로직 추가.
+
+- **인메모리 게임 상태가 Render 슬립 재시작 시 초기화** (`app.py:267`, `_lots`; `app.py:1314-1316`, `_quiz_state/_quiz_history/_quiz_settings`; `app.py:351-353`, `_rlt_active/_roulette_config`): Render 무료 플랜은 15분 비활동 시 프로세스 종료. `_lots` (복권 현황)는 `lottery_rounds_done` 컬럼으로 부분 복구 가능하지만(`app.py:275-279`), `_quiz_state` (쿨다운)·`_quiz_history`·`_rlt_active` (스핀 횟수 외)는 완전 소멸. 퀴즈 스핀 횟수는 `RoomTransaction.query.filter_by(action='RLT')` count로 DB에서 복원 가능하므로(`app.py:1109`), 나머지 쿨다운·히스토리도 `RoomTransaction`에 기록하거나 별도 DB 테이블로 이관 권장.
+
+- **`Room.query.get_or_404()` 패턴 → SQLAlchemy 2.x 권장 방식으로 교체** (`app.py:533`, `536`; `app.py:576`, `579` 등 약 30곳): Flask-SQLAlchemy 3.x에서 `Model.query` 는 레거시로 분류되고 `Model.query.get_or_404(rid)` 는 `db.get_or_404(Model, rid)` 또는 `db.session.get(Model, rid)` 로 교체 권장. 현재 `db.session.get()` 패턴도 혼재(`app.py:386`, `470` 등)되어 코드 일관성 부재. 전체 교체 시 SQLAlchemy 2.x 경고 제거.
+
+- **`models.py` 전체 `datetime.utcnow` → timezone-aware 교체** (`models.py:21`, `37-38`, `53`, `79`, `92`): `default=datetime.utcnow` 패턴은 Python 3.12에서 DeprecationWarning 발생, 3.14에서 제거 예정. `from datetime import timezone` 추가 후 `default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)`로 일괄 변경(5개 컬럼). `app.py` 내 직접 `datetime.utcnow()` 호출 25+ 곳도 동일 대응 필요.
+
+- **`starting_cash` 컬럼 타입이 `Float`** (`models.py:33`, `starting_cash = db.Column(db.Float)`): 원화(KRW)는 소수점 없는 정수 통화이므로 `Float` 대신 `Integer`(또는 `BigInteger`)가 적합. 현재 `m.cash += price * shares` 같은 float 연산 누적으로 `m.cash = 9999999.9999997` 형태의 부동소수점 오차가 쌓이며, `export_rankings()`에서 `round(..., 0)` 처리(`app.py:1167`)로 은폐 중. 정수형 전환 시 `FLOAT → INTEGER` 마이그레이션 필요, `_end_room()` 내 이자 계산(`round(d.amount * d.rate / 100 * ratio, 0)`) 결과를 `int()`로 캐스팅하는 방식으로 연산 체인 정리 가능.
+
+- **`doForcePrice()` / `doMarketEvent()` 내 지역변수 `pct`가 전역 포매터 함수 `pct`를 섀도잉** (`app.js:49`, 전역 `const pct = n => ...`; `app.js:364`, `doForcePrice()` 내 `const pct = ...`; `app.js:377`, `doMarketEvent()` 동일): 두 함수 내에서 `const pct = quickPct !== undefined ? quickPct : parseFloat(...)` 지역변수 선언으로 전역 `pct()` 포매터 함수가 가려짐. 현재는 해당 함수 내부에서 전역 `pct()`를 호출하지 않아 오류 없지만, 향후 유지보수 중 `pct(value)` 호출 추가 시 `TypeError: pct is not a function` 즉시 발생. 지역변수 이름을 `pctValue`로 변경하는 2줄 수정으로 해소.
