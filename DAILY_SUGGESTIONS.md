@@ -3899,3 +3899,32 @@
 
 - **`_compute_leaderboard()` — `uids`가 빈 배열일 때 `User.id.in_([])` 빈 IN 절 생성** (`app.py:155-161`, `_compute_leaderboard()`): 방 참가자가 0명인 경우(게임 시작 전 누군가 모두 나간 경우) `uids = []`가 되어 `db.session.query(User).filter(User.id.in_([])).all()` 가 실행됨. SQLAlchemy는 빈 IN 절을 `WHERE 1!=1`로 변환해 빈 리스트를 반환하므로 일반적으로 안전하지만, 일부 오래된 SQLite 버전에서 `IN ()` 구문 오류가 발생할 수 있고 PostgreSQL 방언에서도 동작이 다를 수 있음. `if not uids: return []` 조기 반환을 `app.py:156` 직후에 추가하면 빈 배열 처리를 명시적으로 처리하고 불필요한 DB 쿼리도 생략 가능. 1줄 추가로 방어 코드 완성, `host_members()` / `get_rankings()` / `export_rankings()` 모두 혜택.
 
+
+---
+
+## 2026-08-11
+
+### 추가하면 좋을 기능
+
+- **게임 종료 카운트다운 취소 기능** (`app.py:628-638`, `end_room()`): 진행자가 "게임 종료" 버튼을 누르면 1분 카운트다운이 시작되고(`_ending_soon.add(rid)`, `room.end_time = now + 60s`) 프론트 버튼이 즉시 비활성화됨(`app.js:544-550`). 실수로 눌렀을 때 취소 방법이 전혀 없음. `POST /api/rooms/<rid>/cancel-end` 엔드포인트를 신설해 `room.id in _ending_soon`일 때만 `_ending_soon.discard(rid)`로 제거하고 `room.end_time`을 `paused_at`을 고려해 복원하면 됨. 진행자 설정 탭에 "⏰ 종료 취소" 버튼 추가. 수업 환경에서 실수 복구가 중요하므로 우선순위 높음.
+
+- **학생 접속 현황 표시 (진행자 대시보드)** (`app.py:643-649`, `host_members()` / `app.js:410-432`, `loadHostMembers()`): 진행자 순위 탭은 총자산 정보를 보여 주지만 어떤 학생이 "지금 접속 중"인지 알 방법이 없음. `RoomMember`에 `last_seen = db.Column(db.DateTime, nullable=True)` 컬럼을 추가하고, `get_room()` 또는 `get_stocks()` 요청 시마다 `member.last_seen = datetime.utcnow()`로 갱신하면 됨. `host_members()` 응답에 `last_seen`을 포함하고 클라이언트에서 "5분 이상 활동 없음" 학생을 회색 표시하면 진행자가 네트워크 문제 학생을 즉시 파악 가능. DB 마이그레이션 1줄 + 라우트 2~3줄.
+
+- **게임 내 실제 가격 변동 로그를 차트로 표시** (`stock_service.py:303-332`, `get_history()`): 현재 차트 API는 현재가 기준 역방향 랜덤 OHLC를 생성하므로 게임 중 실제 가격과 완전히 무관. `StockService.__init__()`에 `self._price_log: dict = {}  # sym -> [(timestamp, price), ...]` 를 추가하고 `get_price()` 내 가격 갱신 시 `self._price_log.setdefault(symbol, []).append((now, new_price))`로 기록. `get_history()` 에서 로그 길이가 2 이상이면 실제 로그를 OHLC 버킷으로 요약해 반환하고 그 미만이면 현재 랜덤 방식 유지. 학생이 매수 시점의 실제 가격을 차트에서 확인해 투자 복기 가능 — 교육 효과 직결.
+
+- **진행자 전체 학생 동시 퀴즈 출제 기능** (`app.py:1312-1342`, 퀴즈 라우트): 현재 퀴즈는 각 학생이 개별 시작·개별 응답하며 진행자가 개입 불가. 수업 도중 교사가 특정 개념을 확인하기 위해 직접 만든 O/X 문제를 전체 동시 출제하는 기능이 없음. `_host_broadcast_quiz: dict = {}  # room_id -> {q, a, expires}` 딕셔너리를 추가하고 `POST /api/rooms/<rid>/host/quiz-broadcast`로 문제·정답·만료 시각을 저장. `get_quiz()` 요청 시 해당 방의 브로드캐스트 퀴즈가 유효하면 우선 반환. 학생 응답은 기존 `submit_quiz()` 로직 재활용. 서버 약 20줄 + 진행자 탭 입력 UI 추가.
+
+- **예금 탭 — 복수 예금 합산 현황 표시** (`app.js:1665-1690`, `loadDepositsPage()`): 현재 예금 탭은 개별 예금 항목을 나열하지만 "총 예금액", "총 예상 이자", "총 만기 수령액" 합계가 없음. `active` 예금 리스트가 내려오면 클라이언트에서 `active.reduce((s,d) => s+d.amount, 0)` / `active.reduce((s,d) => s+d.expected_interest, 0)` 를 계산해 목록 상단에 요약 카드(`총 예금 X원 · 예상 이자 +Y원 · 만기 수령 Z원`)로 표시하면 됨. 서버 변경 없이 약 10줄 추가. 학생이 자산 배분 현황을 한눈에 파악 가능.
+
+### 제거/단순화할 것들
+
+- **`_compute_leaderboard()` N+1 쿼리 문제 — 성능 병목** (`app.py:151-171`, `member_total_value()` at `app.py:138-149`): `_compute_leaderboard()`는 `member_total_value()`를 인원 수 N 만큼 루프 호출하고, `member_total_value()` 내부에서 holdings 쿼리 + deposits 쿼리 + `get_price()` 호출이 반복 발생해 N명 × 최소 2 쿼리 = 최소 2N DB 쿼리. 30명 참여 + 10초 폴링 시 분당 약 360회 이상 쿼리. `RoomHolding.query.filter_by(room_id=rid).all()` 과 `Deposit.query.filter_by(room_id=rid, status='active').all()` 을 루프 밖에서 한 번씩 실행해 uid별 딕셔너리로 만든 뒤 내부에서 직접 합산하면 2N → 2 쿼리로 줄어듦. Render 무료 플랜의 느린 SQLite에서 체감 차이 큼.
+
+- **`api.get()`/`api.post()`가 HTTP 오류 시 서버 메시지를 버리고 `HTTP 4xx`만 반환** (`app.js:29-44`, `api` 객체): `if (!r.ok) return {error: \`HTTP ${r.status}\`}` 처리 때문에 서버가 `{'error': '유효하지 않은 방 코드입니다.'}` 를 보내도 프론트 에러 영역에는 "HTTP 404"만 표시됨. `app.js:31`: `if (!r.ok) { const body = await r.json().catch(() => ({})); return {error: body.error || \`HTTP ${r.status}\`}; }` 로 수정하면 실제 오류 메시지가 학생 화면에 출력돼 "왜 안 되지?" 혼란이 감소. `api.del()` 도 동일 수정 필요(`app.js:41`). 약 4줄 변경, 서버 변경 없음.
+
+- **`Room.query.get_or_404()` 패턴이 20곳 이상 사용 — deprecated API** (`app.py:536`, `576`, `591`, `604`, `621`, `645`, `651`, `664`, `677` 등): Flask-SQLAlchemy 3.x에서 `Model.query.get_or_404(pk)`는 deprecated이며 `db.get_or_404(Model, pk)` 또는 `db.session.get(Model, pk) or abort(404)` 패턴으로 교체 권장. 현재는 동작하지만 패키지 업그레이드 시 Deprecation Warning이 대거 발생하거나 오류로 전환될 수 있음. `get_room()`, `start_room()`, `pause_room()`, `resume_room()`, `end_room()`, `host_members()`, `kick_member()` 등 전체적으로 일괄 치환 필요.
+
+- **`stock_service.py:314-327` 차트 히스토리가 캐시 만료마다 완전히 다른 모양으로 재생성** (`stock_service.py:303-332`, `get_history()`): HISTORY_CACHE_TTL = 120초 만료 후 `random.gauss()` 시드 고정 없이 새 랜덤 데이터를 생성하므로 2분마다 차트가 완전히 다른 모양이 됨. 학생이 "아까 봤던 지지선이 어디에?" 하는 혼란이 발생. 단기 해결책: `random.seed(hash((symbol, period, int(time.time() // HISTORY_CACHE_TTL))))` 처럼 캐시 버킷 단위 고정 시드를 사용하면 같은 버킷 내 재생성 시 동일 모양 유지. 장기 해결책: 실제 가격 로그를 사용한 차트(Feature 3번 참조).
+
+- **룰렛 자동 트리거 후 오프라인 학생이 `minigame/close` 를 보내지 않으면 게임이 영구 paused 고착** (`app.py:1065-1094`, `minigame_close()` / `_rlt_active[rid]['count']`): 룰렛 트리거 시 게임이 일시정지되고 `_rlt_active[rid]['count']`가 각 학생의 `minigame/open` 호출마다 증가하며, 모든 학생이 `minigame/close`를 보낼 때 0이 되어 게임이 종료됨. 오프라인이거나 탭을 닫은 학생은 `close`를 보내지 않아 카운터가 영원히 0이 되지 않음(`app.py:1072-1073`). `_rlt_active[rid]` 에 `started_at: float` 타임스탬프를 추가하고, `get_room()` 폴링 시 `time.time() - started_at > 300` (5분 초과)이면 강제로 `_end_room(room)`을 호출하는 타임아웃 로직이 필요. `get_room()` 내 `if room.rlt_triggered and room.status == 'paused':` 블록에 5줄 추가.
+
