@@ -3928,3 +3928,40 @@
 
 - **룰렛 자동 트리거 후 오프라인 학생이 `minigame/close` 를 보내지 않으면 게임이 영구 paused 고착** (`app.py:1065-1094`, `minigame_close()` / `_rlt_active[rid]['count']`): 룰렛 트리거 시 게임이 일시정지되고 `_rlt_active[rid]['count']`가 각 학생의 `minigame/open` 호출마다 증가하며, 모든 학생이 `minigame/close`를 보낼 때 0이 되어 게임이 종료됨. 오프라인이거나 탭을 닫은 학생은 `close`를 보내지 않아 카운터가 영원히 0이 되지 않음(`app.py:1072-1073`). `_rlt_active[rid]` 에 `started_at: float` 타임스탬프를 추가하고, `get_room()` 폴링 시 `time.time() - started_at > 300` (5분 초과)이면 강제로 `_end_room(room)`을 호출하는 타임아웃 로직이 필요. `get_room()` 내 `if room.rlt_triggered and room.status == 'paused':` 블록에 5줄 추가.
 
+
+---
+
+## 2026-08-11 (2차)
+
+### 추가하면 좋을 기능
+
+- **게임 설정 프리셋 저장/불러오기** (`app.js` 방 생성 폼 영역): 진행자가 매번 게임 생성 시 "게임 시간 20분 · 시작 자본 500만 · 예금 금리 2%" 같은 설정을 직접 입력해야 함. `localStorage.setItem('room_preset', JSON.stringify({duration, cash, rate}))` 로 마지막 설정을 자동 저장하고, 방 생성 모달 열기 시 불러와 폼에 미리 채우면 됨. 추가로 "즐겨찾기 저장" 버튼을 두어 최대 3개 프리셋(`room_preset_0~2`)을 이름과 함께 보관·선택할 수 있으면 반복 수업에서 편의성이 크게 향상. 서버 변경 없이 클라이언트 약 30줄 추가.
+
+- **복권 다음 회차 예고 카운트다운 학생 화면 표시** (`app.py:509-540`, `_auto_start_lottery_if_due()` / `app.js` 참가자 폴링 블록): 현재 복권 회차가 언제 시작되는지 학생 화면에 전혀 표시되지 않음. `get_room()` 응답에 `lottery_next_in` 필드를 추가해 다음 회차까지 남은 초를 내려주면(`_lot_round_due(room)` 계산 재활용) 클라이언트 폴링 루프에서 "🎟️ 다음 복권 추첨까지 X초" 배너를 그릴 수 있음. 서버 `get_room()` 응답 빌드 함수에 3줄, 클라이언트 카운트다운 UI 약 10줄로 구현 가능. 학생 집중도와 게임 몰입감 향상.
+
+- **진행자 "학생 화면 일시 잠금" 기능** (`app.py` 새 엔드포인트 / `app.js` 참가자 폴링 블록): 수업 중 설명이나 퀴즈 토론 시간에 학생 화면의 매수·매도·예금 등 인터랙션을 일시 차단하고 싶을 때 방법이 없음. `_room_locked: set = set()` 를 서버 메모리에 추가하고 `POST /api/rooms/<rid>/host/lock` / `POST /api/rooms/<rid>/host/unlock` 엔드포인트를 신설. `get_room()` 응답에 `locked: bool` 필드를 추가하고, 클라이언트는 `locked=true`일 때 모든 action 버튼에 `disabled` 속성을 주고 "진행자가 화면을 잠갔습니다" 배너를 표시. 타이머는 계속 진행, 순위·차트 조회는 허용. 서버 약 10줄 + 클라이언트 약 15줄.
+
+- **거래 내역 종목별 실현손익 집계 요약 API** (`app.py:875-897`, `get_transactions()`): 현재 거래 내역 API는 원시 트랜잭션 목록만 반환하고 종목별 총 매수금액·매도금액·실현손익을 집계하지 않음. `GET /api/rooms/<rid>/transactions?summary=true` 쿼리 파라미터를 추가해 symbol별로 `buy_total`, `sell_total`, `realized_pnl = sell_total - buy_total`을 집계한 딕셔너리를 반환하면 학생이 투자 결과를 종목 단위로 복기할 수 있음. 기존 쿼리에 Python 딕셔너리 집계 약 10줄만 추가, DB 쿼리 추가 없음. 포트폴리오 화면 하단 "종목별 실현손익" 섹션으로 연결하면 교육 효과 직결.
+
+- **진행자 섹터별 평균 수익률 브리핑 엔드포인트** (`app.py:643-649`, `host_members()` / `stock_service.py:STOCKS`): 현재 진행자가 각 학생의 총자산 순위는 볼 수 있지만 "학생들이 어떤 섹터에 주로 투자했고 해당 섹터 수익률은 어떠한가"를 집계하는 방법이 없음. `GET /api/rooms/<rid>/host/sector-summary` 를 추가해 `RoomHolding` 전체를 읽은 뒤 종목별 `STOCKS[sym]['sector']`를 기준으로 그루핑하고, 섹터별 보유 주식 수·평균 매입가 대비 현재가 수익률을 계산해 반환. 진행자가 수업 마무리에 "오늘 반도체 섹터 평균 +8%, 에너지 -3%" 같은 브리핑을 즉시 제공 가능. 서버 약 20줄, 클라이언트 진행자 탭 표 추가.
+
+- **학생 간 "도전장" 수익률 내기 기능** (`app.py` 새 엔드포인트): 학생 A가 학생 B에게 "게임 종료 시 수익률 높은 쪽이 낮은 쪽에게 X만원 이전"을 제안하고 B가 수락하면 게임 종료 시 자동 정산하는 기능. `_challenges: dict = {}  # rid -> list[{from, to, amount, accepted}]` 를 서버 메모리에 추가하고 `POST /api/rooms/<rid>/challenge` (신청) / `POST /api/rooms/<rid>/challenge/<cid>/accept` (수락) 엔드포인트 구현. `_end_room()` 에서 정산 시 도전장 결과를 반영해 승패에 따라 현금 이전. 학생들 사이의 경쟁심을 자극하면서 레버리지·위험 개념을 체험하는 교육 포인트.
+
+- **"내 투자 성향 분석" 게임 종료 후 레포트** (`app.py:875-897`, `get_transactions()` 활용): 게임 종료 후 해당 학생의 `RoomTransaction` 내역을 분석해 투자 성향을 분류하는 레포트. 분석 기준: 종목 분산도(보유 종목 수), 평균 보유 기간(BUY→SELL 사이 시간), 거래 빈도, 섹터 집중도. 이를 바탕으로 "공격형(집중·단타)", "안전형(예금 비중 높음)", "분산형(5개 이상 섹터)", "장기형(거래 5회 미만)" 중 하나로 분류해 `GET /api/rooms/<rid>/my-profile` 에서 반환. 결과 화면 탭에 성향 카드를 추가하면 학생이 자신의 투자 행동을 메타인지할 수 있어 교육 목표와 직결.
+
+### 제거/단순화할 것들
+
+- **`minigame_spin()` 에 `_get_member_lock` 없음 — 동시 스핀 경쟁 조건** (`app.py:1096-1142`): `buy_stock()`, `sell_stock()`, `host_adjust()`, `submit_quiz()` 등 모든 현금 변경 엔드포인트는 `with _get_member_lock(rid, user.id):` 블록 안에서 `m.cash`를 수정하나, `minigame_spin()` 은 이 락 없이 `m.cash = m.cash - bet + winnings` (`app.py:1132`)를 직접 실행. 클라이언트 검증(`_rltSpinning` 플래그)이 있지만 서버 측 보호가 없어 네트워크 재전송이나 직접 API 호출로 동시에 두 건의 스핀을 실행하면 같은 `m.cash` 값에서 두 번의 `bet` 차감이 일어나 자산이 음수가 되거나 `_liquidate_shortfall()`이 이중 호출될 수 있음. `with _get_member_lock(rid, user.id):` 로 `app.py:1119` 이후 전체 베팅·정산 블록을 감싸면 해결.
+
+- **`host_force_price()` 에서 `float()` 변환 무방비** (`app.py:775`): `pct = float(d.get('pct', 0))` 에 try-except 가 없어 `{"pct": "abc"}` 같은 비수치 값이 전송되면 `ValueError`가 500 응답으로 변환되어 Sentry/CloudWatch에 불필요한 에러로 기록됨. 같은 라우트의 아래 `symbol` 검증 블록(`app.py:776-777`)에서 이미 400 응답을 내므로 `pct = float(d.get('pct', 0))` 를 try-except `ValueError` → `return jsonify({'error': '잘못된 pct 값'}), 400` 으로 감싸거나, `bet` 변환과 동일한 `(request.json or {}).get()` 패턴으로 교체하면 됨. 2줄 수정.
+
+- **`get_news()` 가 `_frozen=True` 상태에서도 뉴스를 생성·갱신** (`stock_service.py:214-217`): 게임이 일시정지되면(`pause_room()`) `get_room_service(rid).freeze()`가 호출되어 `self._frozen = True` 가 됨. `_next_price()` 는 `if self._frozen: return None` 으로 정상 차단되나, `get_news()` 는 `self._maybe_generate_news(time.time())` 를 `_frozen` 확인 없이 무조건 호출. 결과적으로 게임이 paused인 동안에도 뉴스 TTL이 경과하면 새 뉴스가 생성되고 가격 힌트(`price_hint`)가 갱신됨. `get_news()` 내 `_maybe_generate_news()` 호출 전에 `if self._frozen: return dict(self._news)` 를 삽입하면 일시정지 중 뉴스 진행을 차단할 수 있음. 1줄 추가.
+
+- **`doRouletteSpin()` 클라이언트 베팅 한도가 현금 잔액 기준이나 서버는 총자산 기준** (`app.js:1065` vs `app.py:1121`): 클라이언트는 `if (bet > _rltCash)` 로 현금 잔액만 체크해 "잔액이 부족합니다" 오류를 표시하지만(`app.js:1065`), 서버는 `if bet <= 0 or bet > total_assets` 로 총자산(현금+주식+예금)을 상한선으로 허용(`app.py:1121`). 즉 주식·예금 보유량이 많아 총자산이 현금보다 훨씬 큰 학생은 현금이 0원이어도 서버는 베팅을 받아들일 수 있으나, 클라이언트가 먼저 막아버려 기능을 전혀 사용할 수 없음. 클라이언트 검증을 `if (bet > S.total_assets)` 로 교체하거나 룰렛 UI에 총자산 기준 최대 베팅 금액을 표시해야 함.
+
+- **`get_history()` 의 `interval` 파라미터가 완전히 무시됨** (`stock_service.py:303-332`): `get_history(symbol, period, interval)` 함수 시그니처는 `interval` 파라미터를 받지만 캐시 키가 `(symbol, period)` 뿐이고(`app.py:306`), 바 간격도 항상 `i * 86400` (1일 = 86400초)로 고정. `'1d'` 요청이든 `'5d'`·`'1mo'`·`'3mo'` 요청이든 모두 동일한 1일 간격 데이터를 반환. `interval` 에 따라 바 간격을 `{'1d': 86400, '1wk': 604800, '1mo': 2592000}` 으로 달리해 `date_str` 에 반영하고, 캐시 키를 `(symbol, period, interval)`로 확장해야 프론트 차트의 X축 라벨과 실제 의미가 일치. 5줄 수정.
+
+- **`join_room()` 이 진행 중(`active`)·일시정지(`paused`) 방에도 `starting_cash` 전액 지급** (`app.py:493-507`): 방 입장 코드를 입력하면 방 상태가 `waiting`이 아니어도 `RoomMember(cash=room.starting_cash)`로 신규 멤버를 추가. 게임이 시작된 지 한참 지난 뒤 참여한 학생이 초기 자본 전액을 받아 선두권 자산을 즉시 따라잡을 수 있어 공정성 문제 발생. 단순 해결책: `room.status in ('active', 'paused')` 면 `join_room()` 을 400 거부("게임이 이미 시작되었습니다"), 또는 경과 시간 비례로 시작 자본을 감액(`starting_cash * (remaining / total)`). 진행자가 참여 가능 여부를 제어하는 `allow_late_join` 방 설정 추가도 고려 가능.
+
+- **`_end_room()` 에서 룰렛 일시정지 상태 종료 시 예금 이자가 `paused_at` 기준으로 절사** (`app.py:223-228`): `_end_room()` 은 `if room.paused_at: game_end = room.paused_at` 로 이자 정산 기준 시각을 설정. 룰렛 이벤트로 게임이 자동 일시정지(`room.paused_at` 기록)된 뒤 진행자가 몇 분 후 "게임 종료"를 누르면 `game_end` 가 실제 종료 시각이 아닌 룰렛 발동 시점이 되어 그 사이 경과 시간만큼 이자가 줄어듦. 수동 일시정지가 아닌 룰렛 트리거 일시정지(`room.rlt_triggered == True`)는 사실상 "게임 계속" 상태이므로, `_end_room()` 내 `game_end` 계산 시 `room.paused_at` 대신 `min(now, room.end_time) if room.end_time else now` 를 사용하도록 분기하면 됨. 3줄 수정.
+
