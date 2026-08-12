@@ -3991,3 +3991,34 @@
 - **서버 재시작 후 초기화되는 인메모리 설정에 대한 UI 경고 없음** (`app.py:1251-1267`, `_quiz_settings`, `_roulette_config`): 진행자가 퀴즈 보상/패널티 비율과 룰렛 배율을 설정 탭에서 변경해도 이는 `_quiz_settings[rid]` / `_roulette_config[rid]` 인메모리 딕셔너리에만 저장됨. Render 무료 티어는 15분 비활동 시 슬립(재시작)되므로 설정이 기본값으로 초기화될 수 있음. 진행자가 이를 인지할 방법이 없어 수업 중 예상과 다른 보상/패널티가 적용될 수 있음. 단기 해결: 설정 탭 상단에 "⚠️ 이 설정은 서버 재시작 시 초기화됩니다. 게임 시작 직전에 다시 확인하세요." 안내 문구 추가. 장기: `Room` 테이블에 `quiz_reward_pct`, `quiz_penalty_pct`, `roulette_config` JSON 컬럼 추가.
 
 - **`doKickMember()` 강퇴 확인 다이얼로그에 `confirm()` 사용** (`static/js/app.js:236-241`, `static/js/app.js:248-254` `doStartGame()`): `confirm()` 은 브라우저 차단 설정에 따라 무음 실패하거나, 모바일 WebView(학생들이 사용 가능성 높음)에서 동작하지 않는 경우가 있음. 같은 패턴이 `doStartGame()`(`app.js:249`) 등에서도 반복됨. 작은 인라인 확인 UI(토스트 위 "정말 강퇴하시겠습니까? [예] [아니오]" 버튼 쌍)로 교체하거나, 최소한 `confirm()` 반환값이 `false` 일 때의 예외 처리를 명시적으로 추가. 교실용 모바일 환경에서 안정성 개선.
+
+
+## 2026-08-12 (2차)
+
+### 추가하면 좋을 기능
+
+- **지정가 주문(Limit Order) 기능** (`static/js/app.js:1354-1384`, `openStockModal()` / `app.py:818-863`, `trade()`): 현재 매수·매도는 요청 시점의 시장가(market order)만 지원함. `_lots` / `_lottery_lock` 과 같은 패턴으로 `_limit_orders: dict = {}  # rid -> list[{uid, sym, action, shares, target_price, expires_at}]` 를 서버 인메모리에 추가하고, `POST /api/rooms/<rid>/limit-orders` 엔드포인트에서 등록. 10초 폴링 루프(`app.py:533-574`, `get_room()`) 또는 `get_stocks()` 실행 시 각 주문의 `target_price`와 현재가를 비교해 체결 가능하면 `trade()` 내부 로직을 재사용해 자동 체결. 클라이언트 종목 모달에 "지정가 매수/매도" 탭 추가. 시장가 vs. 지정가 차이를 직접 경험하는 핵심 교육 콘텐츠가 됨.
+
+- **강세장/약세장 지속 바이어스 모드** (`stock_service.py:151-161`, `_next_price()`): 현재 `_next_price()` 는 완전 랜덤워크(`drift=0`)로 가격을 변동시킴. `StockService.__init__()` 에 `self._market_bias: float = 0.0` 을 추가하고, `_next_price()` 내 `drift = base_vol * self._market_bias` 를 반영하면 `bias=+0.3` 이면 전반적 상승장, `bias=-0.3` 이면 하락장을 연출할 수 있음. `POST /api/rooms/<rid>/host/market-bias` 엔드포인트에서 진행자가 `-1.0 ~ +1.0` 범위 값을 설정하면 수업 시나리오("이번엔 경기 침체기를 체험해 봅시다")에 맞는 시장 환경을 즉시 조성. 서버 15줄 + 클라이언트 슬라이더 UI.
+
+- **진행자 전체화면 QR/코드 공유 화면** (`static/index.html`, `static/js/app.js:198-207`): 진행자가 수업 시작 시 빔프로젝터에 방 코드·QR을 띄우려면 현재 QR 모달을 열어야 하는데, 모달은 배경이 어둡고 크기가 작아 뒤편 학생이 보기 어려움. `enterHostGame()` 또는 대기실 화면에 "📺 전체화면으로 표시" 버튼을 추가하고, 클릭 시 `document.requestFullscreen()` + 코드·QR 코드를 흰 배경에 대형으로 표시하는 전용 화면으로 전환. `document.fullscreenchange` 이벤트로 ESC 복귀 처리. 서버 변경 없이 클라이언트 약 30줄. 교실 수업 진행 편의 대폭 향상.
+
+- **학생 파산 보호 옵션** (`models.py:47-54`, `RoomMember` / `app.py:138-149`, `member_total_value()`): 총자산이 0 이하로 떨어진 학생은 이후 참여 동기를 잃어버림. `Room` 모델에 `bankruptcy_floor = db.Column(db.Float, default=0)` 컬럼을 추가하고, 진행자가 "파산 최저보장금 500만 원" 을 설정할 수 있도록 방 생성·설정 UI에 옵션 추가. `_end_room()` 이나 `_compute_leaderboard()` 에서 총자산이 `bankruptcy_floor` 미만인 경우 자동 보충(ADJ 트랜잭션으로 기록). 파산 보호 발동 횟수를 `RoomTransaction.note` 에 기록해 학생이 몇 번 파산했는지 이력 추적 가능. 교육 참여 지속성 유지에 효과적.
+
+- **포트폴리오 탭 실시간 투자 성향 배지** (`static/js/app.js:1485-1595`, `loadPortfolio()`): `loadPortfolio()` 실행 시 이미 보유 종목 수·예금 잔액·총자산 대비 현금 비율을 계산하는 데이터가 있음. 이를 활용해 "🔥 공격형", "🛡 안전형", "🌐 분산형", "💤 관망형" 배지를 포트폴리오 상단에 실시간 표시. 기준 예: 보유 종목 1~2개 + 현금 비율 < 20% → 공격형; 예금 비율 > 50% → 안전형; 보유 섹터 3개 이상 → 분산형; 거래 없고 전액 현금 → 관망형. 서버 API 추가 없이 클라이언트 계산만으로 구현 가능(약 20줄). 학생이 자신의 투자 행동을 즉각 메타인지.
+
+- **서버 사이드 관심 종목(Watchlist) 동기화** (`static/js/app.js:16`, `S.watchlist` / `app.py` 새 엔드포인트): 현재 관심 종목은 `localStorage` 에만 저장(`app.js:16`: `watchlist: JSON.parse(localStorage.getItem('watchlist')||'[]')`). 다른 기기로 접속하거나 시크릿 모드 사용 시 초기화됨. `POST /api/rooms/<rid>/watchlist` (추가) / `DELETE /api/rooms/<rid>/watchlist/<symbol>` (삭제) / `GET /api/rooms/<rid>/watchlist` (조회) 엔드포인트를 추가하고, 백엔드 `_watchlists: dict = {}  # (rid, uid) -> list[str]` 인메모리로 저장. 클라이언트는 기존 localStorage 대신 API 호출로 동기화. 참가자 방 입장 시 `GET` 호출로 복원. 서버 20줄 + 클라이언트 10줄 수정.
+
+### 제거/단순화할 것들
+
+- **`_liquidate_shortfall()` 공유 함수의 `int()` 절삭으로 미청산 잔액 누적** (`app.py:189`): `shares_to_sell = max(1, int(shortfall / price))` 에서 `int()` 절삭(floor)을 사용해 매각 주식 수를 계산. 예: shortfall=999원, price=500원이면 `int(999/500)=1` 주만 매각해 499원을 회수하고 shortfall 500원이 남음. 다음 호출까지 잔액이 음수 상태로 유지되거나 루프가 일찍 종료되면 미청산 금액이 회원 현금에 음수로 남을 수 있음. `int()` → `math.ceil()` 로 교체하면 한 번에 shortfall 전액을 커버하는 주식 수를 계산. `math` 는 `app.py:6` 에서 이미 임포트되어 있어 1자 수정. `minigame_spin()` (`app.py:1096`), `submit_quiz()` (`app.py:1318`) 등 이 함수를 호출하는 모든 경로에 영향.
+
+- **`enterParticipantGame()` / `enterHostGame()` 의 `S.pollInterval` 중복 실행** (`static/js/app.js:616`, `static/js/app.js:271`): `S.pollInterval = setInterval(pollState, 10000)` (`app.js:616`) 와 진행자 측 `S.pollInterval = setInterval(hostPollState, 10000)` (`app.js:271`) 모두 이전 인터벌을 `clearInterval(S.pollInterval)` 하지 않고 덮어씀. `startTimer()` (line 612)와 `startNewsPolling()` (line 615)는 각자 이전 타이머를 클리어하는 패턴을 따르나 `pollInterval` 만 누락. 재연결 시나리오(토큰 만료 후 재입장, 화면 전환 후 재진입)에서 두 인터벌이 동시에 돌아 10초마다 API 요청이 2배 발생하고 상태 불일치 가능성 생김. 두 곳 모두 `if (S.pollInterval) clearInterval(S.pollInterval);` 한 줄을 `setInterval` 직전에 추가하면 됨.
+
+- **`app.secret_key` 하드코딩 기본값 보안 취약점** (`app.py:18`): `app.secret_key = os.environ.get('SECRET_KEY', 'mock-stock-game-secret-2024')` 로 환경변수 미설정 시 공개 소스에 노출된 고정 키를 사용. 세션 쿠키 서명 키가 알려지면 공격자가 임의 `session['user_id']` 를 위조해 타인 계정으로 요청 가능. Render 무료 플랜에서는 환경변수 설정이 무료이므로 기본값 폴백 대신 `if not app.secret_key: raise RuntimeError('SECRET_KEY 환경변수를 설정하세요.')` 로 교체하거나, 최소한 기본값을 `secrets.token_hex(32)` (매 재시작마다 랜덤)로 변경해 키 재사용을 방지. 한 줄 수정으로 주요 보안 위협 제거.
+
+- **`quiz_settings()` / `host_roulette_config()` / `host_news_interval()` float() 예외 처리 누락** (`app.py:1466-1467`, `app.py:1433-1434`, `app.py:734`): 세 엔드포인트 모두 클라이언트가 보낸 문자열을 `float()` 로 직접 변환하되 try-except 가 없어 비수치 입력 시 500 에러 발생. 예: `{"reward_pct": "abc"}` → `ValueError: could not convert string to float: 'abc'` → 500 Internal Server Error. 각각 `try: val = float(...) except (ValueError, TypeError): return jsonify({'error': '숫자 값을 입력하세요'}), 400` 패턴을 적용. `trade()` (`app.py:832`)의 bare `except:` 와 `create_deposit()` (`app.py:976`)의 bare `except:` 도 `except (TypeError, ValueError):` 로 구체화해 `SystemExit` / `KeyboardInterrupt` 가 삼켜지지 않도록 수정. 총 5개소, 각 2~3줄 수정.
+
+- **`RoomTransaction` 테이블에 복합 인덱스 누락** (`models.py:68-79`): `get_transactions()` (`app.py:917-935`)는 `RoomTransaction.query.filter_by(room_id=rid, user_id=uid).order_by(...)` 를, `export_rankings()` 는 `filter_by(room_id=rid)` 를 실행. `room_id` 단독 또는 `(room_id, user_id)` 복합 인덱스가 없어 테이블이 커지면 풀 스캔 발생. `__table_args__` 에 `db.Index('ix_roomtxn_room_user', 'room_id', 'user_id')` 와 `db.Index('ix_roomtxn_room', 'room_id')` 추가. SQLite에서도 인덱스가 쿼리 계획에 사용되므로 참가자 30명 × 거래 50건 = 1500행 규모에서도 체감 성능 차이 발생. 알렘빅 마이그레이션(`flask db migrate`) 없이 `db.create_all()` 재실행으로 신규 DB에는 즉시 적용.
+
+- **`minigame_spin()` 내부 `import math` 중복** (`app.py:1116`): 함수 본문 내부에 `import math` 가 있으나 `math` 는 이미 `app.py:6` 상단에서 임포트됨(`import os, threading, math`). Python은 중복 임포트 시 캐시에서 반환하므로 기능 오류는 없지만, 함수 실행마다 모듈 시스템 캐시 조회 오버헤드가 발생하고 코드 가독성을 해침. `app.py:1116` 의 `import math` 한 줄을 삭제하면 됨. 1줄 삭제, 0 기능 변경.
