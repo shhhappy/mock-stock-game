@@ -3965,3 +3965,29 @@
 
 - **`_end_room()` 에서 룰렛 일시정지 상태 종료 시 예금 이자가 `paused_at` 기준으로 절사** (`app.py:223-228`): `_end_room()` 은 `if room.paused_at: game_end = room.paused_at` 로 이자 정산 기준 시각을 설정. 룰렛 이벤트로 게임이 자동 일시정지(`room.paused_at` 기록)된 뒤 진행자가 몇 분 후 "게임 종료"를 누르면 `game_end` 가 실제 종료 시각이 아닌 룰렛 발동 시점이 되어 그 사이 경과 시간만큼 이자가 줄어듦. 수동 일시정지가 아닌 룰렛 트리거 일시정지(`room.rlt_triggered == True`)는 사실상 "게임 계속" 상태이므로, `_end_room()` 내 `game_end` 계산 시 `room.paused_at` 대신 `min(now, room.end_time) if room.end_time else now` 를 사용하도록 분기하면 됨. 3줄 수정.
 
+
+## 2026-08-12
+
+### 추가하면 좋을 기능
+
+- **QR 코드 URL 파라미터(`?code=XXXXXX`)를 입장 폼에 자동 입력** (`static/js/app.js:198-207`, `doJoinRoom()`): QR 코드 생성 시 `${location.origin}${location.pathname}?code=${S.room.code}` 형태 URL을 사용하지만(`app.js:199`), 페이지 로드 시 해당 파라미터를 파싱해 입장 폼에 채워주는 코드가 없음. 학생이 QR을 스캔해도 여전히 6자리 코드를 직접 입력해야 함. `app.js` 초기화 시점에 `const params = new URLSearchParams(location.search); const preCode = params.get('code'); if (preCode) { document.getElementById('join-code').value = preCode; showScreen('screen-join'); }` 약 4줄을 `DOMContentLoaded` 핸들러 또는 스크립트 말미에 추가하면 QR 스캔 즉시 코드가 채워진 입장 화면으로 전환. 교실에서 QR 스캔 후 추가 입력을 줄여 참가 속도 대폭 향상.
+
+- **게임 중 진행자가 시간을 연장하는 기능** (`app.py:620-638`, `end_room()`, 진행자 설정 탭): 현재 진행자는 시간을 단축(종료 버튼으로 1분 카운트다운)하거나 일시정지는 가능하지만, 수업 토론이 길어질 때 게임 시간 자체를 연장할 방법이 없음. `POST /api/rooms/<rid>/host/extend` 엔드포인트를 추가해 `room.end_time += timedelta(minutes=minutes)` 와 `_invalidate_room_cache(rid)` 를 실행하면 됨. 진행자 설정 탭에 "⏱ +5분", "+10분" 버튼 추가. 서버 10줄 + 클라이언트 버튼 2개. Render 무료 티어 슬립 복귀 후 시간이 소진된 경우에도 활용 가능해 수업 진행 유연성 향상.
+
+- **인게임 뉴스 히스토리 패널 (클라이언트 사이드)** (`static/js/app.js:8`, `S.newsTs`, 폭탄뉴스 팝업 로직): 폭탄뉴스 팝업은 4.2초 후 자동 사라져(`app.js:53-57`, toast 패턴 참조) 놓친 학생은 복기할 방법이 없음. `S` 상태에 `newsHistory: []` 배열을 추가하고, 뉴스 팝업 표시 시 `S.newsHistory.unshift({ts: Date.now(), items})` 로 최근 10건을 `localStorage`에도 동시 저장. 학습 탭 하단 또는 시장 탭 상단에 "📰 최근 뉴스" 아코디언 섹션을 추가. 서버 변경 없이 클라이언트 약 25줄. "뉴스 보고 종목 분석하기" 교육 목표에 직접 기여.
+
+- **엑셀 내보내기에 개인별 거래 내역 시트 추가** (`app.py:1379-1447`, `export_rankings()`): 현재 엑셀은 '최종 순위' 시트 하나만 생성함(`app.py:1401`). 성적 처리 또는 사후 피드백을 위해 학생별 거래 기록이 필요하지만, 진행자도 개별 학생 거래를 조회하려면 각각 모달을 열어야 함. `export_rankings()` 내 `wb.create_sheet('전체 거래 내역')` 로 두 번째 시트를 추가하고, `RoomTransaction.query.filter_by(room_id=rid).order_by(RoomTransaction.timestamp).all()` 결과를 `[타임스탬프, 이름, 학번, 종목, 매수/매도, 수량, 가격, 금액, 메모]` 형식으로 기록. 약 30줄 추가로 수업 후 분석 및 포트폴리오 평가가 엑셀 파일 하나로 완결됨.
+
+- **진행자 공지사항 브로드캐스트 기능** (`app.py:84-98`, `_news_cache`, 폭탄뉴스 채널 활용): 수업 중 "다음 10분간 바이오 섹터에 집중하세요" 같은 메시지를 학생 전원에게 즉시 전달할 방법이 없음(폭탄뉴스는 주가 연동). `POST /api/rooms/<rid>/host/announce` 에서 `_room_announcements[rid] = {'text': text, 'ts': time.time()}` 인메모리 저장 후, 참가자 10초 폴링(`app.js:616-653`) 내 방 상태 응답에 `announcement` 필드를 추가해 새 공지가 있으면 토스트 또는 전용 배너로 표시. 서버 15줄 + 클라이언트 20줄. 교사가 학생에게 개별 연락 없이 실시간 안내 가능.
+
+### 제거/단순화할 것들
+
+- **`api.get()` / `api.post()` 오류 시 서버의 상세 에러 메시지가 버려짐** (`static/js/app.js:30-45`): `api.post()` 는 `if (!r.ok) return {error: 'HTTP ${r.status}'}` 로 응답 본문을 읽지 않고 반환. Flask가 `jsonify({'error': '잔액 부족 — 필요: 500,000원 / 보유: 300,000원'}), 400` 을 돌려줘도 학생에게는 "HTTP 400" 만 노출됨(`app.py:750`: `return jsonify({'error': f'잔액 부족...'}), 400`). 수정: `if (!r.ok) { try { const j = await r.json(); return {error: j.error || 'HTTP ' + r.status}; } catch { return {error: 'HTTP ' + r.status}; } }` 로 변경하면 서버 에러 메시지가 그대로 토스트에 표시됨. `api.get()` 도 동일 패턴 적용 필요. 3줄 수정, 영향 범위 전체 API 호출.
+
+- **`get_history()` 차트 데이터가 인게임 현재가와 완전히 단절** (`stock_service.py:303-332`, `get_chart()` at `app.py:710-719`): `get_history()` 는 `current` 가격에서 시작해 랜덤워크로 과거를 역산하므로, 차트의 마지막 봉(현재)이 실제 인게임 현재가(`self._prices[symbol]`)와 일치하지 않음. 학생이 "주가가 오르고 있으니 사야지" 라고 판단해도 차트와 실제 시세가 다른 경우가 발생. `get_history()` 의 `price = float(current)` (`stock_service.py:317`) 에서 역방향 생성 시작값으로 `current` 를 올바르게 사용하고 있으나, `_history_cache` 가 가격 변경 시 무효화되지 않으면 구 캐시가 노출됨. `get_price()` 내 `del self._history_cache[key]` (`stock_service.py:210`) 는 해당 심볼 키만 삭제하므로 `force_sector_event()` 에서 대량 변경 후 일부 캐시가 남을 수 있는지 확인 필요. 근본 개선: `bars` 생성 후 마지막 봉의 `close` 를 `current` 로 고정(`bars[-1]['close'] = round(current)`)하면 차트 끝점과 현재 시세가 항상 일치.
+
+- **`_compute_leaderboard()` 의 N+1 쿼리 문제** (`app.py:151-171`): `member_total_value()` 가 멤버마다 `RoomHolding.query.filter_by(...)` 와 `Deposit.query.filter_by(...)` 를 개별 실행(`app.py:138-149`). 30명 참가 시 `loadHostMembers()` 한 번에 최소 60회 + 멤버 수 쿼리가 발생. 진행자 대시보드가 10초마다 호출하므로 SQLite에 부담 집중. 개선: `RoomHolding.query.filter_by(room_id=rid).all()` 과 `Deposit.query.filter_by(room_id=rid, status='active').all()` 을 한 번씩 실행해 `uid` 기준으로 딕셔너리로 묶은 후 멤버별 합산 계산. Render 무료 단일 인스턴스 환경에서 응답 속도 체감 개선 가능.
+
+- **서버 재시작 후 초기화되는 인메모리 설정에 대한 UI 경고 없음** (`app.py:1251-1267`, `_quiz_settings`, `_roulette_config`): 진행자가 퀴즈 보상/패널티 비율과 룰렛 배율을 설정 탭에서 변경해도 이는 `_quiz_settings[rid]` / `_roulette_config[rid]` 인메모리 딕셔너리에만 저장됨. Render 무료 티어는 15분 비활동 시 슬립(재시작)되므로 설정이 기본값으로 초기화될 수 있음. 진행자가 이를 인지할 방법이 없어 수업 중 예상과 다른 보상/패널티가 적용될 수 있음. 단기 해결: 설정 탭 상단에 "⚠️ 이 설정은 서버 재시작 시 초기화됩니다. 게임 시작 직전에 다시 확인하세요." 안내 문구 추가. 장기: `Room` 테이블에 `quiz_reward_pct`, `quiz_penalty_pct`, `roulette_config` JSON 컬럼 추가.
+
+- **`doKickMember()` 강퇴 확인 다이얼로그에 `confirm()` 사용** (`static/js/app.js:236-241`, `static/js/app.js:248-254` `doStartGame()`): `confirm()` 은 브라우저 차단 설정에 따라 무음 실패하거나, 모바일 WebView(학생들이 사용 가능성 높음)에서 동작하지 않는 경우가 있음. 같은 패턴이 `doStartGame()`(`app.js:249`) 등에서도 반복됨. 작은 인라인 확인 UI(토스트 위 "정말 강퇴하시겠습니까? [예] [아니오]" 버튼 쌍)로 교체하거나, 최소한 `confirm()` 반환값이 `false` 일 때의 예외 처리를 명시적으로 추가. 교실용 모바일 환경에서 안정성 개선.
