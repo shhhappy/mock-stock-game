@@ -4101,3 +4101,35 @@
 
 - **`_lot_round_due()` 서버 재시작 후 진행 중이던 복권 `current` 상태 미복원으로 데드락 가능** (`app.py:272-280`, `app.py:509-531` `_auto_start_lottery_if_due()`): 재시작 후 `_lots[rid]` 가 초기화되면 `done` 집합은 `room.lottery_rounds_done` DB 컬럼에서 복원(`app.py:276-280`)하지만, 진행 중이던 `current`(state: picking/drawing) 정보는 완전히 소실됨. 이후 `_auto_start_lottery_if_due()` 는 `lot.get('current')` 가 None이므로 같은 회차를 다시 시작하려 하지만, `done` 집합에 해당 회차가 이미 있어(`room.lottery_rounds_done` 에 저장된 경우) `_lot_round_due()` 가 None을 반환하므로 복권이 다시 시작되지도 않음. 게임이 `paused` 상태로 고착되어 진행자가 수동 재개도 못 하는 상황 발생. 단기 해결: `Room` 테이블에 `lottery_current_state VARCHAR(20)` 컬럼 추가해 재시작 시 `current` 객체 최소 정보(round, state) 복원. 장기 해결: 복권 상태를 DB에 완전 직렬화.
 
+
+---
+
+## 2026-08-14 (2차)
+
+### 추가하면 좋을 기능
+
+- **입력 폼에서 Enter 키 제출 처리** (`static/js/app.js:144-171`, `doJoinRoom()`, `static/index.html` 학생 로그인 폼): 학번·이름·방 코드 입력 후 Enter 키를 눌러도 아무 반응이 없고 버튼을 마우스로 클릭해야 함. 모바일 가상 키패드 `완료(Done)` 버튼 및 PC에서 Enter 제출이 안 되어 교실 실습 속도가 느려짐. `index.html` 의 `join-code`, `join-student-id`, `join-name`, `host-student-id`, `host-name`, `room-name` 등 각 입력란에 `onkeydown="if(event.key==='Enter')doJoinRoom()"` (또는 `doCreateRoom()`) 추가. 대안으로 각 영역을 `<form onsubmit="doJoinRoom();return false">` 로 감싸면 브라우저 기본 동작 활용 가능. HTML 6줄 수정으로 학생 30명이 빠르게 입장 가능해져 게임 준비 시간 단축.
+
+- **포트폴리오 탭 보유 종목 카드 클릭 시 주식 모달 직접 오픈** (`app.js:1574-1591`, `loadPortfolio()` holdings 렌더링): `holding-item` div 내 "▲ 매수"·"▼ 매도" 버튼은 있지만 종목명·현재가 영역 전체 클릭은 안 됨. 보유 현황을 보다가 매도하려면 버튼 위치를 찾아야 해서 모바일에서 불편. `<div class="holding-item" ... onclick="openStockModal('${h.symbol}',{symbol:'${h.symbol}',name:'${h.name}',sector:'${h.sector}',price:${h.current_price},change_pct:${h.gain_pct}})">` 로 외부 div에 onclick 추가하고, 매수·매도 버튼에는 `onclick="event.stopPropagation();openStockModal(...)"` 으로 이벤트 버블링 차단. 2줄 수정으로 포트폴리오 → 모달 → 거래 흐름이 자연스러워짐.
+
+- **학생 화면에 자산 급변 토스트 알림 (5% 이상 변화 시)** (`app.js:738-756`, `refreshMyRank()`): 매 폴링마다 총자산을 갱신하지만, 섹터 이벤트나 룰렛 직후 자산이 크게 변해도 화면 숫자만 바뀔 뿐 알림이 없음. `let _prevTotalValue = null` 을 전역에 추가하고, `refreshMyRank()` 내에서 `if (_prevTotalValue && Math.abs((me.total_value - _prevTotalValue) / _prevTotalValue * 100) >= 5)` 조건으로 `toast(me.total_value > _prevTotalValue ? '📈 자산 +${...}원 증가!' : '📉 자산 -${...}원 감소!', 'info')` 호출 후 `_prevTotalValue = me.total_value` 갱신. 약 8줄 추가, 서버 변경 없음. 섹터 이벤트 직후 학생들이 즉각 반응해 시장 뉴스 → 자산 반응 인과관계 학습 효과.
+
+- **`refreshMyRank()` 를 전용 경량 엔드포인트로 분리해 서버 부하 감소** (`app.py:904-912`, `app.js:738-756`): 현재 `refreshMyRank()` 는 매 10초마다 `GET /api/rooms/${rid}/rankings` 를 호출해 `_compute_leaderboard()` 전체(N+1 DB 쿼리)를 실행하고, 전 참가자 목록 중 자신의 항목 1개만 사용. 30명 방 기준 `refreshMyRank()` 단독으로 분당 180회 이상 DB 쿼리 발생. `GET /api/rooms/<rid>/my-rank` 엔드포인트를 신규 추가해 `member.cash` + 보유 주식 현재가 합계 + 예금 합계로 간략히 계산하고, 순위는 전체 total_value 대비 COUNT 서브쿼리 1회로 대체. `app.py` 약 25줄, `app.js:739` URL 변경 1줄. 순위 탭(`loadParticipantRankings()`)은 이미 별도 호출이므로 분리가 자연스러움.
+
+- **호스트 마켓 탭 종목 카드 클릭 시 force-price 드롭다운 자동 선택** (`app.js:316-360`, `loadHostMarket()`, `doForcePrice()`): 현재 호스트 마켓 탭은 종목 가격 그리드만 보여주고 클릭 이벤트가 없어, 진행자가 특정 종목을 강제 조정하려면 설정 탭 드롭다운에서 다시 찾아 선택해야 함. `loadHostMarket()` 그리드 렌더링에서 `<div class="stock-card" onclick="document.getElementById('force-price-symbol').value='${st.symbol}'; switchHostTab('settings'); document.getElementById('force-price-pct').focus();">` 추가. 한 줄 수정으로 "마켓에서 종목 확인 → 클릭 → 설정 탭에 종목 pre-fill → 변동률만 입력" 워크플로우 구현. 진행자 수업 중 즉각 조정 속도가 크게 향상됨.
+
+- **교육 탭에 오늘의 주가 변동 기반 실시간 학습 연결 힌트 표시** (`static/js/app.js` `loadEducation()` 인근, `app.py:904-912`, `app.py:1293-1309`): 교육 탭 용어사전·가이드는 정적 콘텐츠뿐이고, 현재 게임 상황과 연결된 학습 힌트가 없음. `loadEducation()` 에서 현재 `S.stocks` 중 가장 변동률이 높은 3개 종목을 찾아 "오늘 가장 많이 오른 종목: NVIDIA (+8.2%) → 섹터: 해외반도체 → [섹터 관련 용어 보기]" 형태로 탭 상단에 동적 카드 3개를 추가. `S.stocks` 는 클라이언트에 이미 내려와 있으므로 서버 추가 호출 불필요. GLOSSARY의 섹터 관련 항목을 필터링해 링크. 약 15줄 JS 추가로 게임 상황과 교육 콘텐츠를 자연스럽게 연결.
+
+### 제거/단순화할 것들
+
+- **`minigame_spin()` 에 `_get_member_lock` 누락 — 동시 스핀 시 현금 중복 공제 경합 발생** (`app.py:1096-1142`): `trade()` (`app.py:840`), `submit_quiz()` (`app.py:1364`), `create_deposit()` (`app.py:982`) 는 모두 `with _get_member_lock(rid, user.id): db.session.refresh(member)` 로 자산 변경을 보호하지만, `minigame_spin()` 은 잠금 없이 `m.cash = m.cash - bet + winnings` 를 실행함. 학생이 두 탭에서 동시에 스핀 요청을 보내면 두 요청 모두 동일한 `m.cash` 를 읽어 베팅을 이중 공제하거나 당첨금을 두 번 더할 수 있음. `spins_used` 체크(`app.py:1109-1110`)도 잠금 밖에 있어 3회 제한 우회 가능. `shortfall` 계산 라인(`app.py:1124`)부터 `db.session.commit()`(`app.py:1136`)까지 전체를 `with _get_member_lock(rid, user.id):` 로 감싸고, 블록 내 첫 줄에 `db.session.refresh(m)` 추가 필요.
+
+- **`host_force_price()` 에서 `pct = float(d.get('pct', 0))` 예외 처리 누락** (`app.py:775`): `float()` 변환에 try-except 없어 비숫자 값("abc", None 등)이 오면 ValueError → Flask 500 에러 HTML → 프론트의 `api.post()` 가 JSON 파싱 실패로 unhandled 에러 발생. 바로 옆 `host_market_event()` (`app.py:1408`)는 동일 패턴을 `try: pct = float(...) \nexcept: return jsonify({'error':'잘못된 변동률'}), 400` 으로 올바르게 처리. `app.py:775` 에 동일 try-except 적용(3줄). 일관성을 위해 `host_market_event()` 와 패턴 통일.
+
+- **`Room.query.get_or_404(rid)` — 레거시 SQLAlchemy Query API 전체 15+ 곳에서 사용** (`app.py:536,579,594,607,622,646,653,682,726,748,769,787,821,869,905,919,941,967,999,1022,1038,1065,1096,1147,1183,1256` 등): Flask-SQLAlchemy 3.0은 `Model.query.get()` 을 deprecated 처리했고 SQLAlchemy 2.0 마이그레이션 가이드에서는 `Session.get()` 사용 권장. 동일 파일 내에서도 `db.session.get(Room, rid)` (`app.py:152,327,454`) 패턴이 혼용되어 스타일 불일치. Flask-SQLAlchemy 3.0.x 이상에서는 `db.get_or_404(Room, rid)` 신규 API가 동등한 기능을 제공하며 내부적으로 Session.get()을 사용. `grep -n "query.get_or_404"` 로 일괄 확인 후 `db.get_or_404(Room, rid)` 로 치환하면 됨.
+
+- **`get_room()` 에서 자동 종료 분기에 `cur_user()` DB 쿼리가 중복 호출** (`app.py:536-545`): `get_room()` 함수는 `Room.query.get_or_404(rid)` 후 바로 `cur_user()`를 호출하지 않고 자동 종료 조건이 충족될 때만 `cur_user().id` 를 참조(`app.py:540`, `app.py:545`). 두 분기 모두 `cur_user()` → `db.session.get(User, session['user_id'])` 로 각각 별도 DB 쿼리를 발생시킴. `start_room()`, `pause_room()` 등 다른 라우트가 `user = cur_user()` 를 함수 초반에 한 번만 호출하는 패턴과 불일치. `get_room()` 상단에 `user = cur_user()` 를 추가하고 이후 모든 `cur_user()` 호출을 `user` 로 교체하면 DB 쿼리 1~2회 절감.
+
+- **`openStockModal()` 에서 포트폴리오 API 실패 시 이전 종목의 `S.tradeCash`, `S.tradeHolding` 잔류** (`app.js:1372-1379`): `const port = await api.get(`/api/rooms/${S.room.id}/portfolio`)` 가 실패하면 `if (!port.error)` 블록이 실행되지 않아 `S.tradeCash` 와 `S.tradeHolding` 이 직전에 열었던 종목의 값으로 남음. 학생이 삼성전자 모달(`S.tradeHolding = 50주`)을 닫고 SK하이닉스를 빠르게 열면 포트폴리오 API 실패 시 "보유 50주"가 그대로 표시됨. 해결: `openStockModal()` 진입 시 `S.tradeCash = 0; S.tradeHolding = 0; document.getElementById('ms-cash').textContent = '불러오는 중…'; document.getElementById('ms-holding').textContent = '-';` 로 초기화한 뒤 포트폴리오 응답으로 갱신. 4줄 추가.
+
+- **`escHtml()` 함수가 `'`(작은따옴표) 미이스케이프로 HTML 속성 컨텍스트 XSS 취약** (`app.js:924-926`): `function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }` 는 `&lt;`, `&gt;` 만 처리하고 `'`·`"` 는 제외. `app.js:1586-1588` 에서 `onclick="openStockModal('${h.symbol}',{...,name:'${h.name}',...})"` 처럼 HTML 속성 안에서 `escHtml` 없이 문자열을 삽입하는 패턴이 있음. 현재 STOCKS 종목명에 `'` 이 없으므로 문제없지만, 2026-07-17에서 제안된 진행자 커스텀 뉴스·커스텀 종목 기능이 추가되면 즉각 XSS로 발전. `escHtml()` 끝에 `.replace(/'/g,'&#39;').replace(/"/g,'&quot;')` 를 추가하거나(1줄 수정), 더 안전하게 `data-symbol` 어트리뷰트 + `addEventListener` 패턴으로 전환.
