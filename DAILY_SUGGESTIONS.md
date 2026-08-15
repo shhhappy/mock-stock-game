@@ -2,6 +2,40 @@
 
 ---
 
+## 2026-08-15
+
+### 추가하면 좋을 기능
+
+- **게임 진행률 프로그레스 바** (`app.js:697-717`, `startTimer()`): 현재 타이머는 `MM:SS` 숫자만 표시하고 시각적 진행도가 없음. `remaining_seconds / (duration_minutes * 60)` 비율을 계산해 `<div class="progress-bar" style="width:${pct}%"></div>` 형태로 헤더 아래에 렌더링하면 됨. `tick()` 내에서 `document.getElementById('game-progress').style.width = (elapsed/total*100).toFixed(1)+'%'` 한 줄 추가. CSS에 `.progress-bar { height:4px; background:var(--accent); transition: width 1s linear }` 추가. 서버 변경 불필요, 약 5줄 구현. 학생들이 남은 시간을 직관적으로 파악해 막판 전략 변경 등 게임 긴장감이 높아짐.
+
+- **진행자 학생별 개별 시작 자본 지급** (`app.py:493-507`, `join_room()`, `models.py:47-54`): 현재 `join_room()`에서 `m.cash = room.starting_cash`로 모든 학생이 동일 금액으로 시작함. `POST /api/rooms/<rid>/host/set-member-cash` 엔드포인트를 추가해 `{'user_id': uid, 'cash': amount}` 형태로 게임 시작 전 개별 자본을 설정할 수 있게 하면, 핸디캡 게임 또는 성적 연동 시작 자본 차등 부여 같은 변형 수업이 가능해짐. `RoomMember.query.filter_by(room_id=rid, user_id=uid).first()`로 조회 후 `m.cash = amount` 설정, `room.status == 'waiting'` 시에만 허용. 서버 약 20줄, 진행자 참여자 목록 UI에 입력 필드 추가.
+
+- **게임 종료 후 수익률 분포 히스토그램** (`app.js:1568-1649`, `loadResults()`): 결과 화면에서 현재 순위표와 막대 차트만 있고 수익률 분포는 없음. `loadResults()`에서 이미 `S.roomData.members`를 순회해 `gain_pct`를 계산하고 있으므로, 클라이언트에서 `[-50 이하, -50~-20, -20~0, 0~20, 20~50, 50 이상]` 구간으로 버킷팅해 Chart.js 히스토그램을 추가하면 됨. 기존 `S.portChart`와 동일한 `new Chart(ctx, {type:'bar', ...})` 패턴으로 약 15줄 구현. 서버 변경 불필요. "우리 반에서 수익을 낸 학생이 몇 %인가" 집계 수업에 즉각 활용 가능.
+
+- **시장 탭 종목 정렬 옵션** (`app.js:1108-1115`, `filterStocks()`, `renderGrid()`): 현재 `filterStocks()`는 `S.stocks`를 그대로 순서대로 렌더링하며 정렬 옵션이 없음. 섹터 필터 오른쪽에 `<select id="sort-select"><option value="">기본</option><option value="change_pct_asc">변동률 ▲</option><option value="change_pct_desc">변동률 ▼</option><option value="price_asc">가격 ▲</option><option value="price_desc">가격 ▼</option></select>` 를 추가하고, `filterStocks()` 내에서 선택된 필드와 방향으로 `filtered.sort()` 처리. 서버 변경 불필요, 약 10줄. 학생들이 "오늘 가장 많이 오른 종목"을 바로 찾아 모멘텀 투자 전략 실습에 활용 가능.
+
+- **학생 거래 메모 기능 (localStorage 기반)** (`app.js:1292-1322`, `execTrade()`): 현재 `execTrade()` 성공 시 토스트 알림만 표시하고 학생의 거래 의사결정 이유를 기록할 방법이 없음. 거래 성공 후 `const memo = prompt('이 거래의 이유를 메모하세요 (선택, Enter로 건너뜀):')` 를 표시해 입력값을 `localStorage`에 `{ts, symbol, action, memo}` 형태로 적재. 포트폴리오 탭에 "내 거래 일지" 섹션을 추가해 표시. 서버 변경 불필요, 약 20줄. 투자 의사결정 과정을 기록하는 습관 교육에 직결.
+
+- **일시정지 중 진행자 교육 메시지 표시** (`app.py:591-602`, `pause_room()`): 현재 `pause_room()`은 상태를 `'paused'`로 변경할 뿐 학생 화면에는 "게임이 일시정지되었습니다." 고정 텍스트만 표시됨. `_pause_messages: dict = {}  # rid -> str` 딕셔너리를 추가하고, `POST /api/rooms/<rid>/host/pause` 요청 본문에서 `message = d.get('message', '')[:200]` 를 읽어 저장, `get_room()` 응답에 `pause_message` 필드 포함. 프론트에서 `r.pause_message`가 있으면 일시정지 배너 아래 텍스트 표시. 서버 약 5줄, 클라이언트 약 5줄. "잠깐! 지금부터 PER 개념 설명합니다 — 개념 정리 후 재개" 같은 메시지로 수업 흐름 제어 가능.
+
+### 제거/단순화할 것들
+
+- **`host_force_price()` `float()` 변환에 try-except 누락** (`app.py:775`): `pct = float(d.get('pct', 0))` 에서 클라이언트가 비숫자 값을 전송하면 `ValueError`가 잡히지 않아 500 Internal Server Error가 발생함. 같은 파일의 `host_market_event()`(`app.py:1408`)는 `try: pct = float(...) except (ValueError, TypeError): pct = 5.0` 패턴으로 처리하고 있으므로, `host_force_price()`도 `try: pct = float(d.get('pct', 0)) except (ValueError, TypeError): return jsonify({'error': '유효하지 않은 pct 값'}), 400` 를 추가해야 함. 한 줄 수정으로 500 오류 제거.
+
+- **`_end_room()` 동시 호출 보호 없음** (`app.py:216`): `_end_room(room)` 함수는 이자 지급과 `room.status = 'ended'` 설정을 수행하지만 별도 락 없이 10초 폴링 루프에서 여러 스레드가 동시에 호출할 수 있음. 함수 최상단에 `if room.status == 'ended': return` guard가 없어 이자 이중 지급 위험이 있음. `_lottery_lock`처럼 `_end_room_lock = threading.Lock()` 을 추가하고 함수 진입부를 `with _end_room_lock: if room.status == 'ended': return` 로 보호해야 함.
+
+- **`trade()` 내 bare `except:` 사용** (`app.py:833`): `try: shares = int(...); price = float(...) except: return jsonify({'error': '잘못된 입력'}), 400` 패턴에서 bare `except:`가 `KeyboardInterrupt`, `SystemExit` 까지 포함한 모든 예외를 삼켜 프로세스 종료 시그널을 방해할 위험이 있음. `except (ValueError, TypeError):` 로 구체화해야 하며, PEP8 및 pylint E722 위반이기도 함.
+
+- **`_lot_round_due()` 에서 `_lots[rid]` 초기화가 락 밖에서 수행됨** (`app.py:278-279`): `if rid not in _lots: _lots[rid] = {'done': done_set, 'current': None}` 코드가 `_lottery_lock` 없이 실행됨. 두 스레드가 동시에 `rid not in _lots`를 `True`로 평가하면 초기화 블록이 두 번 실행되어 이미 진행된 라운드 정보(`done_set`)가 초기화될 수 있음. `_lots.setdefault(rid, {'done': done_set, 'current': None})` 를 사용하거나 해당 블록을 `with _lottery_lock:` 으로 감싸 원자적 초기화로 교체해야 함.
+
+- **`minigame_spin()` 함수 내 중복 `import math`** (`app.py:1116`): `app.py:6` 에서 이미 `import os, threading, math` 로 모듈 레벨에 `math`가 임포트되어 있음에도 `app.py:1116` 에서 `import math` 를 재실행하고 있음. Python은 sys.modules 캐시에서 반환하므로 기능 오류는 없지만 코드 리뷰 시 혼란을 유발하고 불필요한 구문임. 해당 줄 삭제로 해결.
+
+- **`create_deposit()` 에서 `request.json` 이중 파싱** (`app.py:976, 979`): `amount = (request.json or {}).get('amount')` 와 `lock_type = (request.json or {}).get('lock_type', 'free')` 가 각각 `request.json`을 두 번 호출함. Flask의 `request.json`은 매 호출마다 요청 바디를 역직렬화하므로 불필요한 중복 처리임. 함수 상단에서 `d = request.json or {}` 로 한 번만 파싱하고 이후 `d.get('amount')`, `d.get('lock_type', 'free')` 로 참조해야 함.
+
+- **`_lottery_lock` 보유 중 `db.session.commit()` 호출** (`app.py:522-523`, `app.py:1171`): `_auto_start_lottery_if_due()`와 `lottery_start()` 모두 `with _lottery_lock:` 블록 내부에서 `db.session.commit()`을 호출함. DB 커밋은 디스크 I/O와 트랜잭션 플러시를 수반하며 수십~수백ms가 소요될 수 있어, 그 시간 동안 복권 관련 모든 요청(번호 선택, 당첨 조회)이 블록킹됨. 필요한 값을 로컬 변수에 복사한 뒤 `with _lottery_lock:` 블록 밖에서 commit을 수행하는 패턴으로 리팩터링해야 함.
+
+---
+
 ## 2026-08-08
 
 ### 추가하면 좋을 기능
