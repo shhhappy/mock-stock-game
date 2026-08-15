@@ -4133,3 +4133,36 @@
 - **`openStockModal()` 에서 포트폴리오 API 실패 시 이전 종목의 `S.tradeCash`, `S.tradeHolding` 잔류** (`app.js:1372-1379`): `const port = await api.get(`/api/rooms/${S.room.id}/portfolio`)` 가 실패하면 `if (!port.error)` 블록이 실행되지 않아 `S.tradeCash` 와 `S.tradeHolding` 이 직전에 열었던 종목의 값으로 남음. 학생이 삼성전자 모달(`S.tradeHolding = 50주`)을 닫고 SK하이닉스를 빠르게 열면 포트폴리오 API 실패 시 "보유 50주"가 그대로 표시됨. 해결: `openStockModal()` 진입 시 `S.tradeCash = 0; S.tradeHolding = 0; document.getElementById('ms-cash').textContent = '불러오는 중…'; document.getElementById('ms-holding').textContent = '-';` 로 초기화한 뒤 포트폴리오 응답으로 갱신. 4줄 추가.
 
 - **`escHtml()` 함수가 `'`(작은따옴표) 미이스케이프로 HTML 속성 컨텍스트 XSS 취약** (`app.js:924-926`): `function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }` 는 `&lt;`, `&gt;` 만 처리하고 `'`·`"` 는 제외. `app.js:1586-1588` 에서 `onclick="openStockModal('${h.symbol}',{...,name:'${h.name}',...})"` 처럼 HTML 속성 안에서 `escHtml` 없이 문자열을 삽입하는 패턴이 있음. 현재 STOCKS 종목명에 `'` 이 없으므로 문제없지만, 2026-07-17에서 제안된 진행자 커스텀 뉴스·커스텀 종목 기능이 추가되면 즉각 XSS로 발전. `escHtml()` 끝에 `.replace(/'/g,'&#39;').replace(/"/g,'&quot;')` 를 추가하거나(1줄 수정), 더 안전하게 `data-symbol` 어트리뷰트 + `addEventListener` 패턴으로 전환.
+
+---
+
+## 2026-08-15
+
+### 추가하면 좋을 기능
+
+- **참가자 재입장(rejoin) 지원** (`app.py:493-507`, `join_room()`): 현재 참가자가 브라우저를 닫거나 새로고침하면 `/api/auth/enter`→`/api/rooms/join` 순서로 재인증 후 재입장해야 하는데, `enter` API는 username으로만 사용자를 찾으므로 학번+이름을 정확히 다시 입력해야 한다. `User` 모델에 `student_id` 컬럼(`models.py:16-22`)을 추가하고, 쿠키 세션이 유효하다면 `/api/auth/me`(`app.py:450-459`)에서 자동으로 active_room을 반환하는 현재 로직(`find_active_room()`)이 이미 있으나, 브라우저 세션이 만료된 경우 학번 없이 재입장하는 경로가 없다. 로그인 폼에 "이전 게임 코드로 복귀" 버튼을 추가하거나, 세션 쿠키 TTL을 게임 종료 시각까지 늘리는 것(`app.secret_key`, `app.py:19`)이 교실에서 가장 빈번한 이탈-재접속 상황에 도움이 됨.
+
+- **진행자가 게임 중 개별 학생 포트폴리오 실시간 조회** (`app.py:700-721`, `host_member_transactions()`): 호스트는 현재 학생 거래 내역만 볼 수 있고, 학생이 지금 어떤 주식을 얼마나 보유 중인지는 볼 수 없다. `GET /api/rooms/<rid>/host/members/<uid>/portfolio` 엔드포인트를 `app.py` `host_member_transactions` 아래에 추가하고, `get_portfolio()` 로직(`app.py:868-899`)을 `uid` 파라미터화하면 약 15줄로 구현 가능. 호스트 순위표의 "거래" 버튼 옆에 "포트폴리오" 버튼(`app.js:427`)을 추가해 학생의 현재 보유 종목을 볼 수 있으면 교사가 수업 중 특정 학생의 투자 전략을 설명 소재로 활용할 수 있음.
+
+- **주가 변동 히스토리 차트(게임 내 실제 가격)** (`stock_service.py:303-332`, `get_history()`): 현재 차트 데이터는 게임 시작 시 현재가를 기준으로 역산해 랜덤 생성(`get_history()`)하므로 실제 게임 내 가격 흐름과 무관하다. `StockService.__init__`에 `self._price_log: dict = {}` (symbol → [(timestamp, price)] 최근 200개)를 추가하고 `get_price()` 내 갱신 시마다 append하면, 이를 `get_history()`에서 실제 데이터로 대체할 수 있다. 학생들이 "내가 살 때 가격이 왜 그랬는지" 실제 게임 내 차트로 복기할 수 있어 교육 효과 직결. `stock_service.py:196-212` 수정 범위.
+
+- **게임 종료 후 참가자 성적표 화면에 투자 분석 요약 추가** (`static/index.html:617-657`, 결과 화면, `app.js` `loadResults()`): 결과 화면에는 순위, 자산 현황 차트만 있다. 게임 종료 시점 거래 내역(`/api/rooms/<rid>/transactions`)을 클라이언트에서 분석해 "총 매수 횟수 / 총 매도 횟수 / 가장 많이 거래한 종목 / 최고 수익 종목 / 최저 수익 종목"을 카드 형태로 결과 화면 `results-my-stats` div(`index.html:648`)에 표시하면 서버 변경 없이 프론트엔드만으로 구현 가능. 학생이 "어떤 판단이 수익/손실을 만들었는가"를 바로 복기하는 수업 토론 소재가 됨.
+
+- **복권 당첨 결과 전체 공개 화면 (진행자→ 화면 공유용)** (`app.py:1183-1216`, `get_lottery()`, `index.html:742-794`): 복권 결과 모달은 각 학생이 개인 폰에서만 확인한다. 진행자의 `modal-lottery-result`에 `all_results`(이미 `app.py:1214`에서 host에게만 반환)를 이용해 전체 참가자 당첨 결과를 테이블로 보여주는 전용 패널(`<div id="lresult-detail">` `index.html:789`)이 필요하다. 현재는 `lresult-detail` div의 내용이 구현되어 있지 않아(`app.js`에서 호스트용 결과 렌더링이 누락됨) 호스트가 누가 얼마를 받았는지 한눈에 확인할 수 없다. 화면 공유 시 학급 전체가 결과를 함께 볼 수 있는 "결과 전광판" 기능.
+
+- **학생 닉네임 중복 방지 및 학번 검증** (`app.py:430-443`, `enter()`, `models.py:16-22`): 현재 `User.username`은 unique constraint가 있어(`models.py:19`) 동일한 `"학번 이름"` 문자열이 재사용될 경우 기존 계정으로 로그인된다. 하지만 학생이 학번을 잘못 입력하면(`"20715 김철수"` vs `"20716 김철수"`) 다른 계정이 생성되어 같은 방에 두 번 입장 시도 시 에러가 발생한다. 학번 형식 검증(숫자 5자리 등)을 프론트엔드(`index.html:52-60`, `index.html:322-331`)와 서버 양쪽에 추가하고, 방 코드 + 학번이 이미 존재하는 RoomMember와 겹치면 "기존 계정으로 재접속"을 안내하는 로직을 `join_room()`에 추가하면 교실에서 자주 발생하는 혼란 방지.
+
+### 제거/단순화할 것들
+
+- **`_member_locks` 딕셔너리의 메모리 누수 위험** (`app.py:109-119`, `_get_member_lock()`): `_member_locks` dict는 방이 종료될 때(`_end_room()`, `app.py:259-261`) 해당 방의 키를 정리하지만, 서버 재시작 없이 여러 게임이 반복되면 lock 객체가 누적된다. 이미 `_end_room()`에 정리 코드가 있으나 `app.py:259-261`의 삭제 루프는 `_member_locks_meta` Lock을 잡지 않고 dict를 순회해 이론상 race condition이 가능하다. `with _member_locks_meta: for k in [k for k in _member_locks if k[0] == room.id]: del _member_locks[k]` 패턴으로 이미 처리 중이나, 실제 `_end_room` 코드를 보면 `with _member_locks_meta:` 블록 안에서 처리하므로 안전하다. 단, `cleanup_room_service(room.id)` 이후에 정리가 이루어지므로 순서가 맞는지 재확인 필요.
+
+- **`_rlt_active`, `_quiz_state`, `_quiz_settings`, `_quiz_history` 등 인메모리 상태 서버 재시작 시 소실** (`app.py:351-353`, `app.py:1314-1316`): Render 무료 플랜에서 서버가 sleep 후 재시작되면 진행 중이던 룰렛 상태, 퀴즈 쿨다운, 퀴즈 설정이 모두 초기화된다. `Room` 모델(`models.py:25-41`)에는 `rlt_triggered`, `lottery_rounds_done` 컬럼이 있어 복권 상태는 DB에서 복구되지만, `_quiz_settings`과 `_rlt_active`는 순수 메모리라 재시작 시 리셋된다. `quiz_settings`는 Room 테이블에 `quiz_reward_pct FLOAT`, `quiz_penalty_pct FLOAT` 컬럼을 추가(`models.py`)해 DB에 영속화하면 수업 도중 서버가 sleep해도 설정 유지 가능. `app.py:1454-1469` 엔드포인트를 함께 수정.
+
+- **`get_history()` 차트 데이터가 매번 새로 랜덤 생성됨** (`stock_service.py:303-332`): 2분 캐시(`HISTORY_CACHE_TTL = 120`)가 있지만, 캐시가 만료되거나 가격 변경 시(`stock_service.py:249-251`) 캐시가 무효화되면 새로운 랜덤 데이터가 생성되어 학생이 같은 종목 차트를 두 번 보면 다른 모양이 나온다. 교육 목적상 일관된 차트가 더 적합하므로, 가격 로그를 `_init_prices()` 이후부터 적재해 실제 게임 내 가격 이력을 반환하거나, 최소한 `random.seed(room_id + symbol)` 패턴으로 동일 방·동일 종목은 항상 동일한 차트를 생성하도록 시드를 고정하는 것이 낫다.
+
+- **호스트 대시보드 폴링 주기 10초는 모바일 배터리에 부담** (`app.js:271-276`, `enterHostGame()` poll interval): 호스트 게임 화면에서 10초마다 `loadHostMembers()` 또는 `loadHostMarket()`+`refreshRoomStatus()`를 모두 호출한다. 현재 탭이 `'rank'`인지 `'market'`인지에 따라 분기하지만, 두 함수 모두 매 10초 API를 호출한다. 학생 수가 많고 게임이 길어질수록 서버(Render 무료)에 불필요한 부하가 가중된다. 탭 전환 시에만 데이터를 갱신하고, 순위는 30초 폴링으로 늦춰도 수업 진행에 지장이 없다. 뉴스 폴링(`app.js:811-828`)도 8초 간격으로 별도 실행되므로 실질적으로 최소 8초마다 요청이 발생한다.
+
+- **`kick_member()` 가 대기 중(waiting) 방에서만 작동** (`app.py:651-662`, `kick_member()`): 게임 시작 후 잘못 입장한 학생을 강퇴할 방법이 없어 진행자가 직접 `host_adjust()`로 자산을 0으로 만드는 우회 방법을 써야 한다. `room.status != 'waiting'` 조건(`app.py:657`)을 완화해, `active` 상태에서도 강퇴 가능하되 강퇴 시 해당 멤버의 보유 주식을 현금화하고 RoomMember 레코드를 삭제하는 처리를 추가하면 교실 운영 편의가 크게 높아진다.
+
+- **`force_price()` 와 `force_sector_event()` 에서 sector 이벤트 발생 시 news timestamp가 동일** (`stock_service.py:240-264`, `stock_service.py:266-298`): 두 함수 모두 `self._last_news_ts = time.time()`을 설정해 뉴스 폴링 캐시를 갱신하지만, 연속해서 두 이벤트를 빠르게 발동하면 두 번째 이벤트의 뉴스가 첫 번째 이벤트의 `timestamp`와 겹쳐 프론트엔드의 `data.timestamp > S.newsTs` 조건(`app.js:817`)에 의해 두 번째 뉴스가 무시될 수 있다. `time.time() + 0.001 * call_count` 처럼 미세한 오프셋을 주거나, 뉴스 타임스탬프에 단조 증가 시퀀스 번호를 추가하면 된다.
+
