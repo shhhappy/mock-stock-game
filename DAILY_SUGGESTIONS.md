@@ -2,6 +2,38 @@
 
 ---
 
+## 2026-08-17
+
+### 추가하면 좋을 기능
+
+- **게임 진행 중 참여자 강퇴 기능** (`app.py:657`, `kick_member()`): 현재 `if room.status != 'waiting': return jsonify({'error': '대기 중인 방에서만 강퇴할 수 있습니다.'}), 400` 조건으로 활성 게임 중 강퇴가 완전 차단됨. 수업 중 자리를 이탈한 학생이나 의도적으로 게임을 방해하는 학생을 처리할 방법이 없어 교사 입장에서 중요한 기능 공백. `room.status in ('active', 'paused')` 허용 분기를 추가해, 강퇴 시 해당 학생의 `RoomHolding`을 현재가로 청산(`svc.get_price()` × `h.shares` → `m.cash`)하고 `RoomMember` 레코드를 삭제하면 됨. 트랜잭션 기록 보존을 위해 `RoomTransaction`은 삭제하지 않고 남겨둠. 서버 약 20줄, 진행자 순위 탭의 각 학생 행에 "퇴장" 버튼 추가.
+
+- **대규모 거래 경고 다이얼로그** (`app.js:1452-1482`, `execTrade()`): `execTrade()` 함수는 잔액 대비 비중을 확인하지 않고 즉시 API를 호출함. 학생이 실수로 현금 전액을 한 종목에 올인할 수 있음. `const tradeAmt = shares * S.tradePrice; if (S.tradeCash > 0 && tradeAmt > S.tradeCash * 0.7 && action === 'BUY')` 조건에서 `if (!confirm(\`현재 보유 현금의 ${Math.round(tradeAmt/S.tradeCash*100)}%를 사용합니다. 계속하시겠습니까?\`)) return;` 를 삽입하면 됨. 서버 변경 불필요, 약 4줄. "올인 투자의 리스크" 교육 포인트를 자연스럽게 강조할 수 있고 실수 방지에도 직결.
+
+- **진행자 학생별 현재 보유 종목 조회** (`app.py:700-721`, `host_member_transactions()`): 진행자는 학생의 거래 내역(`RoomTransaction`)은 볼 수 있으나 현재 보유 종목(`RoomHolding`)의 실시간 평가액을 알 수 없음. `GET /api/rooms/<rid>/host/members/<uid>/holdings` 엔드포인트를 추가해 `RoomHolding.query.filter_by(room_id=rid, user_id=uid).all()` 쿼리 결과에 현재가(`svc.get_price()`)를 계산해 응답. 진행자 학생 거래 내역 모달(`modal-student-txn`)에 탭을 추가해 "보유 종목" 화면을 보여주면 "A 학생이 삼성전자 80% 집중"처럼 수업 중 개입 시점 파악 가능. 서버 약 15줄.
+
+- **예금 탭 실시간 이자 진행률 표시** (`app.js:1665-1690`, `loadDepositsPage()`): `GET /api/rooms/<rid>/deposits` 응답의 `expected_interest`는 호출 시점의 스냅샷이라 탭을 열어 둔 채 시간이 지나도 값이 바뀌지 않음. 클라이언트에서 각 예금의 `created_at`(응답에 포함)과 `S.room.remaining_seconds`를 활용해 1초마다 `held_ratio = Math.min(1, (totalSec - S.room.remaining_seconds - heldSec) / totalSec)` 갱신 타이머를 실행하면 서버 추가 호출 없이 라이브 이자 진행률을 보여줄 수 있음. 예금 탭에 프로그레스 바 형태로 표시하면 "지금 해지하면 이자가 얼마?" 판단에 즉각 도움. 약 20줄 클라이언트 코드.
+
+- **퀴즈 결과 진행자 통계 패널** (`app.py:1313-1316`, `_quiz_history`): `_quiz_history[(rid, uid)]` 리스트가 메모리에 있으나 진행자가 이를 볼 수 있는 API가 없음. `GET /api/rooms/<rid>/host/quiz-stats` 엔드포인트를 추가해 `{total_attempts, correct_count, correct_pct, by_question: [{q, correct, wrong}]}` 형태로 집계하면, 진행자 설정 탭에서 "1반 학생 25명 중 18명이 'PER' 문제를 맞힘"처럼 실시간 학습 진단 가능. `_quiz_history`를 모두 순회하는 O(N×M) 연산이지만 호출이 드물어 성능 문제 없음. 서버 약 20줄, 진행자 설정 탭 하단에 카드 추가.
+
+- **관심종목 watchlist를 방 코드별로 분리 저장** (`app.js:17`, `S.watchlist`): `localStorage.getItem('watchlist')` 키가 고정이라 이전 게임 방에서 등록한 관심종목이 다음 게임에도 그대로 남아 혼란을 유발함. `const WATCHLIST_KEY = 'watchlist_' + (S.room?.code || 'default')` 처럼 방 코드를 suffix로 사용하고, `enterParticipantGame()`에서 `S.watchlist`를 해당 키로 초기화하면 됨. 아울러 `goHome()` 시 또는 게임 종료 후 오래된 watchlist 키(7일 이상)를 순회해 `localStorage.removeItem()`으로 정리하면 스토리지 누수도 방지. 서버 변경 불필요, 약 10줄.
+
+### 제거/단순화할 것들
+
+- **`_compute_leaderboard()` N+1 DB 쿼리** (`app.py:138-149, 151-171`): `member_total_value()` (`app.py:138`)는 각 호출마다 `RoomHolding.query.filter_by(room_id=rid, user_id=uid).all()`과 `Deposit.query.filter_by(room_id=rid, user_id=uid, status='active').all()` 를 따로 실행. 학생 30명이면 `_compute_leaderboard()` 한 번에 60회 이상 DB 조회가 발생하며, 진행자 대시보드가 10초마다 호출하므로 Render 무료 티어 SQLite에 분당 360 쿼리를 발생시킴. `holdings_all = {h.user_id: [] for ...}` 및 `deposits_all = {d.user_id: [] for ...}` 처럼 `room_id=rid` 조건으로 전체를 한 번에 조회한 뒤 Python dict로 그룹화하면 2번의 DB 쿼리로 동일 결과를 얻을 수 있음. `app.py:151` 이전에 배치 조회를 추가하고 `member_total_value()` 인라인 계산으로 교체.
+
+- **`create_deposit()` 최소 예금 금액 미검증** (`app.py:978`): `if not (0 < amount < float('inf')): return ...` 검사는 0.01원 같은 극소값도 통과시킴. 소액 예금을 다수 생성하면 `Deposit` 테이블에 불필요한 레코드가 쌓이고, `dep.amount * dep.rate / 100 * ratio` 연산에서 float 정밀도 문제를 일으킬 수 있음. `if amount < 1000: return jsonify({'error': '최소 예금 금액은 1,000원입니다.'}), 400` 를 `app.py:978` 직후에 추가해야 함. 한 줄 추가, 서버 변경만으로 해결.
+
+- **`gen_code()` 10회 충돌 후 중복 코드 반환 — 500 오류 발생 가능** (`models.py:9-13`): 10번 모두 기존 코드와 충돌하면 `return ''.join(random.choices(..., k=k))`로 중복 코드를 그대로 반환함. 이 값이 `Room.code`(UniqueConstraint)에 삽입되면 `IntegrityError`가 `create_room()` (`app.py:488`)에서 잡히지 않아 호스트에게 500 에러로 노출됨. `for` 루프에서 10회를 초과하면 `raise RuntimeError('방 코드 생성 실패')` 를 발생시키거나 `k=8`로 코드 길이를 늘려 재시도하는 방식으로 수정해야 함. `create_room()`에서 `IntegrityError` 캐치(`app.py:505` 참고, join_room 패턴)를 추가하는 것도 보완책.
+
+- **`execTrade()` 수량 0 또는 빈 입력 시 피드백 없는 무반응** (`app.js:1458-1459`): `if (!shares) return;` 가 조용히 리턴하므로 학생이 수량 입력 없이 "매수" 버튼을 눌러도 아무 반응이 없어 오작동처럼 느껴짐. `const fb = document.getElementById('trade-fb'); if (!shares || shares <= 0) { fb.style.color='var(--down)'; fb.textContent='수량을 1 이상 입력하세요.'; return; }` 로 교체하면 됨. `fb.textContent=''` (`app.js:1461`) 초기화 직전이므로 조건 블록은 `app.js:1460` 이후에 배치.
+
+- **`openStockModal()` 매 탭마다 전체 포트폴리오 API 호출** (`app.js:1372-1379`): 학생이 종목 카드를 탭할 때마다 `/api/rooms/<rid>/portfolio` 를 호출해 전체 보유 종목을 재조회함. 이는 `RoomHolding.query.filter_by(room_id=rid, user_id=uid).all()` + 가격 계산을 수반하는 DB 쿼리임. `S.tradeCash`는 이미 거래 후(`app.js:1470, 1480`) 및 예금 후(`app.js:1702, 1713`) 업데이트되므로 재호출 불필요. 종목별 보유 수량은 별도 `GET /api/rooms/<rid>/holdings/<symbol>` 경량 엔드포인트(서버 2줄)로 분리하거나, 전체 보유 결과를 `S._holdingsCache`에 5초 TTL로 캐시하는 방식으로 교체하면 모달 오픈 지연이 줄어듦.
+
+- **`RoomMember.cash` Float 컬럼 부동소수점 오차 누적** (`models.py:52`): `cash = db.Column(db.Float)`는 Python IEEE 754 double로 저장됨. `m.cash -= amount` (`app.py:843`), `m.cash += amount` 등이 반복되면 10,000,000원이 9,999,999.9999998원처럼 표시될 수 있음. `_compute_leaderboard()`에서 `round(total, 0)` (`app.py:167`)로 최종 표시값은 보정되지만, 중간 잔액(`m.cash`)에 기반한 잔액 부족 체크(`if member.cash < amount: ...`, `app.py:845`)에서 실제로 충분한 금액인데도 거래가 거부되거나 그 역이 발생할 수 있음. 각 cash 변경 직후 `m.cash = round(m.cash, 0)` 을 추가(`app.py:843, 846, 857, 862` 등)하거나, 장기적으로 `db.Numeric(precision=15, scale=0)`으로 컬럼 타입 마이그레이션 권장.
+
+---
+
 ## 2026-08-15
 
 ### 추가하면 좋을 기능
