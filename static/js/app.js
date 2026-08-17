@@ -29,18 +29,21 @@ let _newsPopupTimer = null;
 const api = {
   async get(url) {
     const r = await fetch(url);
-    if (!r.ok) return {error: `HTTP ${r.status}`};
-    return r.json();
+    const body = await r.json().catch(() => null);
+    if (!r.ok) return {error: body?.error || `HTTP ${r.status}`};
+    return body;
   },
   async post(url, body) {
     const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-    if (!r.ok) return {error: `HTTP ${r.status}`};
-    return r.json();
+    const data = await r.json().catch(() => null);
+    if (!r.ok) return {error: data?.error || `HTTP ${r.status}`};
+    return data;
   },
   async del(url) {
     const r = await fetch(url, {method:'DELETE'});
-    if (!r.ok) return {error: `HTTP ${r.status}`};
-    return r.json();
+    const body = await r.json().catch(() => null);
+    if (!r.ok) return {error: body?.error || `HTTP ${r.status}`};
+    return body;
   },
 };
 
@@ -120,6 +123,17 @@ function confirmLeaveGame() {
 }
 
 // ── Room: Create ─────────────────────────────────────────
+function _prefillLastRoomSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('lastRoomSettings') || 'null');
+    if (!saved) return;
+    if (saved.name)             document.getElementById('room-name').value = saved.name;
+    if (saved.duration_minutes) document.getElementById('room-duration').value = saved.duration_minutes;
+    if (saved.starting_cash)    document.getElementById('room-cash').value = saved.starting_cash;
+    if (saved.deposit_rate !== undefined) document.getElementById('room-rate').value = saved.deposit_rate;
+  } catch(e) { /* 저장된 값이 손상된 경우 무시하고 기본값 유지 */ }
+}
+
 async function doCreateRoom() {
   const sid      = document.getElementById('host-student-id').value.trim();
   const hostName = document.getElementById('host-name').value.trim();
@@ -137,6 +151,9 @@ async function doCreateRoom() {
   } catch(e) { err.textContent = e.message; return; }
   const data = await api.post('/api/rooms', {name: roomName, duration_minutes: dur, starting_cash: cash, deposit_rate: rate});
   if (data.error) { err.textContent = data.error; return; }
+  try {
+    localStorage.setItem('lastRoomSettings', JSON.stringify({name: roomName, duration_minutes: dur, starting_cash: cash, deposit_rate: rate}));
+  } catch(e) { /* localStorage 사용 불가 환경(시크릿 모드 등)은 조용히 무시 */ }
   S.room = data.room;
   enterHostLobby();
 }
@@ -2350,6 +2367,7 @@ window.addEventListener('load', async () => {
   document.getElementById('join-code')?.addEventListener('input', function() {
     this.value = this.value.toUpperCase();
   });
+  _prefillLastRoomSettings();
 
   const urlCode = new URLSearchParams(location.search).get('code');
   if (urlCode) {

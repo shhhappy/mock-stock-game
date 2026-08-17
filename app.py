@@ -135,17 +135,21 @@ def login_required(f):
 def cur_user():
     return db.session.get(User, session['user_id'])
 
-def member_total_value(rid, uid):
-    member = RoomMember.query.filter_by(room_id=rid, user_id=uid).first()
+def member_total_value(rid, uid, preloaded_member=None, preloaded_holdings=None, preloaded_deps=None):
+    """preloaded_* 를 넘기면 해당 쿼리를 건너뛴다 (루프에서 N+1 방지용)."""
+    member = preloaded_member if preloaded_member is not None else RoomMember.query.filter_by(room_id=rid, user_id=uid).first()
     if not member: return 0
     svc = get_room_service(rid)
     total = member.cash
-    for h in RoomHolding.query.filter_by(room_id=rid, user_id=uid).all():
+    holdings = preloaded_holdings if preloaded_holdings is not None else RoomHolding.query.filter_by(room_id=rid, user_id=uid).all()
+    for h in holdings:
         if h.shares > 0:
             p = svc.get_price(h.symbol)
             if p: total += p * h.shares
-    for d in Deposit.query.filter_by(room_id=rid, user_id=uid, status='active').all():
-        total += d.amount
+    deps = preloaded_deps if preloaded_deps is not None else Deposit.query.filter_by(room_id=rid, user_id=uid, status='active').all()
+    for d in deps:
+        if d.status == 'active':
+            total += d.amount
     return total
 
 def _compute_leaderboard(rid):
@@ -155,10 +159,18 @@ def _compute_leaderboard(rid):
     members = RoomMember.query.filter_by(room_id=rid).all()
     uids = [m.user_id for m in members]
     user_map = {u.id: u for u in db.session.query(User).filter(User.id.in_(uids)).all()}
+    holdings_map = {}
+    for h in RoomHolding.query.filter_by(room_id=rid).all():
+        holdings_map.setdefault(h.user_id, []).append(h)
+    deps_map = {}
+    for d in Deposit.query.filter_by(room_id=rid).all():
+        deps_map.setdefault(d.user_id, []).append(d)
     board = []
     for m in members:
         u = user_map.get(m.user_id)
-        total = member_total_value(rid, m.user_id)
+        total = member_total_value(rid, m.user_id, preloaded_member=m,
+                                    preloaded_holdings=holdings_map.get(m.user_id, []),
+                                    preloaded_deps=deps_map.get(m.user_id, []))
         board.append({
             'user_id': m.user_id,
             'username': u.username if u else str(m.user_id),
@@ -567,6 +579,14 @@ def get_room(rid):
     # 서버 재시작 후 복구: rlt_triggered=True인 paused 방의 _rlt_active 재초기화
     if room.rlt_triggered and room.status == 'paused' and rid not in _rlt_active:
         _rlt_active[rid] = {'count': 0, 'auto_paused': True}
+    # 룰렛 대기 하드 타임아웃: 참여자가 룰렛을 열어둔 채 이탈해 열림 카운트가 안 줄어드는 경우
+    # 방이 무한정 paused로 멈추는 걸 방지 — 60초 지나면 상태와 무관하게 강제 종료
+    if room.rlt_triggered and room.status == 'paused' and room.paused_at:
+        if (now_dt - room.paused_at).total_seconds() >= 60:
+            _end_room(room)
+            _rlt_active.pop(rid, None)
+            _invalidate_room_cache(rid)
+            return jsonify(room_dict(room, cur_user().id))
     prev_status = room.status
     _auto_start_lottery_if_due(room)
     if room.status != prev_status:
