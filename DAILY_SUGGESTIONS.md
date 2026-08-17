@@ -4264,3 +4264,35 @@
 - **`get_quiz()` 에서 퀴즈 문제를 `_quiz_state` 에만 보관하고 응답에 `id`만 반환** (`app.py:1318-1338`): 클라이언트가 `GET /quiz`로 문제를 받을 때 `question` 텍스트는 응답에 포함되지만 `options`(선택지) 필드가 없어, 모든 퀴즈가 O/X 형태(`'a': True/False`)만 가능하다. QUIZ_QUESTIONS 데이터 구조가 고정돼 있지만, 향후 4지선다형 추가 시 `options` 필드를 응답에 포함하고 프론트 `app.js:835-870`의 퀴즈 UI를 확장할 준비가 되어 있지 않다. 현재로서는 교육 다양성 측면에서 제한이 있으므로, 최소한 `options: null`을 응답에 포함해 API를 확장 가능하게 유지하는 것이 좋다.
 
 - **`prev_close` 가 게임 시작 시점 기준으로만 설정되고 갱신되지 않음** (`stock_service.py:143-149`, `_init_prices()`, `get_prev_close()`): `self._prev[sym] = start`는 `StockService` 초기화 시 1회만 설정된다. 이후 주가가 크게 변동해도 "등락률"은 항상 게임 시작 시점 대비로 표시되므로, 장기 게임(30분 이상)에서는 특정 종목이 이미 +30%인데도 뉴스에 의해 추가 상승해 "오늘 +35%"처럼 보이는 이상 현상이 생긴다. `_maybe_generate_news()`에서 뉴스를 생성할 때 `self._prev = {sym: self._prices[sym][1] for sym in STOCKS}` 처럼 이전 가격을 갱신하면, 뉴스 주기마다 상대 등락률이 초기화돼 학생이 직관적으로 변동을 파악할 수 있다.
+
+---
+
+## 2026-08-17
+
+### 추가하면 좋을 기능
+
+- **진행자 커스텀 뉴스 헤드라인 직접 입력** (`app.py:804-815`, `host_send_news()` / `stock_service.py:226-232`, `trigger_news()`): 현재 뉴스는 `NEWS_TEMPLATES_UP`/`NEWS_TEMPLATES_DOWN` 중 무작위 선택이다. `host_send_news()` 요청 바디에 `custom_headline: str` 필드를 추가하고, `trigger_news(custom_headline=None)`을 `StockService`에 확장해 헤드라인이 전달되면 템플릿 대신 직접 사용하면 된다. 교사가 "📰 [돌발] 중앙은행 기준금리 0.5% 인상 — 금융주 충격" 같은 시나리오 맞춤 헤드라인을 즉석에서 발송해 수업 흐름을 직접 조종 가능. 서버 10줄 + 클라이언트 `<textarea>` 1개 추가로 완성.
+
+- **게임 종료 시 "베스트 거래" 자동 집계 및 표시** (`app.py:1492-1562`, `export_rankings()` / `models.py:68-79`, `RoomTransaction`): `export_rankings()`가 이미 `_compute_leaderboard()`를 호출하고 Excel 시트를 생성한다. `RoomTransaction.query.filter_by(room_id=rid, action='SELL').all()`로 SELL 트랜잭션을 조회해 `amount - (holding.avg_price * shares)` 기준 수익금이 최대인 건을 "🏆 최고의 한 수"로 집계한 뒤, Excel 두 번째 시트 또는 결과 화면 (`screen-results`) 하단에 "누가, 어떤 종목을, 얼마에 사고 팔아 얼마를 벌었다"를 표시하면 학생 동기 부여 효과. `app.py`에서 10줄 이내 추가, Excel 시트 코드와 구조 동일.
+
+- **포트폴리오 탭: 섹터 집중 위험 경고 배너** (`static/js/app.js:1485-1595` 포트폴리오 렌더링 / `app.py:886-919`, `get_portfolio()`): `get_portfolio()` 응답에 이미 각 보유 종목의 `sector`와 `current_value`가 있다. 클라이언트에서 `holdings.reduce()`로 섹터별 비율을 계산해 특정 섹터 비중이 총 주식 평가액의 60% 이상이면 `⚠️ [섹터명] 섹터 집중 (60%) — 분산 투자를 권장합니다` 경고 배너를 포트폴리오 상단에 표시. 서버 변경 불필요, 클라이언트 15줄. 수업 중 분산 투자 개념을 자연스럽게 체험하도록 유도.
+
+- **관심 종목(watchlist) 목표가 알림** (`static/js/app.js:17`, `S.watchlist` / `app.js:1275-1285`, `loadMarket()`): `S.watchlist`에 이미 관심 종목 심볼이 `localStorage`로 저장된다. `localStorage`에 `targetPrices: {symbol: number}` 형태로 목표가를 함께 저장하고, `loadMarket()` 또는 `filterStocks()` 내에서 현재가와 목표가를 비교해 도달 시 `toast('🔔 삼성전자 목표가 75,000원 도달!', 'info')`를 1회 발생시키면 된다. 알림이 한 번 발생하면 `targetPrices[symbol] = null`로 비활성화. 서버 API 추가 없이 클라이언트 30줄로 구현. 학생이 "어느 가격에 팔겠다"는 투자 계획을 사전에 수립하는 경험 제공.
+
+- **진행자 공지 메시지(채팅 대체) 발송** (`app.py:804-815`, `host_send_news()` 재활용 / `static/js/app.js:1193-1222`, `showBombNews()`): 진행자가 "지금부터 3분간 매도 금지!", "복권 추첨 시작 대기" 같은 운영 공지를 전체 학생에게 발송할 수단이 없다. `host_send_news()` 바디에 `message_type: 'notice'` 파라미터를 추가하고, 뉴스 응답에 `message_type` 필드를 넣으면 `showBombNews()`에서 배경색·아이콘을 달리해 구분된 "공지" 팝업으로 표시 가능. 뉴스 폴링 인프라(`NEWS_CACHE_TTL 2s`)를 그대로 재활용하므로 서버 5줄 + 클라이언트 5줄이면 구현. 교실 수업 중 진행자의 구두 지시를 화면으로 보완.
+
+- **학생 순위 변동 실시간 델타 배지** (`static/js/app.js:718-769`, `loadParticipantRankings()` / `app.py:922-932`, `get_rankings()`): `get_rankings()` 응답에 이미 `rank` 필드가 있고, `loadParticipantRankings()`에서 순위표를 렌더링한다. `S.myPrevRank` 변수를 추가해 이전 순위를 유지하고, 순위가 변경될 때 `▲2` (초록) 또는 `▼1` (빨강) 델타 배지를 내 행(is_me) 옆에 2초간 표시하면 경쟁 체감이 크게 높아진다. 서버 변경 불필요, 클라이언트 약 10줄 추가. `_compute_leaderboard()` 동률 시 같은 rank를 부여하지 않으므로(단순 i+1 배정), 정확한 순위 비교에 주의.
+
+### 제거/단순화할 것들
+
+- **`minigame_spin()` 에 `_get_member_lock()` 누락 — 동시 베팅 경쟁 조건** (`app.py:1116-1162`, `minigame_spin()`): `trade()` (`app.py:860`), `create_deposit()` (`app.py:1002`), `withdraw_deposit()` (`app.py:1027`)는 모두 `with _get_member_lock(rid, user.id):` 블록 안에서 `member.cash`를 수정하지만 `minigame_spin()`에는 락이 없다. 학생이 두 탭에서 동시에 스핀 요청을 보내면 두 요청이 같은 `m.cash`를 읽고 각각 차감 후 DB에 쓸 수 있다. `shortfall > 0` 분기에서 `_liquidate_shortfall()`까지 호출될 경우 주식이 이중 청산될 위험도 있다. `with _get_member_lock(rid, user.id):` 블록으로 `db.session.refresh(member)` 부터 `db.session.commit()`까지 감싸야 한다. 2줄 추가로 해결.
+
+- **`host_adjust()` 에 `_get_member_lock()` 누락** (`app.py:697-717`, `host_adjust()`): 진행자가 `POST /api/rooms/<rid>/host/adjust` 로 학생 자산을 조정할 때 `_get_member_lock()`을 사용하지 않아, 학생이 동시에 매수 중이면 `m.cash` lost-update가 발생할 수 있다. 예: 학생 잔액 100만원 → 진행자가 +50만원 ADJ 전송, 동시에 학생이 80만원 매수 → 두 요청이 모두 100만원을 읽으면 ADJ 후 잔액이 80만원(+50-70이 아닌 100+50=150, 100-80=20 중 하나만 반영)이 될 수 있다. `with _get_member_lock(rid, target_uid): db.session.refresh(m); m.cash = max(0, m.cash + delta)` 패턴으로 3줄 변경으로 해결.
+
+- **`get_deposits()` 가 게임 일시정지 시간을 예상 이자 계산에 반영하지 않음** (`app.py:960-985`, `get_deposits()`): `held = max(0.0, (now - d.created_at).total_seconds())`에서 `now = datetime.utcnow()`를 사용하므로, 게임이 `paused` 상태이더라도 이자 누적 시간이 실시간으로 증가한다. 반면 `_end_room()`의 이자 계산(line 246)은 `game_end = room.paused_at`를 사용해 일시정지 시점까지만 인정한다. 결과적으로 학생이 `paused` 중 예금 화면을 보면 최종 정산보다 부풀려진 예상 이자가 표시되고, 게임 종료 후 실제 지급액이 더 적어 혼란이 생긴다. `effective_now = room.paused_at if room.status == 'paused' and room.paused_at else datetime.utcnow()` 로 교체하면 2줄 수정.
+
+- **`_compute_leaderboard()` 에서 비활성 예금까지 전부 조회 후 필터링하는 비효율** (`app.py:163-167`, `_compute_leaderboard()`): `Deposit.query.filter_by(room_id=rid).all()`로 `status='matured'`, `'withdrawn'` 예금까지 모두 가져온 뒤 `member_total_value()` 내 `if d.status == 'active'`(line 150)로 다시 필터링한다. 게임이 길어질수록 비활성 예금 레코드가 쌓여 불필요한 데이터가 읽힌다. `_compute_leaderboard()`는 랭킹, 호스트 대시보드, 엑셀 내보내기 등 10초 주기로 반복 호출되는 경로다. `Deposit.query.filter_by(room_id=rid, status='active').all()`로 바꾸면 1줄 수정으로 메모리·쿼리 비용 모두 감소하고 `preloaded_deps`의 의도와도 일치.
+
+- **`minigame_open()` 에 남은 스핀 수 서버 검증 없음 — 타이머 남용 가능** (`app.py:1058-1083`, `minigame_open()`): 클라이언트(`app.js:1045`)에서 `data.spins_left <= 0` 이면 모달을 열지 않지만, 서버 엔드포인트에는 동일 검증이 없다. 스핀을 모두 소진한 학생이 직접 `POST /api/rooms/<rid>/minigame/open`을 발송하면 `room.status`가 `'paused'`로 전환돼 다른 학생의 거래 시간이 줄어든다. `minigame_spin()` 상단에 있는 `spins_used = RoomTransaction.query.filter_by(room_id=rid, user_id=user.id, action='RLT').count(); if spins_used >= 3: return 403` 패턴을 `minigame_open()` 시작 부분에도 동일하게 추가하면 2줄로 해결.
+
+- **`gen_code()` 가 10회 충돌 시 검증 없이 중복 코드 반환 가능** (`models.py:8-13`, `gen_code()` / `app.py:476-503`, `create_room()`): 10번 시도(`for _ in range(10)`) 중 모두 충돌하면 마지막 줄에서 중복 여부를 검증하지 않고 새 코드를 반환한다. 활성 방이 많을 때 `Room.code` unique constraint 위반 `IntegrityError`가 `db.session.commit()` 시 발생할 수 있으나, `create_room()`에는 이 예외 처리가 없어 500 오류로 노출된다. `gen_code()` 루프를 `for _ in range(20):`으로 늘리거나, 마지막 반환 전에도 중복 검사를 추가하고, `create_room()`에 `try/except IntegrityError` 블록을 추가해 사용자 친화적 오류 메시지("방 코드 생성 실패, 다시 시도해 주세요")를 반환해야 한다.
