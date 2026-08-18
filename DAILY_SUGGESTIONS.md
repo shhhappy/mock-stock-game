@@ -2,6 +2,34 @@
 
 ---
 
+## 2026-08-18
+
+### 추가하면 좋을 기능
+
+- **게임 시작 최소 참여자 수 체크** (`app.py:596-609`, `start_room()`): `room.status != 'waiting'` 외에 다른 사전 검증이 없어 학생이 한 명도 없는 상태에서 게임이 시작될 수 있음. `if RoomMember.query.filter_by(room_id=rid).count() == 0: return jsonify({'error': '참여자가 없습니다. 학생이 입장한 후 시작하세요.'}), 400` 를 `app.py:603` 직전에 추가하면 됨. 선택적으로 진행자가 설정에서 최소 인원(예: 2명)을 지정할 수 있게 `room.min_members` 컬럼을 추가. 서버 3줄, 모델 변경 선택.
+
+- **진행자 방송(공지) 기능** (`app.py:804-815`, `host_send_news()`): 현재 진행자는 주가 강제변경 및 뉴스 트리거가 가능하지만 텍스트 메시지를 학생들에게 직접 보낼 수 없음. `POST /api/rooms/<rid>/host/announce` 엔드포인트를 추가하고 `{'message': '...'}` 바디를 받아 `svc._news['items'].append({'headline': '[진행자] ' + msg, 'direction': 'neutral'})` 형태로 기존 뉴스 피드에 삽입하면 됨. 진행자 호스트 탭에 텍스트 입력란 하나, 서버 약 15줄. 수업 중 "지금부터 바이오 섹터 특별 이벤트!" 같은 실시간 멘트를 학생들이 게임 화면에서 바로 볼 수 있어 몰입도 상승.
+
+- **섹터별 포트폴리오 배분 파이 차트** (`app.py:887-919`, `get_portfolio()`): `get_portfolio()` 응답의 `holdings` 배열에는 이미 `sector` 필드가 있으나(`app.py:907`), 클라이언트 포트폴리오 탭에서 섹터별 비중을 시각화하지 않음. `app.js` 포트폴리오 탭 렌더링 함수에서 holdings를 `sector`로 그룹화해 `current_value` 합계를 구한 뒤 `new Chart(ctx, {type:'doughnut', ...})` 로 도넛 차트를 추가. `S.portChart` 패턴을 그대로 재사용, 서버 변경 불필요, 약 20줄. 학생이 "내 포트폴리오가 반도체에 80% 쏠려 있다"는 것을 직관적으로 인식해 분산투자 개념 교육에 직결.
+
+- **게임 종료 후 학생 개인 요약 리포트** (`app.py:924-932`, `get_rankings()`): 게임이 끝나면 `results_published=True` 상태에서 순위표만 보여 줌. `GET /api/rooms/<rid>/results/me` 엔드포인트를 추가해 해당 학생의 `RoomTransaction` 전체를 집계하고 `{total_trades, total_buy_amount, best_trade: {symbol, gain}, worst_trade: {symbol, loss}, quiz_correct_count}` 를 반환하면, 종료 화면에서 학생별 맞춤 요약 카드(최고 거래 종목, 실현 수익, 퀴즈 정답률)를 보여줄 수 있음. `_quiz_history[(rid, uid)]`와 `RoomTransaction` 쿼리 조합으로 구현. 서버 약 25줄.
+
+- **실제 인게임 가격 기반 차트 히스토리** (`stock_service.py:303-331`, `get_history()`): `get_history()`는 `random.gauss()`로 매번 무작위 OHLCV 막대를 생성해 캐시 만료(120초) 후 새 차트를 그림. 게임 중 삼성전자를 10% 강제 상승시켜도 차트에는 반영되지 않고, 같은 화면을 닫았다 열면 전혀 다른 히스토리가 보임. `get_price()` (`stock_service.py:196`)에서 가격이 갱신될 때 `self._price_series[sym].append((now, new_price))` 를 기록(초기화 시 deque(maxlen=200) 생성)하고, `get_history()`에서 이 시계열을 OHLCV로 변환하면 실제 인게임 가격 흐름을 차트로 보여줄 수 있음. 서버 약 20줄.
+
+### 제거/단순화할 것들
+
+- **`_lot_round_due()` 매 폴링마다 반복 호출** (`app.py:284-312`, `room_dict()` → `app.py:412`): `room_dict()`(`app.py:391`)는 `GET /api/rooms/<rid>`가 호출될 때마다 실행되며, 내부에서 `_lot_round_due(room, remaining, total_s)`를 매번 호출함. 학생 30명이 5초마다 폴링하면 분당 360회 이 함수가 실행됨. 함수 자체는 가볍지만, 전이 조건 계산이 완료된 방(`done` 집합이 완성됐거나 `current`가 진행 중인 경우)에는 `None`을 빠르게 반환해야 하는데 현재는 모든 분기를 순차 확인함. `lot.get('current')` 유효 여부 체크를 맨 위로 올리고(`app.py:294` 이전), `done == all_possible_rounds`일 때 조기 반환하는 조건을 추가해 불필요한 연산을 줄여야 함.
+
+- **`_quiz_settings` 인메모리 저장으로 서버 재시작 시 초기화** (`app.py:1334-1335`, `_quiz_settings`): Render 무료 티어는 트래픽이 없으면 15분 이내에 슬립 상태로 전환되며, 요청 재개 시 재시작됨. `_quiz_settings[rid]`는 메모리에만 있어 재시작 시 퀴즈 보상/패널티 비율이 기본값(`reward_pct=1.0, penalty_pct=0.5`)으로 초기화됨. 진행자가 설정한 값(`app.py:1474-1489`)이 조용히 소실되는 것은 수업 중 예상치 못한 동작. `Room` 모델에 `quiz_reward_pct FLOAT DEFAULT 1.0`, `quiz_penalty_pct FLOAT DEFAULT 0.5` 컬럼을 추가하거나, 기존 `ALTER TABLE` 패치 루프(`app.py:48-58`)에 해당 컬럼을 추가해 DB에 영속화 권장.
+
+- **`minigame_open()` DB 커밋을 `_rlt_lock` 안에서 실행** (`app.py:1058-1083`): `with _rlt_lock:` 블록 내에서 `db.session.commit()` (`app.py:1074`)를 호출. 파이썬 threading.Lock을 DB I/O와 함께 잡으면 다른 스레드가 락 해제를 기다리는 동안 DB 연결을 유지함. 블록 안에서는 상태 변수(`room.status`, `room.paused_at`, `state['auto_paused']`)만 변경하고, `db.session.commit()`은 `with` 블록 밖으로 이동해야 함. 동일한 패턴이 `lottery_start()`(`app.py:1190`)에서도 반복됨.
+
+- **`export_rankings()` 이름 파싱 로직이 username 포맷에 의존** (`app.py:1494-1562`): `parts = e['username'].split(' ', 1)` (`app.py:1511`)는 학번과 이름이 공백으로 구분된 `"20715 홍길동"` 형태를 가정함. 진행자 본인은 `screen-host-create`의 학번+이름 필드(`index.html:52-59`)로 입력하지만 진행자가 `RoomMember`로 등록되지 않은 경우 문제 없음. 그러나 학생이 학번 없이 이름만 입력하면 `parts[0]`이 이름이 되고 `parts[1]`은 존재하지 않아 `sid=''`, `name=이름`으로 처리됨. 이 경우 Excel 학번 열이 비워지는 것은 허용 가능하나, 향후 포맷이 바뀌면 조용히 오작동. 입력 포맷 문서화 또는 별도 `student_id` 컬럼을 `User` 모델에 추가 권장.
+
+- **`get_history()` 캐시 키가 `(symbol, period)` — 방별로 분리되지 않음** (`stock_service.py:306`, `_history_cache`): `StockService` 인스턴스가 방마다 별도로 생성되므로(`get_room_service()`, `stock_service.py:340`) 캐시 자체는 방 간 오염이 없음. 하지만 `_history_cache` 딕셔너리 내 키가 `(symbol, period)` 만으로 구성되어 있어, `force_price()` 호출 시 해당 심볼의 모든 period 캐시를 삭제하는 `for key in list(self._history_cache.keys()): if key[0] == symbol: del self._history_cache[key]` 패턴이 `get_price()`(`stock_service.py:209`), `force_price()`(`stock_service.py:249`), `force_sector_event()`(`stock_service.py:279`) 세 곳에 중복됨. `_invalidate_chart_cache(self, symbol)` 헬퍼 메서드로 묶어 중복 제거 권장.
+
+---
+
 ## 2026-08-17
 
 ### 추가하면 좋을 기능
