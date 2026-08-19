@@ -17,6 +17,9 @@ import time, random as _random
 
 app = Flask(__name__, static_folder='static')
 app.secret_key = os.environ.get('SECRET_KEY', 'mock-stock-game-secret-2024')
+# 브라우저를 완전히 껐다 켜도(탭 종료가 아닌 앱/브라우저 재시작) 로그인이 유지되도록
+# 세션을 영구 쿠키로 전환 — 수업 시간(최대 6시간) + 여유를 감안해 12시간 유지
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=12)
 _db_url = os.environ.get('DATABASE_URL', 'sqlite:///game.db')
 if _db_url.startswith('postgres://'):
     # Render/Heroku 계열은 postgres:// 스킴을 주는데 SQLAlchemy 1.4+는 postgresql://만 인식함
@@ -450,6 +453,7 @@ def enter():
         user = User(username=u)
         db.session.add(user)
         db.session.commit()
+    session.permanent = True
     session['user_id'] = user.id
     ar = find_active_room(user.id)
     return jsonify({'user': user.to_dict(), 'active_room': room_dict(ar, user.id) if ar else None})

@@ -146,9 +146,18 @@ async function doCreateRoom() {
   if (!sid)      { err.textContent = '학번을 입력하세요.'; return; }
   if (!hostName) { err.textContent = '이름을 입력하세요.'; return; }
   if (!roomName) { err.textContent = '방 이름을 입력하세요.'; return; }
+  let authData;
   try {
-    await doAuth(sid, hostName);
+    authData = await doAuth(sid, hostName);
   } catch(e) { err.textContent = e.message; return; }
+  if (authData.active_room) {
+    // 세션이 끊겨(브라우저 재시작 등) 다시 "방 만들기"로 들어온 경우 — 새 방을 또 만들지 않고
+    // 진행 중이던 기존 방으로 돌려보낸다 (진행자/참여자 공통 로직은 resumeRoom() 참고)
+    S.room = authData.active_room;
+    toast('진행 중인 방으로 돌아왔습니다.', 'info');
+    resumeRoom();
+    return;
+  }
   const data = await api.post('/api/rooms', {name: roomName, duration_minutes: dur, starting_cash: cash, deposit_rate: rate});
   if (data.error) { err.textContent = data.error; return; }
   try {
