@@ -677,6 +677,7 @@
     <div id="modal-game-qr-canvas" style="display:inline-block;border-radius:8px;overflow:hidden;line-height:0"></div>
     <div style="margin-top:12px;font-size:22px;font-weight:800;letter-spacing:4px;color:var(--accent)" id="modal-game-qr-code">–</div>
     <button class="btn btn-secondary btn-full" onclick="copyCode();toast('코드 복사됨','success')" style="margin-top:12px">📋 코드 복사</button>
+    <button class="btn btn-primary btn-full" onclick="openGameQRWindow()" style="margin-top:8px">🖥 새 창에서 크게 보기 (메모 포함)</button>
     <button class="btn btn-secondary btn-full" onclick="closeModal('modal-game-qr')" style="margin-top:8px">닫기</button>
   </div>
 </div>
@@ -997,6 +998,6 @@
 <div class="toast-container" id="toasts"></div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
-<script src="/static/js/app.js?v=14"></script>
+<script src="/static/js/app.js?v=15"></script>
 </body>
 </html>

@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>참여 QR 코드</title>
+<style>
+  :root {
+    --bg: #0d1117; --surface: #161b22; --s2: #21262d; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Pretendard, sans-serif;
+    min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px;
+  }
+  .wrap {
+    display: flex; gap: 32px; align-items: stretch; max-width: 1100px; width: 100%;
+    flex-wrap: wrap; justify-content: center;
+  }
+  .panel {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+    padding: 28px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    min-width: 320px;
+  }
+  #room-name { font-size: 15px; color: var(--muted); margin-bottom: 4px; text-align: center; }
+  #qr-canvas { line-height: 0; border-radius: 12px; overflow: hidden; background: #fff; padding: 10px; }
+  #room-code {
+    margin-top: 18px; font-size: 42px; font-weight: 800; letter-spacing: 10px; color: var(--accent);
+  }
+  .hint { margin-top: 10px; font-size: 13px; color: var(--muted); }
+  .memo-panel {
+    flex: 1; min-width: 320px; max-width: 480px;
+  }
+  .memo-panel .memo-header {
+    display: flex; align-items: center; justify-content: space-between; width: 100%; margin-bottom: 10px;
+  }
+  .memo-panel .memo-header span:first-child { font-weight: 700; font-size: 15px; }
+  #memo-status { font-size: 12px; color: var(--muted); }
+  #memo-box {
+    width: 100%; flex: 1; min-height: 380px; resize: vertical;
+    background: var(--s2); border: 1px solid var(--border); border-radius: 10px;
+    color: var(--text); font-size: 15px; line-height: 1.6; padding: 14px;
+    font-family: inherit; outline: none;
+  }
+  #memo-box:focus { border-color: var(--accent); }
+  @media (max-width: 720px) {
+    .wrap { flex-direction: column; align-items: center; }
+    .panel, .memo-panel { width: 100%; max-width: 480px; }
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="panel">
+      <div id="room-name"></div>
+      <div id="qr-canvas"></div>
+      <div id="room-code">–</div>
+      <div class="hint">📱 카메라로 QR을 찍거나 코드를 직접 입력해 참여하세요</div>
+    </div>
+    <div class="panel memo-panel">
+      <div class="memo-header">
+        <span>📝 메모</span>
+        <span id="memo-status"></span>
+      </div>
+      <textarea id="memo-box" placeholder="수업 중 메모를 여기에 적어두세요 (이 창에만 저장됩니다)"></textarea>
+    </div>
+  </div>
+
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+<script>
+  const params = new URLSearchParams(location.search);
+  const code = (params.get('code') || '').toUpperCase();
+  const name = params.get('name') || '';
+
+  document.getElementById('room-name').textContent = name;
+  document.getElementById('room-code').textContent = code || '–';
+
+  if (code) {
+    const joinUrl = `${location.origin}/?code=${code}`;
+    new QRCode(document.getElementById('qr-canvas'), {
+      text: joinUrl, width: 320, height: 320,
+      colorDark: '#0d1117', colorLight: '#ffffff',
+      correctLevel: QRCode.CorrectLevel.M,
+    });
+  }
+
+  // ── 메모: 방 코드별로 이 창(브라우저)에만 저장 ──────────────
+  const memoKey = code ? `qrDisplayMemo:${code}` : 'qrDisplayMemo:unknown';
+  const memoBox = document.getElementById('memo-box');
+  const statusEl = document.getElementById('memo-status');
+  try { memoBox.value = localStorage.getItem(memoKey) || ''; } catch(e) {}
+
+  let saveTimer = null;
+  memoBox.addEventListener('input', () => {
+    statusEl.textContent = '저장 중…';
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      try {
+        localStorage.setItem(memoKey, memoBox.value);
+        statusEl.textContent = '저장됨 ✓';
+      } catch(e) {
+        statusEl.textContent = '저장 실패';
+      }
+    }, 400);
+  });
+</script>
+</body>
+</html>

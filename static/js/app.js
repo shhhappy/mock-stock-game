@@ -245,6 +245,12 @@ function openGameQR() {
   openModal('modal-game-qr');
 }
 
+function openGameQRWindow() {
+  // 프로젝터/외부 모니터에 띄워두고 쓸 수 있도록 QR+메모를 별도 창으로 분리
+  const url = `/static/qr-display.html?code=${encodeURIComponent(S.room.code)}&name=${encodeURIComponent(S.room.name || '')}`;
+  window.open(url, `qr-display-${S.room.code}`, 'width=1000,height=680');
+}
+
 async function loadLobbyMembers() {
   const data = await api.get(`/api/rooms/${S.room.id}/host/lobby-members`);
   if (data.error) return;
