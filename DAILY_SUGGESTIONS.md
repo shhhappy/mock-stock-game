@@ -2,6 +2,40 @@
 
 ---
 
+## 2026-08-19
+
+### 추가하면 좋을 기능
+
+- **게임 종료 후 학생 투자 성향 분석 카드** (`app.py:1498-1566`, `_quiz_history`, `RoomTransaction`): 현재 결과 화면은 순위표만 제공. 게임 종료 후 `GET /api/rooms/<rid>/results/persona` 엔드포인트를 추가해 학생의 거래 내역(`RoomTransaction`)을 집계하면 투자 성향을 분류할 수 있음. 예: 총 거래 횟수가 많고 단기 보유가 많으면 "데이트레이더", 한 섹터에 80% 이상 집중하면 "집중 투자형", 예금을 선택하면 "안전형". `{persona: str, trades: int, avg_hold_secs: float, top_sector: str, quiz_correct_pct: float}` 형태로 응답. 결과 화면에 학생별 맞춤 성향 뱃지 카드를 표시하면 "나는 어떤 투자자인가?" 자기 성찰 수업 포인트가 생김. 서버 약 30줄, 클라이언트 카드 UI 추가.
+
+- **진행자 배당금 지급 이벤트** (`app.py:701-721` `host_adjust()` 참고, `RoomHolding`): 진행자가 특정 종목의 현재 보유자에게 일괄 배당금을 지급하는 이벤트가 없어 "배당금" 개념을 실습할 수단이 없음. `POST /api/rooms/<rid>/host/dividend` 엔드포인트를 추가해 `{'symbol': 'SMSNG', 'amount_per_share': 500}` 형태로 요청받아, `RoomHolding.query.filter_by(room_id=rid, symbol=symbol)` 결과를 순회하며 `m.cash += amount_per_share * h.shares`로 배당금 지급 후 `RoomTransaction(action='ADJ', note=f'{종목명} 배당금 {amount_per_share:,}원/주')`을 기록. 수업 중 "삼성전자 배당금 지급일!" 이벤트로 배당투자 개념 교육 직결. 서버 약 20줄, 진행자 시장 탭에 "배당 지급" 버튼 추가.
+
+- **거래 쿨다운 설정** (`app.py:842-887` `trade()`, `_quiz_settings` 패턴 참고): 현재 연속 거래 제한이 없어 학생이 수십 번 연타로 주문을 넣을 수 있어 실제 증권 시장과 다른 경험을 제공. `_trade_cooldown: dict = {}  # (rid, uid) -> last_trade_ts` in-memory 딕셔너리를 추가하고, `trade()` 진입부(`app.py:851` 이전)에서 `if time.time() - _trade_cooldown.get((rid, user.id), 0) < cooldown_secs: return 429` 체크를 삽입. 쿨다운 시간은 `_quiz_settings`와 같은 방식으로 `_trade_settings: dict = {}`에 저장해 진행자가 `POST /api/rooms/<rid>/host/trade-settings`로 설정 가능(0~60초 범위). 서버 약 15줄. 교육적으로 "왜 주문이 즉시 체결되지 않는가" 수업 포인트 연계 가능.
+
+- **퀴즈 다지선다형 문제 지원** (`education_data.py` QUIZ_QUESTIONS, `app.py:1342-1413`): 현재 퀴즈는 모두 O/X 형식이라 정답 확률이 50%에 고정되어 난이도 조절이 어려움. `QUIZ_QUESTIONS` 각 항목에 `'type': 'ox'` 또는 `'type': 'mc'`와 `'choices': ['①~②~③~④']` 필드를 선택적으로 추가하고, `get_quiz()` 응답에 `choices`를 포함. `submit_quiz()`에서 `q['type'] == 'mc'`이면 `user_answer`를 정수 인덱스와 비교. 클라이언트에서 `'choices'`가 있으면 버튼 4개 레이아웃으로 전환. `education_data.py`에 다지선다 문제 5~10개만 추가해도 퀴즈 다양성 크게 증가. 서버 약 10줄 수정, 클라이언트 약 15줄.
+
+- **포모도로 타이머와 게임 연동** (`app.py:438-440` `pomodoro()` 라우트, `static/pomodoro.html`): 현재 `/pomodoro` 페이지가 독립적으로 존재하지만 게임 상태와 연동되지 않음. 포모도로 25분 세션이 끝날 때 `POST /api/rooms/<rid>/host/pause`를 자동 호출하거나, 게임 진행 중 `remaining_seconds`가 0이 되면 포모도로 타이머에 알림을 보내는 `postMessage()` 연동을 추가하면 진행자가 두 화면 사이에서 수업 흐름을 관리할 수 있음. `static/pomodoro.html`에 `window.opener?.postMessage(...)` 약 5줄 추가, 게임 메인 `app.js`에 수신 리스너 5줄 추가로 구현. 서버 변경 불필요.
+
+- **학생 간 현금 이체 ('친구에게 선물')** (`app.py` 신규 `POST /api/rooms/<rid>/transfer`, `RoomMember`, `RoomTransaction`): 2026-06-23에 제안됐으나 구현 세부사항을 구체화. `_get_member_lock(rid, from_uid)` + `_get_member_lock(rid, to_uid)` 두 잠금을 동시에 획득할 경우 데드락 위험이 있으므로, 두 uid를 `min/max`로 정렬해 항상 낮은 uid 잠금을 먼저 획득(`lock_a = _get_member_lock(rid, min(from_uid, to_uid)); lock_b = _get_member_lock(rid, max(from_uid, to_uid))`)하는 잠금 순서 규약을 정의해야 함. 이체 최소 금액 1,000원 하한 및 1회 최대 이체액 `room.starting_cash * 0.5` 상한 적용 권장. 서버 약 25줄.
+
+### 제거/단순화할 것들
+
+- **`host_adjust()` 에서 `_get_member_lock` 미획득 — cash lost-update 위험** (`app.py:714-718`): `trade()` (`app.py:864`), `create_deposit()` (`app.py:1006`), `withdraw_deposit()` (`app.py:1031`) 모두 `_get_member_lock(rid, uid)`를 획득해 `m.cash`를 보호하지만, `host_adjust()`는 동일한 보호 없이 `m.cash = max(0, m.cash + delta)` (`app.py:716`)를 실행함. 학생이 매수/매도를 처리하는 스레드와 진행자의 자산 조정이 동시에 실행되면 두 변경 중 하나가 소실될 수 있음. `app.py:715` 직전에 `with _get_member_lock(rid, target_uid):` 블록을 추가하고 내부에서 `db.session.refresh(m)` 후 `m.cash` 변경을 수행해야 함. `host_adjust()` 내 `db.session.commit()`도 블록 안으로 이동.
+
+- **`minigame_spin()` spins_used 체크와 트랜잭션 삽입 사이 락 없음 — 4회 스핀 가능** (`app.py:1133-1159`): `spins_used = RoomTransaction.query.filter_by(..., action='RLT').count()` (`app.py:1133`) 직후 `if spins_used >= 3: return error`를 통과한 뒤, 실제 `RoomTransaction` 삽입(`app.py:1158`) 전 사이에 어떤 잠금도 없음. 같은 사용자가 두 탭에서 동시에 마지막 스핀 요청을 보내면 두 요청 모두 `spins_used == 2`를 읽고 통과해 총 4회 스핀이 발생. `_get_member_lock(rid, user.id)` 획득 후 `spins_used`를 재조회하거나, `RoomTransaction.query.filter_by(...).count() >= 3` 체크를 lock 내부에서 수행해야 함. 잠금 범위를 `app.py:1133` 이전부터 `app.py:1159` DB commit까지로 확장.
+
+- **`get_room()` 방 멤버/호스트 여부 미검증** (`app.py:549-598`): `GET /api/rooms/<rid>`는 `@login_required`만 있고 요청자가 해당 방 소속인지 확인하지 않음. 로그인된 임의 사용자가 `rid`를 추측해 다른 방의 `remaining_seconds`, `lottery_active`, `minigame_available` 등 민감한 게임 상태를 조회할 수 있음. `app.py:553` 직후(room 조회 직후)에 `user = cur_user(); is_member = room.host_id == user.id or RoomMember.query.filter_by(room_id=rid, user_id=user.id).first() is not None; if not is_member: return jsonify({'error': '이 방에 접근할 수 없습니다.'}), 403`을 추가하면 됨. 이로써 `cur_user()`를 한 번만 호출하고 이후 재사용 가능해 `app.py:556, 561, 598`의 중복 `cur_user()` DB 쿼리도 함께 제거됨.
+
+- **`datetime.utcnow()` Python 3.12에서 DeprecationWarning** (`app.py:236, 395, 609, 637, 652, 623, 611, 575` 등; `models.py:38, 53, 79, 92`): Python 3.12부터 `datetime.utcnow()`는 deprecated로 표시되어 경고를 발생시키고 향후 버전에서 제거될 예정. 파일 상단에 이미 `from datetime import datetime, timedelta, timezone`이 임포트되어 있으므로 (`app.py:2`), 모든 `datetime.utcnow()` 호출을 `datetime.now(timezone.utc).replace(tzinfo=None)` 또는 나이브 타임스탬프가 필요한 경우 `datetime.now(timezone.utc).replace(tzinfo=None)`으로 교체하거나, 전체 코드베이스를 timezone-aware로 마이그레이션하는 것이 장기 권장. 단기적으로는 `_utcnow = lambda: datetime.now(timezone.utc).replace(tzinfo=None)` 헬퍼를 `app.py` 상단에 추가해 점진적 교체.
+
+- **`room_dict()` 내 `RoomMember.COUNT` 쿼리가 캐시 미스마다 실행** (`app.py:413`): `'member_count': RoomMember.query.filter_by(room_id=room.id).count()` 가 `room_dict()` 내에 포함되어 있어, `_room_cache` TTL(1.5초) 만료 시마다 COUNT DB 쿼리가 추가 발생함. `room_dict()`는 이미 `app.py:412` 기준 `_lot_round_due()` 호출, `_lots.get()` 딕셔너리 조회 등 여러 연산을 수행하는 함수인데, 멤버 수는 대기방이 아닌 활성 게임 중에는 거의 변하지 않음. `_auto_start_lottery_if_due()` 내에서는 이미 멤버 수를 조회(`app.py:535`)하므로, `_room_cache` 딕셔너리에 `member_count`를 별도로 캐시하거나(`_room_cache[rid]['member_count']` 업데이트를 join/kick 시에만 갱신), 최소한 캐시 히트 시 COUNT를 생략하는 구조로 분리하면 학생 30명 × 10초 폴링 시 분당 120회 불필요 COUNT 쿼리 제거.
+
+- **`get_history()` 락 해제 후 재획득 사이 캐시 중복 생성** (`stock_service.py:307-331`): `get_history()`는 캐시 미스 확인(`with self._lock: ... return cached['data']`, lines 307-310) 후 락을 해제하고 랜덤 히스토리를 생성한 뒤 다시 락을 획득(`with self._lock: self._history_cache[cache_key] = ...`, lines 330-331)해 저장함. 두 `with self._lock` 블록 사이에 다른 스레드가 동일 `cache_key`로 진입하면 두 스레드 모두 히스토리를 독립적으로 생성하고 각자 저장해, 최종 저장값이 비결정적으로 결정됨. 차트 데이터가 새로고침 때마다 달라지는 현상의 원인. 캐시 미스 확인과 저장을 단일 `with self._lock` 블록 안에서 처리하거나, 더블-체크 패턴(`if cache_key not in self._history_cache: ... self._history_cache[...] = ...`)을 하나의 락 구간으로 합치면 해결.
+
+- **`_member_locks` 딕셔너리가 비정상 종료 시 누수** (`app.py:112-122, 274-276`): `_member_locks: dict = {}` (`app.py:112`)는 `_end_room()` 내 `with _member_locks_meta: for k in [k for k in _member_locks if k[0] == room.id]: del _member_locks[k]` (`app.py:274-276`)에서 정리됨. 그러나 서버 프로세스 수명 중 동일 서버 인스턴스에서 많은 방이 생성-진행-종료되는 경우, `_end_room()`이 정상 호출되면 문제없으나, stale 방 자동 정리(`app.py:489-496`)는 `_end_room(stale)`을 호출하므로 OK. 그러나 `RoomMember.cash` 변경 후 `commit()` 실패 시(`IntegrityError` 등) 예외가 발생하면 `_member_locks`에 해당 키가 남아 영구 참조를 유지. 매 `_get_member_lock()` 획득부는 `try-finally`로 감싸거나, `_member_locks`에 `weakref.ref`를 사용해 GC 가능하게 만드는 것이 안전.
+
+---
+
 ## 2026-08-18
 
 ### 추가하면 좋을 기능
