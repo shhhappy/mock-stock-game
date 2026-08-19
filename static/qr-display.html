@@ -31,7 +31,7 @@
   }
   .hint { margin-top: 10px; font-size: 13px; color: var(--muted); }
   .memo-panel {
-    flex: 1; min-width: 320px; max-width: 480px;
+    flex: 1; min-width: 320px; max-width: 480px; align-items: stretch;
   }
   .memo-panel .memo-header {
     display: flex; align-items: center; justify-content: space-between; width: 100%; margin-bottom: 10px;
@@ -41,10 +41,16 @@
   #memo-box {
     width: 100%; flex: 1; min-height: 380px; resize: vertical;
     background: var(--s2); border: 1px solid var(--border); border-radius: 10px;
-    color: var(--text); font-size: 15px; line-height: 1.6; padding: 14px;
+    color: var(--text); line-height: 1.6; padding: 14px;
     font-family: inherit; outline: none;
   }
   #memo-box:focus { border-color: var(--accent); }
+  .size-ctrl {
+    display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 14px;
+    font-size: 12px; color: var(--muted);
+  }
+  .size-ctrl input[type="range"] { flex: 1; accent-color: var(--accent); }
+  .size-ctrl .size-val { width: 34px; text-align: right; flex-shrink: 0; }
   @media (max-width: 720px) {
     .wrap { flex-direction: column; align-items: center; }
     .panel, .memo-panel { width: 100%; max-width: 480px; }
@@ -58,6 +64,11 @@
       <div id="qr-canvas"></div>
       <div id="room-code">–</div>
       <div class="hint">📱 카메라로 QR을 찍거나 코드를 직접 입력해 참여하세요</div>
+      <div class="size-ctrl">
+        <span>QR 크기</span>
+        <input type="range" id="qr-size-slider" min="160" max="560" step="20" value="320">
+        <span class="size-val" id="qr-size-val">320</span>
+      </div>
     </div>
     <div class="panel memo-panel">
       <div class="memo-header">
@@ -65,6 +76,11 @@
         <span id="memo-status"></span>
       </div>
       <textarea id="memo-box" placeholder="수업 중 메모를 여기에 적어두세요 (이 창에만 저장됩니다)"></textarea>
+      <div class="size-ctrl">
+        <span>글자 크기</span>
+        <input type="range" id="memo-size-slider" min="12" max="36" step="2" value="15">
+        <span class="size-val" id="memo-size-val">15</span>
+      </div>
     </div>
   </div>
 
@@ -77,14 +93,34 @@
   document.getElementById('room-name').textContent = name;
   document.getElementById('room-code').textContent = code || '–';
 
-  if (code) {
+  // ── QR 크기 조절 (슬라이더 값은 기기에 공통으로 저장 — 다음에 열 때도 유지) ──
+  const qrCanvas = document.getElementById('qr-canvas');
+  const qrSlider = document.getElementById('qr-size-slider');
+  const qrSizeVal = document.getElementById('qr-size-val');
+
+  function renderQR(size) {
+    qrCanvas.innerHTML = '';
+    if (!code) return;
     const joinUrl = `${location.origin}/?code=${code}`;
-    new QRCode(document.getElementById('qr-canvas'), {
-      text: joinUrl, width: 320, height: 320,
+    new QRCode(qrCanvas, {
+      text: joinUrl, width: size, height: size,
       colorDark: '#0d1117', colorLight: '#ffffff',
       correctLevel: QRCode.CorrectLevel.M,
     });
   }
+
+  let savedQrSize = 320;
+  try { savedQrSize = parseInt(localStorage.getItem('qrDisplayQrSize')) || 320; } catch(e) {}
+  qrSlider.value = savedQrSize;
+  qrSizeVal.textContent = savedQrSize;
+  renderQR(savedQrSize);
+
+  qrSlider.addEventListener('input', () => {
+    const size = parseInt(qrSlider.value);
+    qrSizeVal.textContent = size;
+    renderQR(size);
+    try { localStorage.setItem('qrDisplayQrSize', size); } catch(e) {}
+  });
 
   // ── 메모: 방 코드별로 이 창(브라우저)에만 저장 ──────────────
   const memoKey = code ? `qrDisplayMemo:${code}` : 'qrDisplayMemo:unknown';
@@ -104,6 +140,22 @@
         statusEl.textContent = '저장 실패';
       }
     }, 400);
+  });
+
+  // ── 메모 글자 크기 조절 (기기 공통 저장) ──────────────────
+  const memoSlider = document.getElementById('memo-size-slider');
+  const memoSizeVal = document.getElementById('memo-size-val');
+  let savedMemoSize = 15;
+  try { savedMemoSize = parseInt(localStorage.getItem('qrDisplayMemoSize')) || 15; } catch(e) {}
+  memoSlider.value = savedMemoSize;
+  memoSizeVal.textContent = savedMemoSize;
+  memoBox.style.fontSize = savedMemoSize + 'px';
+
+  memoSlider.addEventListener('input', () => {
+    const size = parseInt(memoSlider.value);
+    memoSizeVal.textContent = size;
+    memoBox.style.fontSize = size + 'px';
+    try { localStorage.setItem('qrDisplayMemoSize', size); } catch(e) {}
   });
 </script>
 </body>
