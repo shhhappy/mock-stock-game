@@ -498,7 +498,7 @@ def create_room():
         return jsonify({'error': '이미 진행 중인 방이 있습니다.'}), 400
     room = Room(
         name=name, host_id=user.id,
-        duration_minutes=max(1, min(360, int(d.get('duration_minutes', 30)))),
+        duration_minutes=max(1, min(600, int(d.get('duration_minutes', 30)))),
         starting_cash=max(100000, float(d.get('starting_cash', 10_000_000))),
         deposit_rate=max(0, min(50, float(d.get('deposit_rate', 3.0)))),
     )
