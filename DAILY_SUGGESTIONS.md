@@ -4418,3 +4418,31 @@
 - **`deposit_rate` 상한이 50%로 설정되어 있어 교육적으로 비현실적인 극단값 허용** (`app.py:499`, `create_room()` 의 `max(0, min(50, float(...)))` / `static/index.html:70`, `max="50"`): 교사가 실수로 예금 금리를 50%로 설정하면 학생 전원이 예금에 올인하고 아무도 주식 거래를 하지 않아 게임 자체가 의미 없어진다. 상한을 15%로 낮추고(`app.py:499`, `index.html:70`), 10% 초과 시 "⚠️ 금리가 높으면 예금 집중이 발생할 수 있습니다" 경고 문구를 폼 아래에 표시하도록 `oninput` 이벤트를 추가하면 된다. 서버 1줄 + 클라이언트 3줄. 교육 목적에 맞는 적정 금리 범위 유도.
 
 - **`Room.query.get_or_404(rid)` deprecated 패턴 약 20곳 일괄 미해결** (`app.py` 전체): 이전 항목에서도 언급됐으나 변경이 이뤄지지 않은 것으로 보인다. `grep -n "get_or_404" app.py` 로 정확한 위치를 확인하고, `sed -i 's/Room.query.get_or_404(rid)/db.get_or_404(Room, rid)/g' app.py` 등으로 일괄 치환 가능. Flask-SQLAlchemy 3.x 기준 권장 패턴이며, 향후 버전 업에서 DeprecationWarning이 대량 발생할 수 있어 배포 로그가 오염된다. 자동화 1줄 명령으로 해결 가능한 기술 부채.
+
+## 2026-08-20
+
+### 추가하면 좋을 기능
+
+- **진행자 공지 메시지 브로드캐스트** (`app.py` 신규 `POST /api/rooms/<rid>/host/announce`, `GET /api/rooms/<rid>/announce`): 현재 진행자가 학생 전원에게 텍스트 메시지를 보낼 방법이 없어 뉴스 이벤트(stock_service.py:163-180) 외에 별도 안내를 할 수단이 없음. `_announcements: dict = {}  # room_id -> {'text': str, 'ts': float}`를 in-memory로 추가하고, 학생 폴링 시 `ts`를 비교해 새 공지를 toast로 표시하면 됨. 참가자 `GET /api/rooms/<rid>` 폴링(app.js에서 2초 간격)에 `announce_ts`를 함께 내려보내거나 별도 엔드포인트로 분리해도 됨. 서버 약 15줄, 클라이언트 toast 표시 10줄. 교사가 수업 중 "지금 반도체 섹터에 주목하세요" 등 실시간 교육 안내 가능.
+
+- **거래 수수료(증권거래세) 설정** (`app.py:842-887` `trade()`, `_quiz_settings` 패턴 참고): 현재 매수·매도 모두 수수료가 없어(`amount = price * shares`만 차감; app.py:863) 실제 증권거래에 존재하는 비용 개념을 가르칠 수 없음. `_trade_settings: dict = {}`에 `buy_fee_pct`(0~1%), `sell_fee_pct`(0~0.5%) 를 추가하고 `trade()` 내 `amount` 계산 후 `fee = round(amount * fee_pct / 100)` 를 차감. 기본값 0(현행 동일)으로 설정해 하위 호환성 유지. 진행자 설정 탭에 슬라이더 UI 추가. 서버 약 20줄. "왜 단타 매매는 비효율적인가" 수업에 직결.
+
+- **포트폴리오 섹터 분산도 경고** (`app.py:892-923` `get_portfolio()`, `static/js/app.js` holdings 렌더 부분): 현재 포트폴리오 API는 개별 종목 정보를 반환하지만 섹터 집중도를 계산하지 않음. `get_portfolio()` 응답에 `sector_concentration: {sector: pct}` 딕셔너리를 추가(기존 holdings 루프 내에서 섹터별 `current_value` 합산)해 특정 섹터 비중이 60% 이상이면 클라이언트에서 ⚠️ 경고 배지를 표시. 서버 10줄 추가(기존 holdings 루프 확장), 클라이언트 UI 5줄 추가. "분산투자" 개념을 즉각적인 시각 피드백으로 교육.
+
+- **결과 화면 공유 가능한 URL** (`app.py` 신규 `GET /results/<room_code>`, `static/index.html`): 게임 종료 후 `screen-results`(index.html:617)는 세션에 로그인한 사람만 볼 수 있어, 진행자가 결과를 수업 슬라이드에 띄우거나 부모님께 공유하기 어려움. `GET /results/<room_code>` 라우트를 추가해 종료된 방의 최종 순위(`_compute_leaderboard()`)를 별도 HTML 페이지로 렌더링(로그인 불필요, results_published=True인 경우만 공개). 서버 약 15줄, 결과 발표 시 공유 URL 자동 생성 후 복사 버튼 노출.
+
+- **매도 후 쿨다운(단타 제한)** (`app.py:842-887` `trade()`, `_member_locks` 패턴 참고): 실제 주식 시장에서 동일 종목을 매도 직후 재매수하는 "당일 매매 제한(PDT Rule)" 또는 "재매수 대기 시간" 개념을 가르치기 위해, `_sell_cooldown: dict = {}  # (rid, uid, symbol) -> sell_ts` 를 추가해 매도 후 `N`초 동안 동일 종목 재매수를 차단하는 선택적 설정을 제공. 진행자가 `POST /api/rooms/<rid>/host/trade-settings`에서 `sell_cooldown_secs: int` 를 0(기본, 현행 동일)~300초 범위로 설정 가능. 서버 약 20줄, UI 설정 5줄.
+
+### 제거/단순화할 것들
+
+- **`_liquidate_shortfall()`이 정기예금을 강제 해지** (`app.py:213-228`): 룰렛 베팅(`app.py:1150-1151`)과 퀴즈 오답 패널티(`app.py:1405-1406`)에서 `_liquidate_shortfall()`이 호출될 때, `lock_type='fixed'`인 정기예금(`models.py:90`)도 `dep.status = 'withdrawn'`으로 바꿔 강제 해지함(app.py:217). 이는 `withdraw_deposit()` 엔드포인트(app.py:1030)에서 `if dep.lock_type == 'fixed': return error`로 정기예금 해지를 금지한 규칙과 정면 충돌. `_liquidate_shortfall()` 내 예금 루프(app.py:213)에 `if dep.lock_type == 'fixed' and not force_fixed: continue` 조건을 추가하고, `credit_cash=True`(룰렛)일 때만 `force_fixed=True`를 전달하거나, 아니면 정기예금은 어떤 경우에도 강제 청산 대상에서 제외하도록 정책을 통일해야 함.
+
+- **`get_history()` 차트 데이터가 랜덤으로 재생성되어 교육 혼란 유발** (`stock_service.py:303-332`): 종목 차트 히스토리를 매번 `random.gauss()`로 새로 생성(`stock_service.py:321-327`)하고, 캐시 TTL이 120초(stock_service.py:124)여서 같은 날 '1달' 차트를 2분 후 다시 보면 완전히 다른 그래프가 나옴. 학생이 "어제도 이 주식이 올랐어" 라고 기억했던 차트가 사라지는 혼란이 생김. 해결책: `StockService.__init__()` 시점에 모든 종목의 히스토리를 한 번만 생성해 `self._history_static`에 저장하고 이후 `get_history()` 호출 시 static 데이터를 기반으로 최신 가격을 이어붙이는 방식으로 변경. 캐시 TTL 무한으로 설정하거나 종목 최신 가격 변경 시 히스토리 마지막 값만 갱신. 약 20줄 수정.
+
+- **`force_price()` 가격 클램프 범위가 `_next_price()`와 불일치** (`stock_service.py:247`, `stock_service.py:161`): `_next_price()`는 `max(base * 0.6, min(base * 1.4, new_price))`로 클램핑(stock_service.py:161)하지만, `force_price()`는 `max(base * 0.3, min(base * 3.0, new_price))`로 2.5배 넓은 범위(stock_service.py:247)를 허용. 진행자가 +50% 강제 조정을 하면 가격이 `base * 1.5`로 올라갔다가, 다음 정기 가격 업데이트에서 `_next_price()`의 `base * 1.4` 상한에 즉시 클램핑되어 뚝 떨어지는 현상 발생. 두 함수 모두 동일한 상수(`MAX_MULT = 1.4`, `MIN_MULT = 0.6` 또는 `MAX_MULT = 3.0`, `MIN_MULT = 0.3`)를 모듈 레벨 상수로 정의해 공유하도록 단일화.
+
+- **`goHome()` 호출 시 항상 세션 로그아웃** (`static/js/app.js:111-117`): `goHome()` 함수가 `/api/auth/logout`을 무조건 호출해 로그아웃 처리를 함. 결과 화면 "홈으로" 버튼(index.html:655), 룰렛 종료 후 자동 결과 화면 이동 등 여러 경로에서 호출됨. 학생이 실수로 "홈으로"를 누르면 세션이 완전히 만료돼 재접속 시 방 코드를 다시 입력해야 함. `find_active_room()`이 종료된 방을 반환하지 않으므로, 로그아웃 없이 `showLanding()`만 호출해도 충분함. `goHome()` 내 `api.post('/api/auth/logout', {})` 라인(app.js:112) 제거 또는 진행자·참가자 역할을 확인해 호스트만 로그아웃 유도.
+
+- **`_room_cache` 딕셔너리 엔드된 방 항목 미정리** (`app.py:64-85`, `_end_room()` app.py:231-279): `_end_room()` 마지막에 `_invalidate_room_cache(room.id)` 호출(app.py:278)로 캐시를 제거하지만, `_room_cache` 자체에 주기적 만료(eviction) 로직이 없어 서버가 장시간 운영되는 경우 수백 개의 TTL 만료 항목이 딕셔너리에 누적될 수 있음. TTL이 1.5초이므로 각 항목은 짧게 유지되지만, 1.5초 후 `_room_cache.pop()` 없이 덮어쓰기(`_room_cache[rid] = ...`) 방식이어서 기존 키는 제거되지 않고 값만 교체됨. 정리: `_end_room()`에서 이미 `_invalidate_room_cache(room.id)`를 호출하므로 현재 실질적 누수는 없지만, `_news_cache` 등 다른 in-memory 캐시도 동일 패턴이므로 `_end_room()` 종료 시 모든 room-scoped 캐시를 일괄 정리하는 `_cleanup_room_caches(rid)` 헬퍼를 추출해 관리 명확화 권장.
+
+- **참가자 학번+이름 조합이 `User.username`에 단일 문자열로 저장** (`app.py:445-459`, `models.py:16-22`): `User.username`이 `"학번 이름"` 형태(예: `"20715 홍길동"`)로 저장되어(`app.py:79`에서 `u = f"{sid} {name}"`), 엑셀 내보내기 시 `parts = e['username'].split(' ', 1)`(app.py:1514)으로 파싱함. 이름에 공백이 없다고 가정하므로 `"홍 길동"`처럼 성명에 공백이 있으면 학번이 `"20715 홍"`, 이름이 `"길동"`으로 잘못 분리됨. 근본 해결책: `User` 모델에 `student_id` 컬럼을 추가하거나, `username`을 `"학번|이름"` 형태로 변경해 파싱 구분자를 고정. 단기 대응: `split(' ', 1)` 대신 `split(' ')` 후 `[0]`을 학번, `[1:]`을 이름으로 join하는 방식 또는 구분자를 `'|'`로 변경.
