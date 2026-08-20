@@ -2,6 +2,38 @@
 
 ---
 
+## 2026-08-20
+
+### 추가하면 좋을 기능
+
+- **초대 링크 클립보드 복사 버튼** (`app.js` 진행자 로비/QR 모달, 최근 커밋 `685ee98` QR 신규 창 기능 참고): QR 코드를 새 창으로 열 수 있게 되었지만, QR을 스캔할 수 없는 학생(PC 수업)을 위해 방 코드가 포함된 URL을 클립보드에 복사하는 버튼이 없음. 진행자 로비 화면 방 코드 표시 영역 옆에 `<button onclick="navigator.clipboard.writeText(location.origin+'?code='+S.room.code).then(()=>toast('링크 복사됨','success'))">🔗 링크 복사</button>` 한 줄을 추가하면 됨. 서버 변경 불필요, 5줄 이내. 단체 카카오톡·Google Classroom에 URL 공유로 QR 없이도 학생 빠른 입장 가능해 수업 준비 시간 단축 직결.
+
+- **진행자 뉴스 자동 발생까지 카운트다운 표시** (`app.py:748-764` `host_news_interval()`, 진행자 설정 탭): 진행자가 뉴스 발생 주기를 설정할 수 있지만(`svc.set_news_interval()`), 다음 뉴스가 언제 자동 발생할지 표시되지 않아 타이밍을 직접 "카운트"해야 함. `GET /api/rooms/<rid>/host/news-interval` 응답에 `'next_news_in': max(0, round(svc._last_news_ts + svc._news_ttl - time.time()))` 필드를 추가(2줄)하고, 진행자 설정 탭 뉴스 주기 설정 카드 아래에 `<span id="next-news-cd">다음 뉴스: --초 후</span>` 를 추가한 뒤 1초 타이머로 갱신하면 됨. 클라이언트 약 10줄. 진행자가 "뉴스 발생 3초 전" 시점에 학생들에게 미리 준비 신호를 줄 수 있어 수업 연출 효과 상승.
+
+- **게임 설정 프리셋 localStorage 저장/불러오기** (`app.js` 방 생성 폼, `screen-host-create` 관련 코드): 담임 교사는 매 수업마다 동일한 설정(30분, 1,000만원, 예금 3%)을 반복 입력해야 함. 방 생성 화면에 "💾 현재 설정 저장" / "📂 불러오기" 버튼 두 개를 추가하고, `localStorage.setItem('game-preset', JSON.stringify({duration, cash, rate}))` / `const p = JSON.parse(localStorage.getItem('game-preset')||'null')` 패턴으로 구현. 추가로 여러 프리셋을 이름 붙여 저장(`game-preset-list`)하면 "1학기용 30분 룰셋", "기말 60분 대회용" 처럼 구분 가능. 서버 변경 불필요, 약 20줄.
+
+- **클라이언트 측 뉴스 히스토리 보관 탭** (`app.js` 폴링 루프/`showBombNews()`, `S.newsTs` 비교 로직): 뉴스 팝업은 5초 후 자동으로 사라지고 이전 뉴스를 다시 볼 방법이 없음. 클라이언트 전역에 `let _newsHistory = []` 를 추가하고, 새 뉴스 타임스탬프(`r.news.timestamp`) 감지 시 `_newsHistory.unshift({...r.news, receivedAt: new Date().toLocaleTimeString()})` 로 최근 20개를 보관. 시장 탭 섹터 필터 아래 또는 교육 탭에 "📰 뉴스 기록" 접이식 섹션으로 표시하면 "아까 IT 섹터 뉴스 뭐였더라?" 상황에서 재확인 가능. 서버 변경 불필요, 약 25줄.
+
+- **진행자 섹터별 거래 활성도 조회** (`app.py` 신규 `GET /api/rooms/<rid>/host/sector-activity`, `RoomTransaction`, `STOCKS`): 진행자 화면에서 학생들이 어떤 섹터에 집중 투자하는지 알 수 없음. `RoomTransaction.query.filter_by(room_id=rid, action='BUY').all()` 결과를 `STOCKS[t.symbol]['sector']` 로 그룹화해 `{sector: {buy_count, buy_amount, sell_count, sell_amount, net_flow}}` 형태로 집계하는 엔드포인트를 추가. 진행자 시장 탭에 섹터별 순매수 금액 막대 차트를 추가하면 "반도체 섹터에 총 3억 순매수 — 쏠림 현상" 개입 시점을 파악 가능. `RoomTransaction`에 `STOCKS` 딕셔너리를 조인하는 Python in-memory 집계로 DB 쿼리 1회 + 약 20줄 서버, 클라이언트 차트 약 20줄.
+
+- **복권 번호 선택 시 중복 클릭 방지 및 UX 개선** (`app.js` 복권 번호 선택 오버레이): 현재 학생이 번호 버튼을 빠르게 더블클릭하면 같은 번호가 picks 배열에 중복 등록되거나 총 6개를 초과한 것처럼 UI가 오동작하는 경우가 있음. 버튼 클릭 핸들러 내에서 `if (selected.has(n)) { selected.delete(n) } else if (selected.size < 6) { selected.add(n) }` 로 Set 기반 토글로 교체하면 중복이 원천 차단됨. 현재 배열 기반 구현과 달리 Set은 O(1) 조회라 60초 제한 내에서 빠른 번호 변경도 안전하게 처리됨. 서버 변경 불필요, `app.js` 복권 오버레이 로직 약 10줄 교체.
+
+### 제거/단순화할 것들
+
+- **`app.py:19` `SECRET_KEY` 취약 기본값 — 세션 위조 취약점** (`app.py:19`): `app.secret_key = os.environ.get('SECRET_KEY', 'mock-stock-game-secret-2024')` 에서 환경변수 미설정 시 소스코드에 하드코딩된 값이 폴백으로 사용됨. GitHub에 소스가 공개된 상황에서 이 비밀키를 아는 공격자가 서버 세션 쿠키를 위조해 임의 `user_id`로 로그인된 것처럼 요청을 보낼 수 있음. `SECRET_KEY` 미설정 시 `raise RuntimeError('환경변수 SECRET_KEY를 설정하세요.')` 로 서버 기동 자체를 막거나, 최소한 `secrets.token_hex(32)` 런타임 랜덤값을 기본값으로 사용해 매 재시작마다 기존 세션을 무효화하는 방식으로 교체해야 함. `app.py:19` 한 줄 수정.
+
+- **`get_room()` 내 `cur_user()` DB 쿼리 4회 중복 호출** (`app.py:556, 561, 582, 598`): `get_room()` 라우트 핸들러 단일 요청에서 `cur_user()` 가 네 곳에서 각각 `db.session.get(User, session['user_id'])` DB 조회를 실행함 (`app.py:556`의 `_end_room()` 이후, `app.py:561`, `app.py:582`, `app.py:598`). 참여자 30명이 10초 폴링하면 분당 720회 불필요한 User 조회가 발생. 함수 진입부(`app.py:553` 직후)에서 `user = cur_user()` 한 번만 호출하고, 이후 네 곳의 `cur_user()` 를 모두 `user` 변수로 교체하면 됨. SQLAlchemy identity map 덕분에 같은 세션에서는 캐시되지만, request context 당 session이 새로 시작되므로 실질적으로 4회 DB round-trip이 발생하는 게 맞음.
+
+- **`_do_reveal()` 당첨자별 `RoomMember` N+1 쿼리** (`app.py:331`): `for uid_str, picks in cur.get('picks', {}).items():` 반복 안에서 당첨금이 있을 때마다 `m = RoomMember.query.filter_by(room_id=rid, user_id=uid).first()` 를 개별 호출함. 학생 30명 전원이 복권에 참가하면 발표 시 최대 30회 DB 조회가 발생. 함수 최상단(반복문 진입 전)에 `member_map = {m.user_id: m for m in RoomMember.query.filter_by(room_id=rid).all()}` 를 추가하고, `app.py:331`의 `RoomMember.query...` 를 `m = member_map.get(uid)` 로 교체하면 1회 쿼리로 해결. `_end_room()` 내 `member_map` 구축 패턴(`app.py:245`)이 이미 동일 접근법을 사용하므로 참조 가능.
+
+- **`trade()` 내 `holding` stale 읽기 — 동시 매도 시 수량 초과 가능** (`app.py:866-882`): `with _get_member_lock(rid, user.id):` 블록 안에서 `db.session.refresh(member)` (`app.py:865`)는 호출하지만 `holding`(`app.py:866`의 `RoomHolding.query.filter_by(...)`)은 락 획득 전에 조회됨. 구체적으로는 락 획득 후에 `holding`을 재조회하는 코드가 없어, 두 탭에서 동시에 같은 종목을 매도 요청하면 두 번째 요청이 첫 번째 커밋 전의 stale `holding.shares` 를 기준으로 수량 체크를 통과할 수 있음. `app.py:866` 직후에 `if holding: db.session.refresh(holding)` 를 추가하면 락 내에서 최신 수량을 보장. 한 줄 추가로 매도 수량 초과 버그 방지.
+
+- **`get_history()` 내 `datetime.utcfromtimestamp()` Python 3.12 deprecated** (`stock_service.py:319`): `datetime.utcfromtimestamp(now - i * 86400).strftime('%Y-%m-%d')` 는 Python 3.12에서 DeprecationWarning을 발생시키고 향후 제거 예정인 API. `stock_service.py` 파일 상단의 `from datetime import datetime` 를 `from datetime import datetime, timezone` 으로 확장하고, 해당 줄을 `datetime.fromtimestamp(now - i * 86400, tz=timezone.utc).strftime('%Y-%m-%d')` 로 교체하면 됨. `app.py`에서 이미 `timezone`을 사용하는 것과 일관성 있게 정리 가능. 한 줄 수정.
+
+- **`lottery_start()` DB commit 이후 `lot['current']` 설정 — 커밋 성공 후 인메모리 미설정 시 방 고착 위험** (`app.py:1194-1197`): `room.status = 'paused'` → `db.session.commit()` (line 1196) 이후 `lot['current'] = {...}` (line 1197) 순서로 실행됨. 두 단계 사이 예외(메모리 부족, GIL 스레드 이슈 등)가 발생하면 방은 DB에 `'paused'` 상태로 커밋되었지만 `_lots[rid]['current']` 는 None 상태가 됨. 이후 `get_lottery()` 는 `{state: None}`을 반환하면서 방 재개 트리거가 없어 게임이 영구 paused 상태로 고착됨. 순서를 `lot['current'] = {...}` → `room.status = 'paused'` → `db.session.commit()` 으로 바꾸면, 커밋 실패 시 in-memory 상태는 롤백 없이 남지만 방 상태는 여전히 `'active'`여서 다음 요청에서 복구 가능. `app.py:1197-1204` 블록을 커밋 앞으로 이동.
+
+---
+
 ## 2026-08-19
 
 ### 추가하면 좋을 기능
