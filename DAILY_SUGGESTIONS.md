@@ -4478,3 +4478,29 @@
 - **`_room_cache` 딕셔너리 엔드된 방 항목 미정리** (`app.py:64-85`, `_end_room()` app.py:231-279): `_end_room()` 마지막에 `_invalidate_room_cache(room.id)` 호출(app.py:278)로 캐시를 제거하지만, `_room_cache` 자체에 주기적 만료(eviction) 로직이 없어 서버가 장시간 운영되는 경우 수백 개의 TTL 만료 항목이 딕셔너리에 누적될 수 있음. TTL이 1.5초이므로 각 항목은 짧게 유지되지만, 1.5초 후 `_room_cache.pop()` 없이 덮어쓰기(`_room_cache[rid] = ...`) 방식이어서 기존 키는 제거되지 않고 값만 교체됨. 정리: `_end_room()`에서 이미 `_invalidate_room_cache(room.id)`를 호출하므로 현재 실질적 누수는 없지만, `_news_cache` 등 다른 in-memory 캐시도 동일 패턴이므로 `_end_room()` 종료 시 모든 room-scoped 캐시를 일괄 정리하는 `_cleanup_room_caches(rid)` 헬퍼를 추출해 관리 명확화 권장.
 
 - **참가자 학번+이름 조합이 `User.username`에 단일 문자열로 저장** (`app.py:445-459`, `models.py:16-22`): `User.username`이 `"학번 이름"` 형태(예: `"20715 홍길동"`)로 저장되어(`app.py:79`에서 `u = f"{sid} {name}"`), 엑셀 내보내기 시 `parts = e['username'].split(' ', 1)`(app.py:1514)으로 파싱함. 이름에 공백이 없다고 가정하므로 `"홍 길동"`처럼 성명에 공백이 있으면 학번이 `"20715 홍"`, 이름이 `"길동"`으로 잘못 분리됨. 근본 해결책: `User` 모델에 `student_id` 컬럼을 추가하거나, `username`을 `"학번|이름"` 형태로 변경해 파싱 구분자를 고정. 단기 대응: `split(' ', 1)` 대신 `split(' ')` 후 `[0]`을 학번, `[1:]`을 이름으로 join하는 방식 또는 구분자를 `'|'`로 변경.
+
+## 2026-08-21
+
+### 추가하면 좋을 기능
+
+- **게임 중 진행자 공지 브로드캐스트** (`app.py:808-819` `host_send_news()`, `app.py:404-421` `room_dict()`): 현재 진행자가 뉴스를 직접 발생시키는 기능(`POST /api/rooms/<rid>/host/send-news`)은 있지만, 자유 텍스트 메시지를 참가자 전체에게 띄울 방법이 없음. `room_dict()` 응답에 `announcement: str | None` 필드를 추가하고, `POST /api/rooms/<rid>/host/announce`로 DB 대신 `_room_announcements: dict = {}` 인메모리(방별 최신 1건)에 저장. 참가자 클라이언트는 기존 5초 폴링에서 announcement 변경 시 토스트/배너로 표시. 서버 약 10줄, 클라이언트 약 8줄로 수업 진행 중 빠른 안내 가능.
+
+- **참가자 최대 포지션 비율 제한** (`app.py:867-876` `trade()` BUY 분기, `app.py:499-507` `create_room()`): 현재 보유 현금만 있으면 단일 종목에 전액 투자 가능. 진행자가 방 생성 시 `max_position_pct`(0=무제한, 기본값; 예: 30%)를 지정하면 매수 시 해당 종목 비중이 총자산 대비 한도를 초과할 경우 거래 거부. `Room` 모델에 컬럼 추가 + `trade()` BUY 분기에 체크 10줄 추가. "분산투자" 개념을 제도적으로 강제할 수 있어 수업 주제와 직결.
+
+- **참가자 거래 활동 요약 (진행자 대시보드)** (`app.py:667-673` `host_members()`, `_compute_leaderboard()` app.py:158-186): 진행자 순위표 API가 `total_value`, `gain_pct`만 반환하고 거래 횟수나 마지막 거래 시각을 제공하지 않음. `_compute_leaderboard()`에서 `RoomTransaction.query.filter_by(room_id=rid, user_id=uid).count()`를 멤버별로 집계해 `trade_count` 필드 추가. "아직 한 번도 거래 안 한 학생"을 진행자가 즉시 파악해 독려 가능. 쿼리 약 5줄 추가, N+1 방지는 기존 `uids` in 쿼리 패턴으로 일괄 처리.
+
+- **실시간 차트 히스토리 고정 (게임 시작 시 1회 생성)** (`stock_service.py:303-332` `get_history()`, `StockService.__init__()` stock_service.py:128-141): 현재 차트 데이터는 `get_history()` 호출마다 `random.gauss()`로 새로 생성하고 120초 TTL 캐시를 사용. 캐시 만료 후 같은 종목의 '1달' 차트를 다시 열면 완전히 다른 그래프가 표시돼 학생이 "어제도 이 주식이 올랐었는데"라는 분석이 불가능. `StockService.__init__()`에서 각 종목의 히스토리를 한 번만 생성해 `self._static_history: dict`에 저장하고, `get_history()`는 최신 종가만 이어붙이는 방식으로 변경. TTL 캐시 제거 또는 무한 유지로 단순화. 약 25줄 수정으로 교육 일관성 대폭 향상.
+
+- **지정가 주문 (Limit Order) 기초 지원** (`app.py:842-887` `trade()`, `models.py` 신규 모델): 현재는 시장가 주문만 지원해 "원하는 가격에 매수/매도" 개념 교육 불가. `_pending_orders: dict = {}` 인메모리 대기열 추가 후, `POST /api/rooms/<rid>/orders`로 `{symbol, action, shares, limit_price}` 등록. 기존 `get_price()` 호출 시점(price TTL 만료·가격 갱신 시)에 대기 주문을 체크해 조건 충족 시 자동 체결. 고등학생 수준에서 "호가창, 미체결 주문" 개념을 직접 경험 가능. 서버 약 40줄 추가.
+
+### 제거/단순화할 것들
+
+- **`_lot_round_due()` 중첩 if/elif 체인 → 룰 테이블로 교체** (`app.py:287-315`): 총 게임 시간에 따른 복권 라운드 타이밍 로직이 3개의 elif 블록에 각각 6/4/2개 조건으로 하드코딩되어 있음. 새 게임 길이 추가 시 전체 함수를 다시 읽어야 함. `LOTTERY_SCHEDULE = [(10800, [1/7, 2/7, 3/7, 4/7, 5/7, 6/7]), (3600, [1/5, 2/5, 3/5, 4/5]), (0, [1/3, 2/3])]` 형식의 테이블로 리팩터링하면 로직이 루프 5줄로 축약되고 수정이 용이.
+
+- **`RoomTransaction.action` 컬럼 `String(4)` 제한** (`models.py:74`): 현재 'BUY'/'SELL'/'ADJ'/'RLT' 4자 이내로 제한돼 있음. 향후 'LOTTO', 'QUIZ' 같은 새 액션 추가 시(실제로 `symbol` 컬럼에 'LOTTO'/'QUIZ'를 넣어 우회 중) 컬럼 길이 문제 발생 가능. `String(10)`으로 여유 확보 + `action` 컬럼을 'LOTTO'/'QUIZ' 식별에 직접 활용하도록 정리.
+
+- **`_quiz_state` / `_quiz_settings` / `_quiz_history` 순수 인메모리 저장** (`app.py:1338-1340`): 퀴즈 관련 상태 3개가 모두 서버 메모리에만 존재해 Render free tier의 15분 sleep → 재시작 시 전부 소실. 특히 `_quiz_settings`(보상/패널티 비율)는 진행자가 게임 전 설정한 값인데 재시작 후 기본값으로 되돌아감. `Room` 모델에 `quiz_settings = db.Column(db.Text, default=None)` JSON 컬럼을 추가해 설정값만이라도 영속화. `_quiz_history`는 50건 제한이라 DB 저장도 부담 없음.
+
+- **`force_price()` vs `_next_price()` 가격 클램프 상수 불일치** (`stock_service.py:161`, `stock_service.py:247`): `_next_price()`는 `base * 0.6 ~ base * 1.4` 범위로 클램핑하지만, `force_price()`는 `base * 0.3 ~ base * 3.0`으로 허용 범위가 2.5배 넓음. 진행자가 +50% 강제 조정 후 20초 내 자동 가격 업데이트에서 `base * 1.4` 상한에 즉시 클램핑돼 급락하는 이상 현상 발생. `MIN_PRICE_MULT = 0.6; MAX_PRICE_MULT = 1.4` 모듈 상수를 두 함수가 공유하도록 통일.
+
+- **`goHome()` 항상 세션 로그아웃** (`static/js/app.js:111-117`): `goHome()`이 `api.post('/api/auth/logout', {})`를 무조건 호출해 학생이 실수로 "홈으로"를 누르면 세션이 완전 만료됨. `find_active_room()`이 종료된 방을 반환하지 않으므로 재접속 시 자동으로 랜딩화면만 보이게 됨 — 로그아웃 없이 `showLanding()`만 호출해도 동일 효과. 로그아웃은 명시적 "로그아웃" 버튼에서만 호출하도록 분리해 학생 실수로 인한 재입력 부담 제거.
