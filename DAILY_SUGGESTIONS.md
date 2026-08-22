@@ -4536,3 +4536,29 @@
 - **`force_price()` vs `_next_price()` 가격 클램프 상수 불일치** (`stock_service.py:161`, `stock_service.py:247`): `_next_price()`는 `base * 0.6 ~ base * 1.4` 범위로 클램핑하지만, `force_price()`는 `base * 0.3 ~ base * 3.0`으로 허용 범위가 2.5배 넓음. 진행자가 +50% 강제 조정 후 20초 내 자동 가격 업데이트에서 `base * 1.4` 상한에 즉시 클램핑돼 급락하는 이상 현상 발생. `MIN_PRICE_MULT = 0.6; MAX_PRICE_MULT = 1.4` 모듈 상수를 두 함수가 공유하도록 통일.
 
 - **`goHome()` 항상 세션 로그아웃** (`static/js/app.js:111-117`): `goHome()`이 `api.post('/api/auth/logout', {})`를 무조건 호출해 학생이 실수로 "홈으로"를 누르면 세션이 완전 만료됨. `find_active_room()`이 종료된 방을 반환하지 않으므로 재접속 시 자동으로 랜딩화면만 보이게 됨 — 로그아웃 없이 `showLanding()`만 호출해도 동일 효과. 로그아웃은 명시적 "로그아웃" 버튼에서만 호출하도록 분리해 학생 실수로 인한 재입력 부담 제거.
+
+## 2026-08-22
+
+### 추가하면 좋을 기능
+
+- **매수 가능 수량 실시간 미리보기** (`static/js/app.js` 거래 모달 수량 입력 부분, `static/index.html` 거래 모달): 현재 수량을 입력하고 "매수" 버튼을 누른 뒤에야 잔액 부족 에러를 서버 응답으로 확인함(`app.py:869` `'잔액 부족'` 반환). 거래 모달 수량 입력 필드 하단에 "최대 N주 구매 가능" 을 클라이언트에서 실시간 계산(`Math.floor(S.tradeCash / S.tradePrice)`)해 표시하면 서버 요청 없이 즉시 피드백 가능. 아울러 "전량 매수" 버튼 하나로 최대 수량을 자동 입력하는 편의 기능도 5줄 추가로 구현 가능. 학생의 잦은 오류·재시도 횟수를 줄여 수업 흐름 개선.
+
+- **참가자 개인 거래 내역 엑셀 다운로드** (`app.py:1498-1566` `export_rankings()` 참고, 신규 `GET /api/rooms/<rid>/my-export`): 현재 진행자만 전체 순위 엑셀을 다운로드 가능. 게임 종료 후 참가자도 자신의 거래 내역(매수/매도 시각, 종목, 수량, 가격, 수익)을 엑셀로 받을 수 있으면 사후 반성학습·포트폴리오 리뷰에 직결됨. `RoomTransaction.query.filter_by(room_id=rid, user_id=user.id).order_by(...).all()`를 openpyxl로 출력하는 엔드포인트를 추가. `result_published` 여부와 무관하게 자기 데이터는 항상 접근 가능하도록 허용. 서버 약 35줄, 결과 화면에 "내 거래 내역 다운로드" 버튼 추가.
+
+- **QR 표시 창에 실시간 참가자 수 표시** (`static/js/app.js:248-252` `openGameQRWindow()`, `/static/qr-display.html`): 교사가 QR 코드를 별도 창으로 열어 프로젝터에 표시할 수 있음. 그러나 현재 qr-display.html은 정적 페이지라 몇 명이 입장했는지 실시간으로 알 수 없음. qr-display.html에서 `GET /api/rooms/<rid>/host/lobby-members`를 5초마다 폴링해 참가자 수와 이름 목록을 표시하면, 교사가 화면을 전환하지 않고 입장 현황을 프로젝터에서 바로 확인 가능. 별도 HTML 파일 약 30줄.
+
+- **거래 후 포트폴리오 요약 즉시 표시** (`static/js/app.js` `doTrade()` 함수, 포트폴리오 탭): 현재 매수/매도 완료 후 toast 메시지만 표시되고, 포트폴리오 반영 확인은 탭을 직접 이동해야 함. `doTrade()` 성공 응답 처리 시 자동으로 `loadPortfolio()`를 호출해 포트폴리오 탭을 갱신하거나, 인라인으로 현금 잔액 변동을 즉시 업데이트하면 학생이 "거래가 반영됐는지" 탭을 왔다 갔다 하는 불편 제거. 클라이언트 약 3줄 추가.
+
+- **방 생성 시 최대 참가자 수 제한 옵션** (`app.py:499-507` `create_room()`, `models.py:25-42` `Room`): 현재 참가자 수에 제한이 없어 방 코드가 외부에 유출되면 무관한 학생이 입장할 수 있음. `Room` 모델에 `max_members = db.Column(db.Integer, nullable=True)`를 추가하고, `join_room()`(app.py:509-523)에서 `RoomMember.query.filter_by(room_id=room.id).count() >= room.max_members`이면 입장 거부. 방 생성 폼에 "최대 인원(선택)" 필드 추가. 기본값 None(무제한)으로 하위 호환성 유지. 서버 약 8줄.
+
+### 제거/단순화할 것들
+
+- **`GET /api/rooms/<rid>` 에서 DB 쓰기(상태 변경) 발생** (`app.py:549-598`): `get_room()` GET 핸들러 안에서 `_end_room()`(app.py:555), 룰렛 자동 트리거 (`room.status = 'paused'`, `db.session.commit()`, app.py:575-578), `_auto_start_lottery_if_due()`(app.py:595)가 실행되어 HTTP GET이 사이드 이펙트를 발생시킴. HTTP 표준상 GET은 멱등(idempotent)해야 하고, 브라우저 prefetch·프록시 캐싱이 예상치 못한 중복 상태 전이를 일으킬 수 있음. 상태 전이 로직을 `POST /api/rooms/<rid>/tick` 로 분리하거나, Flask의 `@app.before_request` 또는 APScheduler 백그라운드 작업으로 이동하면 GET 핸들러가 단순 조회로 정리됨.
+
+- **`_liquidate_shortfall()` 내 0주 보유 레코드 미삭제** (`app.py:188-229`): `trade()` SELL 분기(app.py:882)는 `holding.shares == 0`이면 `db.session.delete(holding)`으로 레코드를 제거하는 반면, `_liquidate_shortfall()`(app.py:202)은 `h.shares = 0; h.avg_price = 0`만 설정하고 레코드를 남김. 게임 중 룰렛 또는 퀴즈 오답 패널티로 청산이 발생할 때마다 shares=0 레코드가 DB에 쌓임. `get_portfolio()`(app.py:901 `if h.shares <= 0: continue`)와 `_compute_leaderboard()`에서 매번 필터링이 필요. `_liquidate_shortfall()` 내부 루프에 `if h.shares == 0: db.session.delete(h)` 3줄 추가로 일관성 확보.
+
+- **`gen_code()` 10번 실패 시 중복 코드 반환** (`models.py:8-13`): 10회 시도 후 중복 여부 확인 없이 임의 코드를 그대로 반환(`return ''.join(random.choices(...))`). 코드 충돌 시 `Room.code`의 UNIQUE 제약(`models.py:29`)을 위반해 `IntegrityError`가 발생하고, `create_room()`(app.py:480)에서 이를 잡지 않아 500 오류로 이어짐. 마지막 반환 전에 동일한 존재 여부 체크를 추가하거나, 실패 시 `raise ValueError("방 코드 생성에 실패했습니다. 다시 시도하세요.")`를 던지고 `create_room()`에서 잡아 400 응답으로 반환하도록 수정.
+
+- **`force_sector_event()`가 `_current_biases` 미갱신** (`stock_service.py:266-298`): `force_price()`(stock_service.py:240)는 해당 종목 뉴스만 갱신하지만 `_current_biases`를 갱신하지 않음. `force_sector_event()`도 동일하게 `_news`만 갱신하고 `_current_biases`를 갱신하지 않아(`stock_service.py:284-296`), 강제 조정 직후 다음 가격 업데이트 틱에서 이전에 설정된 반대 방향 bias가 적용될 수 있음. `force_sector_event()` 끝에 `self._current_biases.update({s: direction for s in affected})`(stock_service.py:298 이후)를 추가하면 강제 이벤트 방향이 다음 자동 업데이트까지 자연스럽게 연장됨. 1줄 추가.
+
+- **`/host/lobby-members` 경로명이 진행자 전용이 아님** (`app.py:688-699`): `lobby_members()` 엔드포인트 경로가 `/api/rooms/<rid>/host/lobby-members`이지만 조건(app.py:693)에서 `RoomMember`(일반 참가자)도 접근을 허용함. 경로명과 접근 제어가 불일치하여 코드 읽는 사람이 참가자는 접근 불가라고 오해하기 쉬움. 참가자용 경로 `/api/rooms/<rid>/lobby-members`를 별도로 추가하고 `/host/lobby-members`는 진행자만 접근하도록 분리하거나, 현행 복합 엔드포인트에서 `/api/rooms/<rid>/lobby-members`로 경로를 단일화하는 방향으로 정리 권장.
