@@ -3,7 +3,7 @@ from functools import wraps
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.exc import IntegrityError
 from io import BytesIO
-import os, threading, math
+import os, threading, math, re
 try:
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side as _XlSide
@@ -233,6 +233,9 @@ def _end_room(room):
     room.rlt_triggered = False
     room.results_published = False
     room.lottery_rounds_done = ''
+    # 코드를 비워 재사용 가능하게 함 (고정 코드로 다음날 같은 코드를 다시 쓸 수 있도록;
+    # unique 제약은 NULL끼리는 충돌하지 않으므로 여러 종료된 방이 code=NULL이어도 안전)
+    room.code = None
     now = datetime.utcnow()
     total_seconds = room.duration_minutes * 60
     if room.paused_at:
@@ -496,11 +499,23 @@ def create_room():
         _end_room(stale)
     if Room.query.filter(Room.host_id == user.id, Room.status.in_(['waiting','active','paused'])).first():
         return jsonify({'error': '이미 진행 중인 방이 있습니다.'}), 400
+    # 고정 코드(선택): 전날 미리 QR을 인쇄/공유해두고 매번 같은 코드로 재사용하고 싶을 때 사용.
+    # 종료된 방의 코드는 _end_room()에서 비워지므로(unique 제약은 NULL끼리 충돌 안 함) 재사용 가능.
+    room_kwargs = {}
+    custom_code = (d.get('code') or '').strip().upper()
+    if custom_code:
+        # Room.code 컬럼이 String(6)이라 DB(특히 Postgres)에서 길이 초과 시 에러가 나므로 6자로 제한
+        if not re.fullmatch(r'[A-Z0-9]{4,6}', custom_code):
+            return jsonify({'error': '코드는 영문 대문자/숫자 4~6자여야 합니다.'}), 400
+        if Room.query.filter_by(code=custom_code).first():
+            return jsonify({'error': '이미 사용 중인 코드입니다. 다른 코드를 쓰거나 비워서 자동 생성하세요.'}), 400
+        room_kwargs['code'] = custom_code
     room = Room(
         name=name, host_id=user.id,
         duration_minutes=max(1, min(600, int(d.get('duration_minutes', 30)))),
         starting_cash=max(100000, float(d.get('starting_cash', 10_000_000))),
         deposit_rate=max(0, min(50, float(d.get('deposit_rate', 3.0)))),
+        **room_kwargs,
     )
     db.session.add(room)
     db.session.commit()

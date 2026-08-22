@@ -70,6 +70,11 @@
       <input id="room-rate" class="form-input" type="number" value="3" min="0" max="50" step="0.5">
       <div class="muted" style="font-size:11px;margin-top:4px">예금 보유 시간에 비례해 이자가 지급됩니다.</div>
     </div>
+    <div class="form-group">
+      <label class="form-label">고정 참여 코드 (선택)</label>
+      <input id="room-code" class="form-input" type="text" placeholder="예: 31BAN (비워두면 자동 생성)" maxlength="6" style="text-transform:uppercase">
+      <div class="muted" style="font-size:11px;margin-top:4px">전날 QR을 미리 뽑아두고 매번 같은 코드로 방을 열고 싶을 때 영문/숫자 4~6자로 입력하세요.</div>
+    </div>
     <div class="error-msg" id="create-err"></div>
     <button class="btn btn-primary btn-full" onclick="doCreateRoom()" style="margin-top:8px">방 만들기 →</button>
   </div>
@@ -998,6 +1003,6 @@
 <div class="toast-container" id="toasts"></div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
-<script src="/static/js/app.js?v=15"></script>
+<script src="/static/js/app.js?v=16"></script>
 </body>
 </html>

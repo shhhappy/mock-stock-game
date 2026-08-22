@@ -131,6 +131,7 @@ function _prefillLastRoomSettings() {
     if (saved.duration_minutes) document.getElementById('room-duration').value = saved.duration_minutes;
     if (saved.starting_cash)    document.getElementById('room-cash').value = saved.starting_cash;
     if (saved.deposit_rate !== undefined) document.getElementById('room-rate').value = saved.deposit_rate;
+    if (saved.code) document.getElementById('room-code').value = saved.code;
   } catch(e) { /* 저장된 값이 손상된 경우 무시하고 기본값 유지 */ }
 }
 
@@ -141,6 +142,7 @@ async function doCreateRoom() {
   const dur  = parseInt(document.getElementById('room-duration').value) || 30;
   const cash = parseFloat(document.getElementById('room-cash').value)   || 10_000_000;
   const rate = parseFloat(document.getElementById('room-rate').value)   || 3;
+  const code = document.getElementById('room-code').value.trim().toUpperCase();
   const err  = document.getElementById('create-err');
   err.textContent = '';
   if (!sid)      { err.textContent = '학번을 입력하세요.'; return; }
@@ -159,10 +161,10 @@ async function doCreateRoom() {
     return;
   }
   if (!roomName) { err.textContent = '방 이름을 입력하세요.'; return; }
-  const data = await api.post('/api/rooms', {name: roomName, duration_minutes: dur, starting_cash: cash, deposit_rate: rate});
+  const data = await api.post('/api/rooms', {name: roomName, duration_minutes: dur, starting_cash: cash, deposit_rate: rate, code});
   if (data.error) { err.textContent = data.error; return; }
   try {
-    localStorage.setItem('lastRoomSettings', JSON.stringify({name: roomName, duration_minutes: dur, starting_cash: cash, deposit_rate: rate}));
+    localStorage.setItem('lastRoomSettings', JSON.stringify({name: roomName, duration_minutes: dur, starting_cash: cash, deposit_rate: rate, code}));
   } catch(e) { /* localStorage 사용 불가 환경(시크릿 모드 등)은 조용히 무시 */ }
   S.room = data.room;
   enterHostLobby();
