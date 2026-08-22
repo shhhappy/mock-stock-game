@@ -4562,3 +4562,31 @@
 - **`force_sector_event()`가 `_current_biases` 미갱신** (`stock_service.py:266-298`): `force_price()`(stock_service.py:240)는 해당 종목 뉴스만 갱신하지만 `_current_biases`를 갱신하지 않음. `force_sector_event()`도 동일하게 `_news`만 갱신하고 `_current_biases`를 갱신하지 않아(`stock_service.py:284-296`), 강제 조정 직후 다음 가격 업데이트 틱에서 이전에 설정된 반대 방향 bias가 적용될 수 있음. `force_sector_event()` 끝에 `self._current_biases.update({s: direction for s in affected})`(stock_service.py:298 이후)를 추가하면 강제 이벤트 방향이 다음 자동 업데이트까지 자연스럽게 연장됨. 1줄 추가.
 
 - **`/host/lobby-members` 경로명이 진행자 전용이 아님** (`app.py:688-699`): `lobby_members()` 엔드포인트 경로가 `/api/rooms/<rid>/host/lobby-members`이지만 조건(app.py:693)에서 `RoomMember`(일반 참가자)도 접근을 허용함. 경로명과 접근 제어가 불일치하여 코드 읽는 사람이 참가자는 접근 불가라고 오해하기 쉬움. 참가자용 경로 `/api/rooms/<rid>/lobby-members`를 별도로 추가하고 `/host/lobby-members`는 진행자만 접근하도록 분리하거나, 현행 복합 엔드포인트에서 `/api/rooms/<rid>/lobby-members`로 경로를 단일화하는 방향으로 정리 권장.
+
+## 2026-08-22 (2차)
+
+> 이전 2026-08-22 분석은 `5463bdf` (진행자 고정 코드 기능) 커밋 이전 브랜치 기준이었음. 본 분석은 머지 이후 전체 코드베이스를 대상으로 추가 항목을 발굴.
+
+### 추가하면 좋을 기능
+
+- **학생 자산 위험 경보 배지 (진행자 대시보드)** (`app.py:177-183` `_compute_leaderboard()`, `app.py:682-688` `host_members()`): 현재 `_compute_leaderboard()`는 `total_value`와 `gain_pct`만 반환. 시작 자금 대비 -50% 이하로 떨어진 학생이 있어도 진행자가 순위표를 직접 읽어야 알 수 있음. `board.append(...)` 딕셔너리에 `'is_critical': e['gain_pct'] < -50` 필드를 추가(1줄)하고, 호스트 순위 화면에서 `is_critical` 행의 배경을 붉게 강조하면 됨. 교사가 투자 실패 학생에게 즉시 개입해 "분산투자"를 실시간 교육하는 시나리오 지원.
+
+- **참가자 대기 화면 교육 팁 자동 순환** (`static/js/app.js:593-612` `enterParticipantLobby()`, `education_data.py` `TIPS` 배열): 참가자 대기 화면(`screen-p-lobby`)은 방 설정 텍스트만 표시하고 `loadPLobbyMembers()` 폴링(5초)만 실행. `/api/education/tips`를 통해 이미 노출된 `TIPS` 배열(education_data.py)에서 랜덤 1개를 고르는 `setInterval(..., 8000)` 루프를 `enterParticipantLobby()` 안에 추가하면, 게임 대기 최대 수 분을 학습 시간으로 전환 가능. API 호출 추가 없음, 클라이언트 약 10줄.
+
+- **랭킹 화면 자신의 위치 자동 스크롤** (`static/js/app.js:1754-1773` `loadParticipantRankings()`): `loadParticipantRankings()`에서 `list.innerHTML = ...`를 완성한 뒤 `document.querySelector('#p-rankings-list .me')?.scrollIntoView({behavior:'smooth',block:'center'})` 한 줄을 추가하면 됨. 현재 30명 이상 참가자가 있으면 하위권 학생은 자신의 순위가 스크롤 영역 밖에 있어 UI 경험이 나쁨. 2줄 추가로 해결 가능하며 교사 시연 시 효과가 좋음.
+
+- **진행자 학생 개인 포트폴리오 드릴다운** (`app.py:682-688` `host_members()`, `app.py:907-938` `get_portfolio()`): `host_members()`는 총자산과 수익률만 반환하고, 진행자가 특정 학생의 보유 종목 구성을 볼 방법이 없음. `GET /api/rooms/<rid>/host/members/<uid>/portfolio` 엔드포인트를 `get_portfolio()`와 동일한 로직으로 추가하고 (진행자 권한 체크 추가), 호스트 순위 화면에서 학생 행 클릭 시 보유 종목 모달을 표시하면 됨. "삼성전자에 100% 올인한 학생"을 교사가 발견해 수업 예시로 활용 가능. 서버 약 10줄 + 클라이언트 모달 약 20줄.
+
+- **복권 당첨 결과 DB 영속화** (`app.py:320-393` `_do_reveal()`, `app.py:284-285` `_lots` 딕셔너리): `_do_reveal()` 내에서 각 학생의 매칭 수(`matched`)와 상금(`prize_won`)을 계산한 뒤, `RoomTransaction`에 `symbol='LOTTO', action='RLT', amount=prize_won, note=f'복권 {round_n}회차 {matched}개 일치'`로 적재하는 코드가 없음. 서버 재시작 시 `_lots[rid]` 소실로 인해 해당 라운드 결과를 진행자가 확인할 수 없게 됨. `_do_reveal()` 마지막(app.py:~393)에 `RoomTransaction` 레코드를 일괄 추가하는 루프를 삽입하면 거래 내역 탭에서 복권 상금이 이력으로 남고, 결과 확인 재요청이 가능. 약 8줄 추가.
+
+### 제거/단순화할 것들
+
+- **`doJoinRoom()` 코드 길이 검증 6자 하드코딩 — 4~5자 커스텀 코드 입장 불가 버그** (`static/js/app.js:180`): `if (code.length !== 6) { err.textContent = '6자리 코드를 입력하세요.'; return; }` 로 하드코딩되어 있음. 그러나 서버는 `5463bdf` 커밋 이후 4~6자 커스텀 코드를 허용(`app.py:508` `re.fullmatch(r'[A-Z0-9]{4,6}', custom_code)`). 진행자가 `ABC1`(4자) 또는 `AB123`(5자) 고정 코드를 설정하면 학생이 입장 불가 — 클라이언트가 서버 요청을 보내기도 전에 차단. `if (code.length < 4 || code.length > 6)`으로 1줄 수정, 오류 메시지도 "4~6자리 코드를 입력하세요"로 변경.
+
+- **`_prefillLastRoomSettings()`에서 이전 커스텀 코드가 자동으로 채워짐** (`static/js/app.js:134`, `static/js/app.js:167`): `doCreateRoom()`에서 `localStorage.setItem('lastRoomSettings', JSON.stringify({..., code}))` (app.js:167)로 직전 방 코드가 저장되고, 다음 방 생성 시 `if (saved.code) document.getElementById('room-code').value = saved.code;` (app.js:134)로 자동 채워짐. 종료된 방의 코드는 `_end_room()`에서 NULL 처리되므로 새 방 생성 시 해당 코드는 사용 가능하지만, 수업 시작 전에 이전 코드를 그대로 재사용하면 혼선 또는 실수로 새 코드가 덮어씌워질 위험이 있음. `code` 필드만 저장에서 제외하거나, placeholder 힌트로만 표시해 명시적 입력을 유도하도록 수정 권장.
+
+- **`enter()` 함수에서 username 중복 시 `IntegrityError` 미처리** (`app.py:454-458`): `User.query.filter_by(username=u).first()`로 존재 여부 확인 후 없으면 `User(username=u)`를 생성. 동시에 같은 닉네임으로 두 요청이 들어오면(예: 학생이 입장 버튼을 두 번 탭) 두 요청 모두 `first()=None`을 받아 하나가 `IntegrityError`를 발생시키고 500 응답을 반환. `join_room()`(app.py:536-537)은 `except IntegrityError: db.session.rollback()`으로 처리하지만 `enter()`는 동일 패턴 없음. `try: db.session.commit() except IntegrityError: db.session.rollback(); user = User.query.filter_by(username=u).first()` 추가로 해결 가능.
+
+- **`room_dict()` 내 매 호출마다 `member_count` COUNT 쿼리 발생** (`app.py:416`): `RoomMember.query.filter_by(room_id=room.id).count()`가 `room_dict()` 호출 시마다 실행. `_get_room_cached()`(app.py:72-85)의 1.5초 TTL 캐시로 보호되지만, 호스트가 `force_price`, `market_event`, `send_news` 등을 실행할 때마다 `_invalidate_room_cache()` 후 `room_dict()` 재실행. 수업 시간 30분 중 진행자가 빈번히 조작하면 COUNT 쿼리가 수십 번 발생. `member_count`를 `room_dict()` 외부에서 미리 계산해 파라미터로 전달하거나, 멤버 수 전용 캐시(TTL 5초)를 별도로 두는 방식으로 쿼리 횟수를 줄일 수 있음.
+
+- **`_quiz_state` 딕셔너리 `seen` 집합 업데이트 스레드 안전성 없음** (`app.py:1365-1376` `get_quiz()`, `app.py:1423-1424` `submit_quiz()`): `seen = state.get('seen', set()); seen.add(q['id']); _quiz_state[key] = {..., 'seen': seen}` 패턴이 `_member_locks`(거래용 뮤텍스) 보호 밖에서 이루어짐. Gunicorn 멀티스레드 워커(동일 프로세스 내 여러 스레드)에서 동시 퀴즈 요청이 들어오면 `seen` 집합 업데이트가 유실되어 동일 문제가 두 번 출제될 수 있음. `_quiz_state` 전용 `threading.Lock()`을 추가하거나, 기존 `_get_member_lock(rid, uid)` 안에서 `_quiz_state` 업데이트를 수행하도록 묶어야 일관성이 보장됨. 멀티프로세스(workers>1) 배포에서는 인메모리 상태 분리가 근본 문제이므로 Redis 등 공유 저장소 검토 필요.
