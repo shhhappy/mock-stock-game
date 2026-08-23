@@ -2,6 +2,34 @@
 
 ---
 
+## 2026-08-23
+
+### 추가하면 좋을 기능
+
+- **매수/매도 최대 수량 버튼 (전량 매도 / 최대 매수)** (`static/index.html` 거래 모달, `app.py:857-902` `trade()`): 현재 거래 모달에서 학생이 수량을 직접 입력해야 함. `현금 ÷ 현재가 = 최대 매수 가능 수량`과 `보유 수량 = 전량 매도 수량`을 계산하는 "전량 매도" / "최대 매수" 버튼을 수량 입력란 옆에 추가하면 수업 시간 내 빠른 거래가 가능해짐. 클라이언트에서 `Math.floor(member.cash / currentPrice)`와 `holding.shares`를 이용해 수량 필드를 채우는 방식으로 서버 변경 불필요. `static/index.html` 거래 UI 약 10줄, `app.js` 모달 열기 핸들러 약 15줄 수정.
+
+- **진행자 실시간 학생 거래 피드** (`app.py:682-689` `host_members()`, `RoomTransaction`): 진행자 화면은 순위표만 표시하고 학생들이 지금 어떤 거래를 하는지 볼 방법이 없음. `GET /api/rooms/<rid>/host/recent-trades?limit=20` 엔드포인트를 추가해 `RoomTransaction.query.filter_by(room_id=rid).order_by(RoomTransaction.timestamp.desc()).limit(20).all()`을 반환. 진행자 대시보드 하단에 "김철수 삼성전자 50주 매수 | 이영희 NAVER 10주 매도" 스크롤 피드를 표시. "특정 종목에 집중 매수 현상을 포착해 수업 개입"하거나 "가장 활발한 거래자를 호명"하는 등 수업 연출에 활용 가능. 서버 약 15줄, 클라이언트 5초 폴링 피드 약 20줄.
+
+- **게임 중간 순위 스냅샷 (하프타임 리뷰)** (`app.py:158-186` `_compute_leaderboard()`, `app.py:615-628` `start_room()`): 긴 게임에서 순위 변동 흐름을 확인할 방법이 없어 학생들이 "처음부터 1등인 사람이 계속 1등"처럼 느끼면 동기 저하 가능성이 있음. 인메모리 `_snapshots: dict = {}  # rid -> [{rank_list, ts}]` 에 `_compute_leaderboard()` 결과를 게임 시간의 1/3, 2/3 시점에 자동 저장. `GET /api/rooms/<rid>/host/snapshots`로 진행자가 조회해 "중간 순위 발표" 타이밍에 화면 공유. 서버 약 20줄, `_auto_start_lottery_if_due()` 와 유사한 타이밍 로직 재활용 가능(`app.py:540-562`).
+
+- **진행자 퀴즈 참여율·정답률 모니터링** (`app.py:1493-1509` `quiz_settings()`, `_quiz_history`): 퀴즈를 풀고 있는 학생 수와 정답률을 진행자가 알 수 없어 퀴즈 기능이 "블랙박스"처럼 느껴짐. `GET /api/rooms/<rid>/host/quiz-stats` 신규 엔드포인트에서 `_quiz_history` 딕셔너리를 순회해 `{user_id, username, total, correct, pct}` 목록을 반환. 진행자 설정 탭 퀴즈 설정 카드 하단에 테이블로 표시. 학생 중 정답률 0%인 학생을 파악해 난이도 조절이나 개별 지도 타이밍을 결정 가능. `_quiz_history`가 이미 `(room_id, user_id)` 키로 구조화되어 있으므로 서버 약 15줄로 구현 가능(`app.py:1355`).
+
+- **결과 공개 후 학생 화면에 자동 순위 표시** (`app.py:1480-1490` `host_publish_results()`, `app.py:397-424` `room_dict()`): `results_published` 플래그가 `True`로 바뀌어도(`room_dict()` 에 포함), 현재 클라이언트 폴링 루프가 해당 필드를 파싱해 최종 순위를 자동으로 펼치지 않는 것으로 보임. 클라이언트 폴링에서 `r.room.results_published && !S.resultShown`일 때 `/api/rooms/<rid>/rankings`를 호출해 최종 순위 오버레이를 자동 표시하는 분기를 추가하면 학생이 "결과 발표 됐어요!" 외침 없이도 동시에 결과를 확인 가능. 서버 변경 불필요, `app.js` 폴링 콜백 약 10줄 추가.
+
+### 제거/단순화할 것들
+
+- **`member_total_value()` 예금 이중 `status` 체크** (`app.py:152-155`): `Deposit.query.filter_by(room_id=rid, user_id=uid, status='active').all()`로 이미 `status='active'` 필터를 적용해 가져온 뒤, `app.py:154`의 `for d in deps:` 루프 안에서 다시 `if d.status == 'active':` 조건을 검사함. DB 쿼리가 이미 필터를 보장하므로 루프 내 조건문은 항상 참. `if d.status == 'active':` 줄과 들여쓰기를 제거해 `total += d.amount`를 직접 실행하면 코드 의도가 명확해짐. 단, `preloaded_deps`를 외부에서 전달할 때 active 외 상태가 포함될 수 있으므로, 대신 `app.py:141`의 함수 시그니처 docstring에 "preloaded_deps는 status='active'인 항목만 포함해야 함"을 명시하는 것이 더 안전.
+
+- **`get_room()` 내 자동 종료·룰렛 트리거 로직 함수 분리 필요** (`app.py:564-613`): 단일 GET 핸들러 안에 ①시간 초과 자동 종료, ②paused 상태 타임아웃 종료, ③5초 이하 룰렛 자동 트리거, ④서버 재시작 복구, ⑤룰렛 60초 하드 타임아웃, ⑥복권 자동 시작 등 6개의 책임이 순차 중첩되어 있음. 가독성과 테스트 가능성을 위해 `_check_auto_end(room, now)`, `_check_roulette_trigger(room, now, rid)` 등 목적별 헬퍼로 분리를 권장. 각 헬퍼는 `bool` (상태 변경 여부)을 반환하고, `get_room()`은 결과를 보고 `_invalidate_room_cache()`만 한 번 호출하는 구조로 단순화 가능. 버그 수정 없이 리팩터링만으로 약 50줄을 여러 10~15줄 함수로 분산.
+
+- **`export_rankings()` username 파싱으로 학번 추출하는 취약한 규약** (`app.py:1529-1533`): `parts = e['username'].split(' ', 1); sid = parts[0] if len(parts) > 1 else ''` 로 공백 앞 토큰을 학번으로 취급하지만, `User` 모델에는 별도 `student_id` 컬럼이 없어(`models.py:16-22`) 이름이 "김 철수"처럼 공백을 포함하거나 학번 없이 이름만 입력한 경우 오파싱됨. 근본 해결책은 `models.py`에 `student_id = db.Column(db.String(20), nullable=True)` 컬럼 추가 및 참가 폼(`screen-join`)에 학번 전용 입력란을 추가하는 것. 단기 대안으로 `static/index.html:53-58`의 학번/이름 입력 규약("학번 + 공백 + 이름" 포맷)을 안내 문구로 명시해 일관성을 강제하는 것을 권장.
+
+- **`_rlt_active` 인메모리 상태가 서버 재시작 후 count=0으로 리셋되어 즉시 타임아웃 발생** (`app.py:599-608`): 서버 재시작 시 `_rlt_active[rid]`가 없으면 `app.py:599-600`에서 `_rlt_active[rid] = {'count': 0, 'auto_paused': True}`로 재초기화됨. 이후 첫 `get_room()` 호출에서 `app.py:603-608`의 "룰렛 대기 하드 타임아웃(60초)" 조건이 `room.paused_at`이 60초 이상 지났다면 즉시 참이 되어 게임을 강제 종료시킴. 수업 중 서버가 재시작되면(Render free tier 슬립 → 웨이크업) 룰렛 시간이 남아있어도 게임이 끊길 수 있음. 60초 타임아웃 조건에 `_rlt_active[rid].get('count', 0) > 0`을 추가해 아무도 룰렛을 열지 않은 상태에서는 타임아웃을 적용하지 않는 방식으로 완화 가능. `app.py:603` 조건문에 `and _rlt_active.get(rid, {}).get('count', 0) > 0` 추가.
+
+- **`get_history()` 차트 bars가 항상 현재가에서 역산되어 과거가 미래와 불일치** (`stock_service.py:311-329`): `get_history()`는 `_prices[symbol]`의 현재가(`current`)를 출발점으로 역방향 랜덤워크를 생성함. 같은 종목을 짧은 시간 안에 두 번 조회하면 캐시 히트로 동일 데이터가 오지만, 가격이 변동돼 캐시가 무효화(`app.py:209-211`)된 후 재조회하면 전혀 다른 역사 데이터가 생성됨. 학생이 "1개월 차트" 탭과 "1년 차트" 탭을 번갈아 볼 때 연속성 없는 차트가 표시되어 혼란을 줄 수 있음. `StockService.__init__()` 시점에 각 종목의 역사 데이터를 한 번 생성해 `_history_seed`로 저장하고, `get_history()`는 이를 슬라이스·리샘플링하는 방식으로 변경하면 차트 일관성 확보 가능. `stock_service.py:143-149` `_init_prices()`와 함께 초기화 로직 약 20줄 추가.
+
+---
+
 ## 2026-08-21
 
 ### 추가하면 좋을 기능
