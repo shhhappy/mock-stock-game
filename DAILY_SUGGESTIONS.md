@@ -4676,3 +4676,35 @@
 - **`room_dict()` 내 `RoomMember.query.count()` 매 호출마다 실행** (`app.py:416`): `member_count = RoomMember.query.filter_by(room_id=room.id).count()`가 `room_dict()` 내부에서 직접 실행. `_get_room_cached()`(app.py:72-85)의 1.5초 TTL 캐시로 어느 정도 보호되나, `_invalidate_room_cache()` 호출 직후에는 매번 COUNT 쿼리 발생. 호스트가 `force-price`, `market-event`, `send-news` 등을 연속으로 실행하면 무효화-재계산 사이클이 반복됨. `member_count`를 `room_dict()` 파라미터로 분리하거나 별도 5초 캐시로 관리하면 DB 부하 감소.
 
 - **`ROOM_CACHE_TTL`·`NEWS_CACHE_TTL` 상수가 분산 정의** (`app.py:66`, `app.py:89`): `ROOM_CACHE_TTL = 1.5`(line 66)와 `NEWS_CACHE_TTL = 2.0`(line 89)이 각각 별도 상수로 파일 상단에 흩어져 있음. 성능 튜닝 시 두 값을 동시에 조정하려면 두 곳을 찾아야 함. `CACHE_TTLS = {'room': 1.5, 'news': 2.0}`으로 하나의 딕셔너리에 모으거나, Flask `app.config`에 등록해 환경변수로 오버라이드 가능하도록 일원화하면 운영 편의성 향상.
+
+---
+
+## 2026-08-24
+
+### 추가하면 좋을 기능
+
+- **학생 손절/익절 목표가 알림** (`static/js/app.js:1292-1310` `loadMarket()`, `localStorage`): 학생이 종목별 목표 수익률(익절)이나 손절 기준을 미리 설정해두면 해당 조건이 충족됐을 때 토스트 알림을 표시. `localStorage`에 `watchTargets: {symbol: {takeProfit: 10, stopLoss: -5}}` 형태로 저장하고, `loadMarket()` 폴링(`app.js:1297`)에서 보유 종목 현재 수익률(`(currentPrice - avgPrice)/avgPrice*100`)과 비교해 임계값 초과 시 `toast('삼성전자 +10.5% — 익절 목표 초과! 매도 고려', 'warn')` 표시. 종목 모달 하단에 "알림 목표가 설정" 토글 + 입력 UI 추가. 서버 변경 불필요, 클라이언트 약 30줄 + 설정 UI 20줄. "언제 팔아야 하는가" 매도 타이밍 판단을 직접 체험하는 교육 효과.
+
+- **진행자 특정 종목 보유자 실시간 목록** (`app.py` 신규 `GET /api/rooms/<rid>/host/stock-holders/<symbol>`): 진행자가 시장 탭에서 종목 카드를 볼 때 "이 종목을 보유한 학생이 누구인가"를 알 방법이 없음. `RoomHolding.query.filter_by(room_id=rid, symbol=symbol).all()`과 user_map 및 `svc.get_price(symbol)` 결합해 `[{username, shares, avg_price, gain_pct}]` 배열 반환. 진행자 시장 탭 종목 카드 클릭 시 "삼성전자 보유자 5명 — 김철수(100주, +12.3%), 이영희(50주, -3.1%)..." 슬라이드 패널 표시. 기존 "히트맵(집중도 집계)"과 달리 개인별 이름이 노출되어 "이 뉴스로 이익 보는 학생 vs 손해 보는 학생을 호명" 수업 연출에 즉활용 가능. 서버 약 15줄, 클라이언트 패널 렌더 약 25줄.
+
+- **뉴스 이벤트 이력 조회** (`stock_service.py:130-135` `__init__`, `app.py` 신규 `GET /api/rooms/<rid>/news/history`): `StockService._news`는 최신 1건만 유지해 학생이 8초 뉴스 폴링 주기를 놓치면 해당 뉴스를 확인할 방법이 없음. `__init__`에 `self._news_history: list = []`를 추가하고 `_generate_news()`(`stock_service.py:163`)에서 직전 뉴스를 `self._news_history.append(dict(self._news))` 후 `del self._news_history[:-10]`으로 최대 10건 관리. `GET /api/rooms/<rid>/news/history` 엔드포인트로 시장 탭 "📰 이전 뉴스" 버튼에서 과거 뉴스를 타임라인 형태로 조회. 뉴스 발생 이후 가격 변동을 소급해 이해하는 교육 포인트(ex: "아까 반도체 하락 뉴스 때 왜 삼성전자가 떨어졌는지 확인해 보세요"). 서버 약 10줄, 클라이언트 모달 약 20줄.
+
+- **진행자 방 참가 코드 긴급 갱신** (`app.py` 신규 `PATCH /api/rooms/<rid>/code`, `app.js` 로비 화면): 수업 중 코드가 외부에 유출되거나 타 학급 학생이 진입했을 때 코드를 즉시 변경할 수단이 없음. `PATCH /api/rooms/<rid>/code` 엔드포인트에서 진행자 권한 확인 후 `room.code = gen_code(); db.session.commit(); _invalidate_room_cache(rid)`로 신규 코드 배정. 대기(waiting) 상태에서만 허용(게임 진행 중 코드 변경은 학생 재입장 이슈를 유발). 로비 화면 코드 표시 옆 🔄 버튼 추가, 클릭 시 "새 코드 XYZABC로 변경됨. QR코드를 갱신하세요" 경고 토스트 + QR 자동 갱신. 서버 약 10줄, 클라이언트 약 15줄.
+
+- **게임 종료 시 개인 성과 인터스티셜 팝업** (`app.js` 결과 화면 전환 로직, `app.py:659-677` `end_room()`): 현재 게임 종료 시 `screen-results` 또는 `screen-waiting-results`로 즉시 전환해 학생이 최종 결과를 갑작스럽게 맞이함. 전환 직전 3~5초간 "🎉 게임 종료! 최종 3위 / 총 수익률 +18.3% / 삼성전자 150주 자동 청산" 인터스티셜 오버레이를 표시하면 결과를 자연스럽게 인지. `loadResults()` 호출 전에 `get_portfolio()` 응답으로 청산 직전 보유 종목을 가져와 팝업에 렌더링. 서버 변경 불필요, 클라이언트 오버레이 렌더 약 25줄 + setTimeout 전환 약 5줄.
+
+- **진행자 학생 실시간 퀴즈 참여 배지** (`app.py` 신규 `GET /api/rooms/<rid>/host/quiz-live`, `_quiz_state`): `_quiz_settings`(`app.py:1493`)과 `_quiz_history`(`app.py:1430`)로 설정·이력은 관리되지만, 진행자가 "지금 이 순간 몇 명이 퀴즈를 푸는 중인가"를 알 수 없음. `_quiz_state` 딕셔너리를 순회해 현재 `rid`에서 `qid is not None`(풀이 중)인 학생 수, `cooldown_until > time.time()`(쿨다운 대기)인 학생 수를 반환. 진행자 순위 탭 제목 옆에 "📝 풀이중 12 / 쿨다운 5" 배지를 10초마다 갱신. 기존 `quiz-stats`(누적 정답률 집계)와 달리 현재 상태 스냅샷으로 즉각 개입 타이밍 결정에 활용. 서버 약 10줄, 클라이언트 배지 약 10줄.
+
+### 제거/단순화할 것들
+
+- **`create_room()` 코드 충돌 시 `IntegrityError` 미처리** (`models.py:8-13`, `app.py:519-521`): `gen_code()`는 10회 재시도 후에도 충돌하면 중복 코드를 반환하며, `create_room()`의 `db.session.commit()`(`app.py:520`)에 `IntegrityError` 처리가 없어 DB unique 제약 위반 시 500 오류가 반환됨. `join_room()`(`app.py:536`)은 동일 상황을 `except IntegrityError: db.session.rollback()`으로 처리하지만 `create_room()`에는 누락. 활성 방이 많은 운영 환경에서 진행자가 방 생성에 실패할 수 있음. `db.session.commit()` 주변을 `try/except IntegrityError: db.session.rollback(); return jsonify({'error': '방 코드 생성 오류, 재시도해 주세요.'}), 400`으로 감싸면 해결. 5줄 수정.
+
+- **`get_room()` 내 `cur_user()` 3번 중복 호출** (`app.py:571, 576, 613`): `cur_user()`는 `db.session.get(User, session['user_id'])`로 DB를 매번 조회함에도 `get_room()` 단일 핸들러 내에서 `app.py:571`, `576`, `613`에서 최소 3회 독립적으로 호출됨. 요청마다 동일 User 레코드를 최대 3회 불필요 조회. 핸들러 상단(`app.py:568` 직후)에 `user = cur_user()` 한 줄을 두고 이후 `cur_user().id` → `user.id`로 치환하면 DB 쿼리 2회 절감. 5줄 수정, 기능 변화 없음.
+
+- **`lottery_draw()` 에서 `_do_reveal()` 락 없이 직접 호출 — 이중 지급 위험** (`app.py:1293-1315`): `get_lottery()`(`app.py:1231`)는 `with _lottery_lock:` 블록 안에서 `_do_reveal(rid, cur)`를 호출하지만, 진행자 전용 `lottery_draw()` (`app.py:1314`)는 `_lottery_lock` 없이 직접 호출함. 진행자가 추첨 버튼을 빠르게 2회 클릭하거나 자동 타임아웃(get_lottery 경로)과 수동 추첨이 동시에 경쟁하면 `_do_reveal()`이 이중 실행되어 `m.cash += prize`가 2번 적용될 수 있음. `app.py:1314` 직전에 `with _lottery_lock:` 블록을 추가하고 진입 직후 `if cur.get('state') == 'revealed': return jsonify({'error': '이미 추첨됨'}), 400` 가드를 삽입. 3줄 추가.
+
+- **`minigame_spin()` 함수 바디 내 `import math` 중복** (`app.py:1155`): `app.py:6`에 `import os, threading, math, re`로 `math`가 이미 최상단에 임포트되어 있음에도 `minigame_spin()` 함수 중간(`app.py:1155`)에 `import math`가 재선언됨. Python은 실행마다 캐시를 사용해 성능 영향은 없지만 PEP8 위반이며 코드 리뷰 시 "왜 여기서 다시 임포트하지?"라는 혼동 유발. `app.py:1155`의 `import math` 한 줄 삭제로 해결. 기능 변화 없음.
+
+- **`start_room()` 참가자 0명 방 시작 미검증** (`app.py:615-628`): `start_room()`이 참가자 수를 확인하지 않아 진행자 혼자인 방에서도 게임이 시작됨. `_auto_start_lottery_if_due()`의 복권 기본 상금 계산(`app.py:551`): `default_prize = member_count * 30_000_000`에서 `member_count = 0`이면 상금이 0원이 되어 복권 당첨자에게 0원이 지급되는 비정상 동작 발생. `start_room()`의 권한 체크 직후(`app.py:622` 이후)에 `if not RoomMember.query.filter_by(room_id=rid).count(): return jsonify({'error': '참여자가 없으면 게임을 시작할 수 없습니다.'}), 400` 1줄 추가로 방지 가능. UI에서도 참가자 0명 시 "게임 시작" 버튼 비활성화 처리 권장.
+
+- **`_lot_round_due()` 매 `room_dict()` 호출마다 반복 연산** (`app.py:419`, `app.py:290-318`): `room_dict()` 내 `'lottery_round_due': _lot_round_due(room, remaining, total_s) if room.status == 'active' else None`이 매 호출 시 실행됨. `_lot_round_due()`는 DB 접근 없이 순수 연산이지만, 6단계 조건 분기와 `_lots.get(rid)` 딕셔너리 조회가 포함됨. `_get_room_cached()` 1.5초 TTL이 보호하지만, `_invalidate_room_cache()` 직후 첫 요청마다 즉시 재실행됨. `room_dict()` 반환값에 포함된 `lottery_round_due`를 `_room_cache` 항목과 함께 캐시하거나, 별도 5초 TTL 캐시로 결과를 메모이즈해 연속 이벤트(force-price, market-event 연속 발동) 시 반복 계산을 줄이면 CPU 효율 개선.
