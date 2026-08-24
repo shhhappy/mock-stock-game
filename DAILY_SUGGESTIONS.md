@@ -4650,3 +4650,29 @@
 - **`room_dict()` 내 매 호출마다 `member_count` COUNT 쿼리 발생** (`app.py:416`): `RoomMember.query.filter_by(room_id=room.id).count()`가 `room_dict()` 호출 시마다 실행. `_get_room_cached()`(app.py:72-85)의 1.5초 TTL 캐시로 보호되지만, 호스트가 `force_price`, `market_event`, `send_news` 등을 실행할 때마다 `_invalidate_room_cache()` 후 `room_dict()` 재실행. 수업 시간 30분 중 진행자가 빈번히 조작하면 COUNT 쿼리가 수십 번 발생. `member_count`를 `room_dict()` 외부에서 미리 계산해 파라미터로 전달하거나, 멤버 수 전용 캐시(TTL 5초)를 별도로 두는 방식으로 쿼리 횟수를 줄일 수 있음.
 
 - **`_quiz_state` 딕셔너리 `seen` 집합 업데이트 스레드 안전성 없음** (`app.py:1365-1376` `get_quiz()`, `app.py:1423-1424` `submit_quiz()`): `seen = state.get('seen', set()); seen.add(q['id']); _quiz_state[key] = {..., 'seen': seen}` 패턴이 `_member_locks`(거래용 뮤텍스) 보호 밖에서 이루어짐. Gunicorn 멀티스레드 워커(동일 프로세스 내 여러 스레드)에서 동시 퀴즈 요청이 들어오면 `seen` 집합 업데이트가 유실되어 동일 문제가 두 번 출제될 수 있음. `_quiz_state` 전용 `threading.Lock()`을 추가하거나, 기존 `_get_member_lock(rid, uid)` 안에서 `_quiz_state` 업데이트를 수행하도록 묶어야 일관성이 보장됨. 멀티프로세스(workers>1) 배포에서는 인메모리 상태 분리가 근본 문제이므로 Redis 등 공유 저장소 검토 필요.
+
+## 2026-08-24
+
+### 추가하면 좋을 기능
+
+- **게임 종료 청산 내역 `RoomTransaction` 기록** (`app.py:258-266` `_end_room()`): 게임 종료 시 `_end_room()`은 모든 보유 주식을 현재가로 청산해 `m.cash`에 더하고 `db.session.delete(h)`로 `RoomHolding`을 삭제함. 그러나 이 청산 거래를 `RoomTransaction`으로 남기지 않아(`app.py:260-266` 루프에 `db.session.add(RoomTransaction(...))` 없음) 참가자가 게임 종료 후 거래 내역 탭에서 "어떤 종목이 얼마에 자동 청산됐는지" 확인 불가. 루프 안에 `db.session.add(RoomTransaction(room_id=room.id, user_id=h.user_id, symbol=h.symbol, action='SELL', shares=h.shares, price=price, amount=price*h.shares, note='게임 종료 자동 청산'))` 약 8줄 추가로 해결. 사후 반성학습에 직결.
+
+- **퀴즈 집계 엔드포인트 — 진행자용 오답 분석** (`app.py:1430-1436` `get_quiz_history()`, `app.py:1353-1355` `_quiz_history`): `_quiz_history[(rid, uid)]`에 각 참가자의 퀴즈 이력이 이미 저장되어 있으나, 진행자가 전체 학생의 정답률·오답 빈도 TOP5를 볼 수 있는 엔드포인트가 없음. `GET /api/rooms/<rid>/host/quiz-stats`를 추가해 `_quiz_history` 딕셔너리를 집계(`correct` 필드 카운팅)하면, 교사가 학생들이 가장 틀린 개념을 실시간으로 파악해 추가 설명 여부를 즉시 결정 가능. 서버 약 15줄, 기존 데이터 재활용.
+
+- **섹터별 포트폴리오 비중 파이 요약** (`app.py:907-938` `get_portfolio()`, `stock_service.py:36-119` `STOCKS`): `get_portfolio()` 응답의 `holdings` 배열에 이미 `sector` 필드가 포함되어 있음(`app.py:925`). 클라이언트에서 이를 섹터별로 집계해 간단한 텍스트 비중 목록("반도체 45% / 배터리 30% / …")을 포트폴리오 탭 상단에 렌더링하면 학생이 분산투자 여부를 한눈에 파악 가능. API 추가 없음, 클라이언트 약 15줄.
+
+- **게임 종료 카운트다운 배너 참가자 화면 표시** (`app.py:667-675` `end_room()`, `app.py:124` `_ending_soon`): 진행자가 조기 종료를 누르면 `room.end_time`을 60초 후로 단축하고 `_ending_soon.add(rid)`를 설정. `room_dict()`의 `ending_soon` 필드(`app.py:423`)로 이 상태가 반환되지만, 프론트엔드의 참가자 뷰에서 `ending_soon` 값을 받아 빨간 배너 "⏱ 1분 후 게임이 종료됩니다!"를 표시하는 처리가 있는지 확인 필요. 없다면 클라이언트 폴링 응답 처리(`room.ending_soon`을 체크해 배너 표시) 약 5줄 추가로 학생의 마지막 거래 기회 인지도 향상.
+
+- **주식 상세 차트에 현재 보유 수량·평균 단가 오버레이** (`app.py:843-852` `get_chart()`, `app.py:907-938` `get_portfolio()`): 차트 조회(`get_chart()`)와 포트폴리오(`get_portfolio()`)는 별개 API로 분리되어 있음. 학생이 특정 종목 차트를 열었을 때 "현재 보유: 10주 / 평균단가: 185,000원 / 평가손익: +12%" 정보를 차트 하단에 인라인으로 함께 표시하면 "언제 팔지" 판단을 돕는 교육적 흐름 완성. 클라이언트에서 이미 갖고 있는 `holdings` 배열을 차트 모달 오픈 시 조회해 `symbol`로 매칭하면 API 호출 추가 없이 해결 가능.
+
+### 제거/단순화할 것들
+
+- **`_end_room()` 인메모리 정리 목록이 수동 관리** (`app.py:269-280`): `_end_room()`에서 `_lots`, `_rlt_active`, `_quiz_settings`, `_roulette_config`, `_quiz_state`, `_quiz_history`, `_member_locks` 7개 전역 딕셔너리를 개별 `pop()` 또는 키 순회로 정리. 새 전역 딕셔너리가 추가될 때 이 목록도 수동 업데이트해야 해 누락 위험이 높음. 예를 들어 `_ROOM_SIMPLE_CACHES = [_lots, _rlt_active, _quiz_settings, _roulette_config]` 리스트를 모듈 레벨에 선언하고 `for c in _ROOM_SIMPLE_CACHES: c.pop(rid, None)` 한 줄로 대체하면, 딕셔너리 추가 시 목록에만 등록하면 되어 유지보수성 향상.
+
+- **`get_history()` 가격 업데이트마다 차트 전체 재생성 — 학습 추세 파악 불가** (`stock_service.py:196-212` `get_price()`, `stock_service.py:303-332` `get_history()`): `get_price()`에서 새 가격이 생성될 때 `for key in list(self._history_cache.keys()): if key[0] == symbol: del self._history_cache[key]`(stock_service.py:209-211)로 차트 캐시를 무효화하고, `get_history()`는 매번 완전히 새로운 랜덤 OHLCV를 생성. 즉 20초(PRICE_TTL)마다 차트 이력이 새로 그려져 학생이 과거 움직임을 기억하고 추세를 읽을 수 없음. 히스토리 배열을 `StockService.__init__`에서 미리 초기화하고 가격 변경 시 마지막 바의 `close`만 갱신하는 방식으로 수정하면, 차트가 일관된 누적 이력을 보여줌. 구조 변경이 필요하지만 교육 효과 측면에서 체감 개선이 큼.
+
+- **`host_force_price()`에서 `pct == 0` 미검증** (`app.py:815`): `if not symbol or abs(pct) > 50:` 조건에서 `pct == 0`을 허용하므로 진행자가 0% 변동률을 입력하면 가격은 그대로이지만 `force_price()`를 통해 불필요한 뉴스가 생성됨(`stock_service.py:256-262`). `host_market_event()`(`app.py:1449`)는 동일 상황을 `'변동률은 ±1 ~ ±50% 사이'` 에러로 처리하는 반면, `host_force_price()`만 누락. `if not symbol or pct == 0 or abs(pct) > 50:` 으로 1줄 수정해 두 엔드포인트를 통일.
+
+- **`room_dict()` 내 `RoomMember.query.count()` 매 호출마다 실행** (`app.py:416`): `member_count = RoomMember.query.filter_by(room_id=room.id).count()`가 `room_dict()` 내부에서 직접 실행. `_get_room_cached()`(app.py:72-85)의 1.5초 TTL 캐시로 어느 정도 보호되나, `_invalidate_room_cache()` 호출 직후에는 매번 COUNT 쿼리 발생. 호스트가 `force-price`, `market-event`, `send-news` 등을 연속으로 실행하면 무효화-재계산 사이클이 반복됨. `member_count`를 `room_dict()` 파라미터로 분리하거나 별도 5초 캐시로 관리하면 DB 부하 감소.
+
+- **`ROOM_CACHE_TTL`·`NEWS_CACHE_TTL` 상수가 분산 정의** (`app.py:66`, `app.py:89`): `ROOM_CACHE_TTL = 1.5`(line 66)와 `NEWS_CACHE_TTL = 2.0`(line 89)이 각각 별도 상수로 파일 상단에 흩어져 있음. 성능 튜닝 시 두 값을 동시에 조정하려면 두 곳을 찾아야 함. `CACHE_TTLS = {'room': 1.5, 'news': 2.0}`으로 하나의 딕셔너리에 모으거나, Flask `app.config`에 등록해 환경변수로 오버라이드 가능하도록 일원화하면 운영 편의성 향상.
