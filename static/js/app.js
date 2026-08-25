@@ -177,7 +177,7 @@ async function doJoinRoom() {
   const name = document.getElementById('join-name').value.trim();
   const err  = document.getElementById('join-err');
   err.textContent = '';
-  if (code.length !== 6) { err.textContent = '6자리 코드를 입력하세요.'; return; }
+  if (code.length < 4 || code.length > 6) { err.textContent = '4~6자리 코드를 입력하세요.'; return; }
   if (!sid)  { err.textContent = '학번을 입력하세요.'; return; }
   if (!name) { err.textContent = '이름을 입력하세요.'; return; }
   try {
