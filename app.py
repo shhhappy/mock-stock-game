@@ -679,6 +679,37 @@ def end_room(rid):
 
 # ── Host endpoints ────────────────────────────────────────
 
+@app.route('/api/rooms/<int:rid>/host/adjust-time', methods=['POST'])
+@login_required
+def host_adjust_time(rid):
+    """진행자가 설정 탭에서 남은 시간을 즉석으로 늘리거나 줄인다 (분 단위, 음수 가능)."""
+    room = Room.query.get_or_404(rid)
+    user = cur_user()
+    if room.host_id != user.id: return jsonify({'error': '권한 없음'}), 403
+    if room.status not in ('active', 'paused'):
+        return jsonify({'error': '게임이 진행 중일 때만 시간을 조정할 수 있습니다.'}), 400
+    if not room.end_time:
+        return jsonify({'error': '게임 종료 시각이 없습니다.'}), 400
+    try:
+        delta_minutes = float((request.json or {}).get('delta_minutes', 0))
+    except (TypeError, ValueError):
+        return jsonify({'error': '숫자를 입력하세요.'}), 400
+    if not math.isfinite(delta_minutes) or delta_minutes == 0:
+        return jsonify({'error': '0이 아닌 숫자를 입력하세요.'}), 400
+    now = datetime.utcnow()
+    ref = room.paused_at if (room.status == 'paused' and room.paused_at) else now
+    new_end = room.end_time + timedelta(minutes=delta_minutes)
+    # 최소 10초는 남기고 줄이기 — 아예 끝내려면 "게임 종료" 버튼을 쓰도록 유도
+    floor_time = ref + timedelta(seconds=10)
+    if new_end < floor_time:
+        new_end = floor_time
+    room.end_time = new_end
+    db.session.commit()
+    _invalidate_room_cache(rid)
+    remaining = max(0, int((room.end_time - ref).total_seconds()))
+    return jsonify({'ok': True, 'remaining_seconds': remaining,
+                    'end_time': room.end_time.strftime('%Y-%m-%dT%H:%M:%SZ')})
+
 @app.route('/api/rooms/<int:rid>/host/members')
 @login_required
 def host_members(rid):

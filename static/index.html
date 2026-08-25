@@ -222,6 +222,21 @@
     <button class="btn btn-secondary btn-full btn-sm" onclick="openManualLotteryModal()" style="margin-bottom:12px">🎟 복권 지금 시작하기</button>
 
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px">
+      <div class="section-title" style="margin-bottom:12px">⏰ 남은 시간 조정</div>
+      <div style="display:flex;gap:6px;margin-bottom:10px">
+        <button class="btn btn-secondary btn-sm" style="flex:1" onclick="doAdjustTime(-10)">-10분</button>
+        <button class="btn btn-secondary btn-sm" style="flex:1" onclick="doAdjustTime(-5)">-5분</button>
+        <button class="btn btn-secondary btn-sm" style="flex:1" onclick="doAdjustTime(5)">+5분</button>
+        <button class="btn btn-secondary btn-sm" style="flex:1" onclick="doAdjustTime(10)">+10분</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <input id="time-adjust-input" class="form-input" type="number" step="1" placeholder="직접 입력 (분, 음수 가능)" style="flex:1">
+        <button class="btn btn-primary btn-sm" onclick="doAdjustTimeCustom()">적용</button>
+      </div>
+      <div id="time-adjust-msg" style="font-size:12px;color:var(--muted);margin-top:6px"></div>
+    </div>
+
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px">
       <div class="section-title" style="margin-bottom:12px">⏱ 주기 설정</div>
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
         <span style="font-size:13px;min-width:72px">💣 폭탄뉴스</span>
@@ -1003,6 +1018,6 @@
 <div class="toast-container" id="toasts"></div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
-<script src="/static/js/app.js?v=17"></script>
+<script src="/static/js/app.js?v=18"></script>
 </body>
 </html>

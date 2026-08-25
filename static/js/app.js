@@ -337,6 +337,30 @@ async function doPauseGame() {
   updatePauseBtn();
 }
 
+async function doAdjustTime(deltaMinutes) {
+  const msg = document.getElementById('time-adjust-msg');
+  const data = await api.post(`/api/rooms/${S.room.id}/host/adjust-time`, {delta_minutes: deltaMinutes});
+  if (data.error) { msg.style.color = 'var(--down)'; msg.textContent = data.error; return; }
+  S.room.end_time = data.end_time;
+  S.room.remaining_seconds = data.remaining_seconds;
+  const sign = deltaMinutes > 0 ? '+' : '';
+  msg.style.color = 'var(--up)';
+  msg.textContent = `적용됨 (${sign}${deltaMinutes}분) · 남은 시간 ${Math.floor(data.remaining_seconds/60)}분 ${data.remaining_seconds%60}초`;
+  toast(`남은 시간 ${sign}${deltaMinutes}분 조정됨`, 'success');
+}
+
+function doAdjustTimeCustom() {
+  const input = document.getElementById('time-adjust-input');
+  const val = parseFloat(input.value);
+  if (!val || !isFinite(val)) {
+    document.getElementById('time-adjust-msg').style.color = 'var(--down)';
+    document.getElementById('time-adjust-msg').textContent = '0이 아닌 숫자를 입력하세요.';
+    return;
+  }
+  doAdjustTime(val);
+  input.value = '';
+}
+
 function switchHostTab(tab) {
   S.hostTab = tab;
   document.getElementById('htab-rank').classList.toggle('active', tab === 'rank');
