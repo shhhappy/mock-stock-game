@@ -4708,3 +4708,28 @@
 - **`start_room()` 참가자 0명 방 시작 미검증** (`app.py:615-628`): `start_room()`이 참가자 수를 확인하지 않아 진행자 혼자인 방에서도 게임이 시작됨. `_auto_start_lottery_if_due()`의 복권 기본 상금 계산(`app.py:551`): `default_prize = member_count * 30_000_000`에서 `member_count = 0`이면 상금이 0원이 되어 복권 당첨자에게 0원이 지급되는 비정상 동작 발생. `start_room()`의 권한 체크 직후(`app.py:622` 이후)에 `if not RoomMember.query.filter_by(room_id=rid).count(): return jsonify({'error': '참여자가 없으면 게임을 시작할 수 없습니다.'}), 400` 1줄 추가로 방지 가능. UI에서도 참가자 0명 시 "게임 시작" 버튼 비활성화 처리 권장.
 
 - **`_lot_round_due()` 매 `room_dict()` 호출마다 반복 연산** (`app.py:419`, `app.py:290-318`): `room_dict()` 내 `'lottery_round_due': _lot_round_due(room, remaining, total_s) if room.status == 'active' else None`이 매 호출 시 실행됨. `_lot_round_due()`는 DB 접근 없이 순수 연산이지만, 6단계 조건 분기와 `_lots.get(rid)` 딕셔너리 조회가 포함됨. `_get_room_cached()` 1.5초 TTL이 보호하지만, `_invalidate_room_cache()` 직후 첫 요청마다 즉시 재실행됨. `room_dict()` 반환값에 포함된 `lottery_round_due`를 `_room_cache` 항목과 함께 캐시하거나, 별도 5초 TTL 캐시로 결과를 메모이즈해 연속 이벤트(force-price, market-event 연속 발동) 시 반복 계산을 줄이면 CPU 효율 개선.
+
+## 2026-08-25
+
+### 추가하면 좋을 기능
+
+- **진행자 실시간 "전체 자산 스냅샷" 경고 대시보드** (`app.py:158-186` `_compute_leaderboard()`, `static/index.html` 진행자 탭): 현재 진행자는 순위표만 볼 수 있고 "현금 비중이 90% 이상인 학생(아무것도 안 사고 있는 학생)"이나 "총자산이 시작 자산의 50% 미만으로 급락한 학생"을 즉시 파악하는 수단이 없음. `_compute_leaderboard()` 응답에 `'cash_ratio': round(m.cash / total * 100, 1)`, `'gain_pct': ...` 이미 있는 필드를 활용해 진행자 랭킹 뷰 상단에 "📊 현금 90%+ (미참여 의심): 홍길동, 이철수" 요약 배너를 렌더링. 서버 변경 불필요(필드 이미 있음), 클라이언트 필터 표시 약 15줄.
+
+- **학생 "시장 뉴스 영향 힌트 강도" 설정 UI** (`app.py:763-779` `host_news_interval()`, `stock_service.py:163-180` `_generate_news()`): 현재 뉴스 발생 주기(`news_seconds`)와 주가 갱신 주기(`price_seconds`)는 진행자가 변경 가능하지만, "방향 힌트 표시 여부"(`show_hint`)는 `host_send_news()` 수동 트리거에만 파라미터로 존재. 정기 자동 뉴스에서는 `StockService._show_hint`가 기본 `True`로 고정됨(`stock_service.py:135`). 진행자 설정 패널에 "뉴스 힌트 표시" 토글을 추가하고, `host_news_interval()` POST에 `show_hint` 필드를 받아 `svc._show_hint`를 업데이트하는 3줄 추가. 심화반에는 힌트 없이 스스로 판단하게 하여 난이도 조절 가능.
+
+- **참여자 "섹터 수익률 비교" 탭** (`app.py:907-938` `get_portfolio()`, `static/js/app.js` 포트폴리오 렌더링): 학생들이 자기 포트폴리오를 볼 때 종목별 손익만 보이고 섹터별 집계가 없어 "IT 섹터에 70% 투자했구나" 같은 분산 여부를 직관적으로 인식하기 어려움. `get_portfolio()` 응답에 `sector_summary: {sector: {value, gain_pct, weight_pct}}` 집계를 추가(holdings 루프에서 `STOCKS.get(h.symbol, {}).get('sector')` 키로 합산). 포트폴리오 탭 하단에 섹터 비중 가로 막대 차트(CSS 막대, 외부 라이브러리 불필요) 표시. 서버 약 10줄, 클라이언트 약 20줄.
+
+- **게임 종료 후 "결과 공개" 이전 학생에게 "결과 대기 중" 안내 화면** (`app.py:1480-1490` `host_publish_results()`, `static/js/app.js` 방 상태 처리): 게임이 `ended`가 되면 학생 화면은 단순히 "게임이 종료되었습니다" 메시지로 빠져나가는데, 진행자가 결과를 집계 후 `results_published=True`로 바꿀 때까지 학생들은 손익을 모름. 방 상태 `ended + results_published=False`일 때 학생 화면에 "🎯 게임 종료! 진행자가 최종 순위를 발표할 예정입니다. 잠시 기다려 주세요." 대기 화면을 표시하고, `results_published=True`가 되면(폴링 3초 간격) 자동으로 최종 순위 화면으로 전환. 서버 변경 불필요(`results_published` 필드 이미 전송 중, `room_dict()` `app.py:397-424`), 클라이언트 상태 분기 약 15줄.
+
+- **복권 "당첨 번호 애니메이션" 진행 상황 폴링** (`app.py:1222-1255` `get_lottery()`, `static/js/app.js` 복권 UI): 복권 `drawing` → `revealed` 전환이 서버에서 타임아웃으로 자동 처리되지만, 학생이 폴링 중 `state='drawing'`인 동안 "진행자가 당첨 번호를 입력 중..." 텍스트만 표시됨. `get_lottery()` 응답에 `draw_deadline` 필드(이미 `cur.get('draw_dl')` 전송 중)를 활용해 클라이언트에서 카운트다운(초)을 화면에 표시하면 학생들이 긴장감을 유지하며 기다릴 수 있음. 서버 변경 불필요, 클라이언트 `draw_deadline` 파싱 + 카운트다운 렌더링 약 10줄.
+
+### 제거/단순화할 것들
+
+- **`minigame_spin()` 에서 `_get_member_lock` 미획득 (어제 지적 미해결 확인)** (`app.py:1135-1181`): 어제(2026-08-24) 이미 지적했으나 코드에서 수정 없음을 재확인. `m.cash = m.cash - bet + winnings` (`app.py:1171`) 변경이 `with _get_member_lock(rid, user.id):` 블록 없이 실행되어 동시 매도/룰렛 요청 시 현금 lost-update 위험. `trade()` (`app.py:879`), `submit_quiz()` (`app.py:1403`)와 동일한 패턴으로 `spins_used` COUNT (`app.py:1148`)부터 `db.session.commit()` (`app.py:1175`)까지를 락으로 감싸고 `db.session.refresh(m)` 추가. 이 버그는 학생들이 동시에 거래를 몰아치는 실제 수업 환경에서 재현되기 쉬움.
+
+- **`_lot_round_due()` 의 매 폴링 호출 시 날짜 계산 반복** (`app.py:290-318` `_lot_round_due()`, `app.py:419` `room_dict()`): `room_dict()`는 GET `/api/rooms/<rid>` 응답마다(학생 1인당 약 3초 간격 폴링) 호출되고, 내부에서 `_lot_round_due()`를 실행. `_lot_round_due()`는 단순 부동소수 비교이지만 `_lots` 딕셔너리 접근과 복권 회차별 비교를 매번 수행. 복권이 진행 중이 아닌 경우에는 `lot.get('current') and lot['current']['state'] in ('picking', 'drawing')` 조건이 이미 early-return하므로 문제 없으나, 학생 30명 × 폴링 3초 = 초당 10회 호출이 지속됨. `room_dict()` 내 `_lot_round_due` 호출 결과를 `_room_cache` TTL(1.5초, `app.py:66`)이 이미 흡수하고 있어 실질 impact는 낮지만, `ROOM_CACHE_TTL`이 `LOTTO_PICK_SECS`(60초)에 비해 매우 짧아 캐시 효용이 제한적. `ROOM_CACHE_TTL`을 3~5초로 늘리면 폴링 부하를 절반 이하로 줄일 수 있음(`app.py:66`).
+
+- **`_end_room()` 에서 `room.code = None` 후 `db.session.commit()` 위치** (`app.py:231-282`): `_end_room()` 내에서 `room.code = None` (`app.py:238`) 이후 예금 이자 정산, 보유주식 청산 루프, `db.session.delete(h)` 등을 거쳐 마지막에 `db.session.commit()` (`app.py:267`)이 한 번만 있음. 청산 루프 도중 예외 발생 시 `room.code=None`은 이미 세션에 쌓였지만 commit되지 않아 rollback 시 원상복구됨 — 이 자체는 올바른 동작. 다만 루프 내 `db.session.delete(h)` 후 `db.session.commit()` (`app.py:267`)만으로 보유주식 삭제가 함께 커밋되어 이후 `cleanup_room_service(room.id)` 호출 시 이미 `_end_room`-이후 상태임. 현재 동작에 버그는 없지만 루프 안에 commit이 없다는 점을 `# 일괄 commit (루프 내 개별 commit 없음)` 주석으로 명시해 향후 유지보수 혼선 방지.
+
+- **`gen_code()` 의 충돌 최대 10회 재시도 후 중복 코드 반환 가능성** (`models.py:8-13`): `gen_code()`는 10회 시도 후 포기하고 마지막 생성 코드를 그냥 반환 (`models.py:13`). 이 코드가 이미 사용 중인 방과 충돌하면 DB `unique` 제약으로 `IntegrityError`가 발생해 방 생성이 500으로 실패. 현재는 `(A-Z + 0-9)^6 = 2.17억` 조합 대비 동시 사용 방 수가 극히 적어 사실상 발생하지 않지만, 에러 경로가 불명확함. `create_room()` (`app.py:483-522`)에서 `IntegrityError`를 잡는 `try/except` 블록이 없으므로, `db.session.add(room)` + `db.session.commit()` 구간을 `try: ... except IntegrityError: return jsonify({'error': '코드 생성 실패. 다시 시도해 주세요.'}), 500`으로 감싸는 1개 블록 추가.
+
