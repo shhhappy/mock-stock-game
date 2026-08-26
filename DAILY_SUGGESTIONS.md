@@ -36,6 +36,36 @@
 
 ---
 
+## 2026-08-26
+
+### 추가하면 좋을 기능
+
+- **게임 내 실제 가격 히스토리 기록으로 정확한 차트 표시** (`stock_service.py:143-161`, `stock_service.py:303-332`): `StockService._next_price()`가 20초마다 새 가격을 계산하지만 과거 가격을 저장하지 않음. `get_history()`는 현재 가격에서 역으로 무작위 경로를 생성하므로(`stock_service.py:316-327`) 차트를 열 때마다 완전히 다른 과거 데이터가 그려지는 불일치 발생. 해결: `StockService.__init__()`에 `self._price_history: dict = {sym: [] for sym in STOCKS}` 추가하고, `get_price()` 내부에서 가격이 갱신될 때마다 `(timestamp, new_price)` 튜플을 append(최대 500개 유지). `get_history()`에서 이 실제 히스토리를 우선 반환하고 부족 시만 보간 생성. 게임 내내 주가 변동 히스토리가 정확히 재현되어 "왜 이 시점에 샀어야 했는가"를 수업에서 회고할 수 있음. 서버 약 15줄 수정.
+
+- **퀴즈 정답률 통계 진행자 전용 조회** (`app.py:1384-1467`, `app.py:1461-1467`): `_quiz_history`에 참가자별 퀴즈 응답이 쌓이지만(`app.py:1456-1458`) 진행자가 집계된 통계를 볼 API가 없음. `GET /api/rooms/<rid>/host/quiz-stats` 엔드포인트를 추가해 ① 문제별 정답률(어떤 개념이 학생들에게 어려웠는지), ② 참가자별 정답 횟수 및 획득 보상 합계, ③ 가장 많이 틀린 TOP3 문제와 해설을 반환. 진행자 호스트 탭에 "퀴즈 통계" 버튼으로 노출. 서버 `_quiz_history`를 순회하는 약 20줄 + 클라이언트 통계 표시 약 20줄.
+
+- **진행자 커스텀 텍스트 뉴스 발송** (`app.py:854-865` `host_send_news()`): 현재 뉴스 발송은 `stock_service.py:163-180`의 무작위 템플릿에서만 선택되어 진행자가 수업 맥락에 맞는 이벤트를 직접 연출할 수 없음. `host_send_news()` 요청 바디에 선택적 `headline: str` 필드를 추가하고, 값이 있으면 `svc._news = {'timestamp': time.time(), 'items': [{'headline': headline, 'direction': direction}], 'show_hint': show_hint}`로 직접 설정. "오늘 수업 주제인 금리 인상 뉴스를 직접 입력해 가격 변동을 유도하는" 교육 연출이 가능. 서버 5줄, 클라이언트 텍스트 입력란 1개.
+
+- **참가자 순위 변동 델타(▲▼) 표시** (`app.py:974-982` `get_rankings()`): 현재 순위표는 현재 순위만 반환하고, 이전 조회 대비 몇 계단 오르고 내렸는지 표시되지 않음. 클라이언트 측에서 이전 폴링 결과를 `localStorage`에 저장하고 현재 결과와 비교해 `rank_delta`를 계산하는 약 10줄 로직 추가. 예: 3위→1위 학생에게 "▲2" 초록 뱃지 표시. 서버 변경 불필요. 수업 중 역전 드라마를 시각화해 학생 참여도 상승.
+
+- **게임 종료 후 학생 개인 성과 요약 화면** (`app.py:1511-1521`, `app.py:974-982`): 게임이 끝나고 `results_published=True` 상태에서 학생이 볼 수 있는 개인 성과 요약(최종 순위, 수익률, 가장 많이 거래한 종목, 최고 수익 종목, 복권/룰렛 수익)이 없어 게임 마무리 피드백이 부족함. 기존 `get_portfolio()`와 `get_transactions()`를 조합해 `GET /api/rooms/<rid>/my-summary` 엔드포인트를 추가. 클라이언트에서 game over 화면에 개인 성과 카드 표시. 서버 약 25줄, 클라이언트 약 30줄.
+
+- **진행자 전체 종목 보유 집중도 실시간 조회** (`models.py:57-65`, `app.py:887-933`): 교사가 "지금 삼성전자를 사고 있는 학생이 몇 명인지" 파악할 수 없음. `GET /api/rooms/<rid>/host/holdings-summary` 엔드포인트를 추가해 `RoomHolding.query.filter_by(room_id=rid).all()`로 전체 보유 현황을 집계, `{symbol, name, holder_count, total_shares, total_value}`를 `holder_count` 내림차순으로 반환. 진행자 화면 "시장" 탭에 "학생 보유 TOP10" 섹션 추가. "22명이 삼성전자 집중 보유 → 분산투자 교육 필요" 같은 실시간 수업 포인트 발굴 가능. 서버 약 15줄 + 클라이언트 약 15줄.
+
+### 제거/단순화할 것들
+
+- **`force_price()` 가격 강제 후 `_current_biases` 미갱신 — 다음 틱에서 방향 역전 가능** (`stock_service.py:240-264`): `force_price()`는 `self._news`와 `self._last_news_ts`를 업데이트해 뉴스 헤드라인을 교체하지만, `self._current_biases[symbol]`를 갱신하지 않음. 따라서 강제 가격 인상(pct > 0) 직후 20초 뒤 `get_price()` 첫 호출에서 `_current_biases.get(symbol)`이 이전 방향(예: 'down')을 반환해 가격이 다시 하락할 수 있음. 뉴스(상승)와 가격 움직임(하락)이 반대로 나타나 학생 혼란 유발. 해결: `stock_service.py:263` `return new_price` 직전에 `self._current_biases[symbol] = direction` 1줄 추가.
+
+- **`get_history()` 캐시가 가격 업데이트마다 무효화 — TTL 120초가 사실상 20초** (`stock_service.py:196-212`, `stock_service.py:303-332`): `get_price()`는 가격을 변경할 때마다 해당 종목 모든 차트 캐시를 삭제함(`stock_service.py:209-211`). 가격 TTL이 20초이므로 `HISTORY_CACHE_TTL = 120`이 사실상 20초로 단축됨. 차트 요청마다 `n_bars=30`개 무작위 경로 계산이 재실행되어 학생이 탭을 전환할 때마다 완전히 다른 과거 차트가 보임. 해결: 가격 변경 시 캐시를 무효화하는 대신 캐시된 배열의 마지막 항목(`bars[-1]['close']`)만 현재 가격으로 덮어쓰는 방식으로 일관성 유지. `stock_service.py:207-211` 블록을 tail-update 로직으로 교체.
+
+- **`_ending_soon` 인메모리 집합이 서버 재시작 후 복구 안 됨 — 이중 60초 카운트다운** (`app.py:124`, `app.py:667-676`): 진행자가 게임 종료 버튼을 누르면 `_ending_soon.add(rid)`가 실행되고 `room.end_time = now + 60초`로 DB에 저장됨. Render 무료 티어 슬립→웨이크업 재시작 시 `_ending_soon`이 초기화되어 다음 `end_room()` 요청이 또다시 60초를 추가, `end_time`이 120초 뒤로 밀림. 해결: `app.py:667` 조건을 `rid not in _ending_soon` 기준 대신 `(room.end_time - now).total_seconds() > 60` 기준으로 변경해 DB의 `end_time`으로만 판단하고 `_ending_soon` 집합 의존 제거.
+
+- **`_compute_leaderboard()` 내 `svc.get_price()` 락 반복 획득 — 대형 수업 성능 저하** (`app.py:174-176`, `stock_service.py:196-212`): `_compute_leaderboard()`는 `member_total_value()`를 각 참가자마다 호출하고, 그 안에서 보유 종목별로 `svc.get_price(sym)`을 실행하여 매번 `self._lock`을 획득·해제함. 30명×평균 8종목 보유 시 240회의 잠금 획득이 순차 발생. 해결: `get_price()`의 TTL 로직을 우회해 락 없이 현재 캐시된 가격만 읽는 `get_all_prices() -> dict` 메서드를 `StockService`에 추가하고, `_compute_leaderboard()`에서 가격 딕셔너리를 한 번만 조회해 전 참가자에 재사용. 잠금 획득 240회 → 1회로 단축. `stock_service.py`에 5줄 + `app.py` 호출부 약 10줄 수정.
+
+- **`_quiz_settings` 서버 재시작 시 초기화 — 게임 중 설정한 보상/패널티가 기본값으로 리셋** (`app.py:1385`, `app.py:1427-1429`): `_quiz_settings`는 인메모리 딕셔너리로, Render 무료 티어의 슬립→웨이크업 재시작 시 모든 방의 퀴즈 설정(reward_pct, penalty_pct)이 기본값(1.0%, 0.5%)으로 초기화됨. 교사가 수업 전 설정을 조정했더라도 재시작 이후 퀴즈 보상이 달라져 학생 간 형평성 문제 발생. 해결: `Room` 테이블에 `quiz_reward_pct FLOAT DEFAULT 1.0`, `quiz_penalty_pct FLOAT DEFAULT 0.5` 컬럼 추가(기존 `ALTER TABLE` 패턴 `app.py:51-61` 활용). `_quiz_settings` 딕셔너리를 제거하고 DB 컬럼을 직접 사용.
+
+---
+
 ## 2026-08-24
 
 ### 추가하면 좋을 기능
