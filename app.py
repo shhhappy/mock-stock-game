@@ -27,8 +27,11 @@ if _db_url.startswith('postgres://'):
 app.config['SQLALCHEMY_DATABASE_URI'] = _db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 if _db_url.startswith('postgresql://'):
-    # 유휴 연결이 끊긴 뒤에도 다음 요청에서 에러 대신 자동 재연결되도록
-    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'pool_pre_ping': True, 'pool_size': 10, 'max_overflow': 20}
+    # 유휴 연결이 끊긴 뒤에도 다음 요청에서 에러 대신 자동 재연결되도록.
+    # pool_size+max_overflow(60)는 gunicorn 스레드 수(48)보다 넉넉히 커야 스레드가
+    # 커넥션을 기다리며 대기하는 병목이 안 생김. Render 기본 Postgres 커넥션 한도(97)
+    # 안에서 여유(내부 헬스체크·대시보드 접속 등) 37개를 남겨둔 값.
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'pool_pre_ping': True, 'pool_size': 40, 'max_overflow': 20}
 db.init_app(app)
 
 def _set_sqlite_pragmas(dbapi_conn, _):
