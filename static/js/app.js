@@ -2264,9 +2264,26 @@ function urlBase64ToUint8Array(base64String) {
   return arr;
 }
 
+function _isIOS() {
+  return /iP(hone|od|ad)/.test(navigator.userAgent) ||
+         (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);  // iPadOS는 UA가 Mac으로 위장됨
+}
+
+function _isStandalonePWA() {
+  return window.navigator.standalone === true ||
+         window.matchMedia('(display-mode: standalone)').matches;
+}
+
 async function enablePushNotifications() {
+  if (_isIOS() && !_isStandalonePWA()) {
+    // iOS는 홈 화면에 추가(PWA 설치)하지 않으면 애플 정책상 진짜 푸시가 원천적으로 불가능함
+    // (구독을 시도해봐야 애매한 에러만 뜸) — 대신 화면을 켜두면 1초 타이머의 화면 내
+    // 배너+소리 알림(_checkMinigameAlert)이 설치 없이도 그대로 작동한다고 안내.
+    toast('아이폰은 홈 화면에 추가해야 진짜 알림이 가능해요. 대신 화면을 켜두시면 1분 전 소리 알림은 그대로 받을 수 있어요!', 'info');
+    return;
+  }
   if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
-    toast('이 브라우저/기기는 알림을 지원하지 않습니다. (iOS는 홈 화면에 추가한 뒤 사용 가능)', 'error');
+    toast('이 브라우저/기기는 알림을 지원하지 않습니다.', 'error');
     return;
   }
   // 알림 권한 요청은 클릭 핸들러의 가장 먼저(다른 await 없이) 호출해야 함 — 그 앞에
