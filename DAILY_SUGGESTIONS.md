@@ -4853,3 +4853,34 @@
 - **`_do_reveal()` 에서 당첨금 prize 계산이 하드코딩된 나눗셈 — 교육 의도 불명확** (`app.py:323-343`): `_do_reveal()`의 당첨금 계산식(`app.py:326-332`)이 `round(cur['prize'] / 25)`, `round(cur['prize'] / 18)`, `round(cur['prize'] / 11)` 등 임의의 제수를 사용. 왜 25, 18, 11인지 주석이 없어 유지보수 시 이해하기 어렵고, 수업마다 변경하기도 어려움. 상단에 상수 블록으로 분리: `LOTTO_PRIZE_RATIOS = {6: 1.0, 5: 1/25, 4: 1/18, 3: 1/11, 2: None}` (None은 고정 100,000원)으로 정의하고 반복문으로 처리. 상수 변경만으로 당첨금 구조를 바꿀 수 있어 수업 운영 유연성 향상.
 
 - **`_ending_soon` 집합이 `set()` 전역 변수 — 서버 재시작 후 `room.end_time` 이미 60초 미만인 종료 직전 방 처리 불일치** (`app.py:127`, `app.py:663-679`): `_ending_soon`은 인메모리 `set`이므로 서버 재시작 시 초기화됨. 재시작 전 "60초 카운트다운"이 시작된 방(`room.end_time = now + 60s`로 이미 단축됨)은 재시작 후 `_ending_soon`에 없어 `end_room()` 재호출 시 `if rid not in _ending_soon` 조건을 통과해 `room.end_time`을 다시 60초 뒤로 설정하는 중복 지연이 발생할 수 있음. 해결: `get_room()` 내 자동 종료 로직(`app.py:572-574`) 처럼 `end_room()` 에서도 `room.end_time`이 이미 `now + 60초` 이하면 즉시 `_end_room()` 호출하도록 분기 추가. 약 3줄.
+
+
+## 2026-08-28
+
+### 추가하면 좋을 기능
+
+- **진행자 실시간 공지사항 배너 전송** (`app.py` 신규 `POST /api/rooms/<rid>/host/announce`, `app.py:562-580` `room_dict()`, `static/js/app.js` `pollRoom()`): 교사가 수업 중 "지금부터 매수만 가능합니다", "5분 뒤 퀴즈 이벤트 시작" 같은 지시사항을 학생 화면에 실시간으로 띄울 방법이 없음. `_announcements = {}` (room_id → `{text, ts}`) 인메모리 딕셔너리를 추가하고, `room_dict()`에 `announcement` 필드를 포함. 클라이언트 `pollRoom()` 에서 이전 ts와 비교해 새 공지 감지 시 화면 상단 노란 배너 + `toast()`로 5초 표시. 서버 약 10줄(핸들러 + 딕셔너리 + room_dict 필드 1개), 클라이언트 약 15줄. 교사가 별도 채팅 앱 없이 앱 내에서 학생을 지도할 수 있는 핵심 수업 도구.
+
+- **결과 화면 "순위표 텍스트 복사" 버튼** (`static/js/app.js` 결과 화면 렌더링, `app.py:1769-1836` `export_rankings()`): 게임 종료 후 교사가 순위를 카카오톡·LMS·구글폼에 붙여넣으려면 엑셀 파일을 다운로드→열기→복사하는 3단계가 필요. 결과 화면에 "📋 결과 텍스트 복사" 버튼을 추가해 `navigator.clipboard.writeText('1위 홍길동 +18.3% (21,830,000원)\n2위 이철수 +12.1%...')` 형태로 클립보드에 저장. 서버 변경 불필요, 클라이언트 약 10줄. `_compute_leaderboard()` 응답을 그대로 이용하므로 추가 API 불필요.
+
+- **학생 개인 거래 횟수 상한 옵션** (`app.py:706-714` `create_room()`, `app.py:1082-1127` `trade()`): 단타 매매를 억제하고 중장기 투자를 유도하기 위한 거래 횟수 제한이 없어, 학생이 수십 번 소량 거래로 시장을 탐색하는 전략을 쓸 수 있음. 방 생성 시 `max_trades_per_student: int(default=0, 0=무제한)` 파라미터를 추가하고, `trade()` 핸들러에서 `RoomTransaction.query.filter_by(room_id=rid, user_id=user.id).filter(RoomTransaction.action.in_(['BUY','SELL'])).count() >= max_trades` 조건으로 초과 시 403 반환. Room 모델에 컬럼 추가 또는 `app.py:71-81` ALTER TABLE 블록에 추가. 서버 약 10줄, 클라이언트 방 생성 폼 숫자 입력 약 5줄.
+
+- **퀴즈 정답/오답 내역을 진행자 화면에서 학생별로 집계** (`app.py` 신규 `GET /api/rooms/<rid>/host/quiz-stats`, `app.py:1577-1579` `_quiz_history`): 현재 `_quiz_history[(rid, uid)]`에 학생별 퀴즈 이력이 이미 수집되고 있으나(`app.py:1649-1651`) 진행자가 이를 열람할 API가 없음. `GET /api/rooms/<rid>/host/quiz-stats`에서 해당 방의 `_quiz_history` 전체를 순회해 `{user_id: {username, correct, wrong, accuracy_pct}}` 형태로 집계해 반환. 진행자 순위 탭 학생 행에 "퀴즈 7/10 (70%)" 배지 표시. 서버 약 12줄(딕셔너리 순회 + 응답 직렬화), 클라이언트 배지 렌더 약 8줄.
+
+- **종료된 방을 같은 멤버로 재시작(Reset)하는 기능** (`app.py:808-821` `start_room()`, `app.py:335-387` `_end_room()`): 교사가 1교시와 2교시에 같은 학생들로 새 게임을 하려면 방을 완전히 재생성해야 함 — 학생들이 재입장 코드를 다시 받아야 하는 번거로움. `POST /api/rooms/<rid>/restart` 엔드포인트에서 `RoomHolding` 전체 삭제 + `RoomTransaction` 전체 삭제 + `RoomMember.cash = room.starting_cash` 리셋 + `room.status = 'waiting'` + 새 코드 발급 처리. Deposit은 이미 `_end_room()`에서 정산됐으므로 삭제 대상 아님. 서버 약 20줄, 클라이언트 결과 화면에 "재시작" 버튼 약 8줄.
+
+- **관심종목(북마크) `localStorage` 키를 방별로 분리** (`static/js/app.js:17` watchlist 초기화, `app.js` renderGrid()): `S.watchlist`가 `localStorage.getItem('watchlist')`라는 단일 전역 키로 저장되어, 같은 브라우저에서 수업 방을 바꿔도 이전 수업의 관심종목이 유지됨. 방별 종목 구성이 달라 혼동 유발. `localStorage` 키를 `'watchlist'` → `'watchlist_' + roomId` 형태로 방별로 분리해 방 입장 시 초기화. `app.js:17` 1줄 수정 + `renderGrid()` 내 watchlist 저장 로직에 방 ID 포함. 서버 변경 불필요, 클라이언트 약 5줄.
+
+### 제거/단순화할 것들
+
+- **`host_lottery_times()` 에서 과거 시각도 유효성 검증 없이 등록됨** (`app.py:1719-1727`): 복권 시간을 KST로 직접 지정하는 신규 기능(`app.py:1704-1732`)에서 현재 KST보다 이전인 시각(예: 현재 14:00인데 09:00 입력)이 거부 없이 등록됨. `_lot_round_due()`에서 `now >= t` 조건이 즉시 참이 되어 게임 시작 직후 복권이 바로 강제 트리거됨. 교사가 내일 수업용 시간을 오늘 미리 입력하거나 오타 입력 시 발생. `parsed.append()` 전에 `if target_kst.astimezone(timezone.utc).replace(tzinfo=None) <= datetime.utcnow(): return jsonify({'error': f'"{t}"은 이미 지난 시각입니다.'}), 400` 가드 삽입. 약 3줄 추가.
+
+- **`_push_notified.clear()` 가 진행 중 이벤트 키도 일괄 삭제해 중복 알림 발생** (`app.py:217-218`): `_push_notified` 세트가 5000개 초과 시 `_push_notified.clear()`로 전체를 일괄 삭제(`app.py:218`). 삭제 직후 스케줄러 다음 틱(10초)에서 아직 창이 열려 있는(1분 이내) 이벤트 키가 다시 없으므로 같은 학생에게 복권/룰렛 1분 전 알림이 재발송됨. 해결: `_push_notified`를 `set` → `dict[key] = sent_timestamp`로 전환 후 `if len(...) > 5000:` 구간에서 `sent_timestamp < time.time() - 120` 조건으로 2분 이상 지난 항목만 선별 삭제. 기존 세트 접근 코드(`in _push_notified`, `_push_notified.add(key)`)를 딕셔너리 방식으로 4개소 수정.
+
+- **`_push_scheduler_tick()` 의 `except Exception: pass` 가 운영 진단을 불가능하게 함** (`app.py:226-227`): 스케줄러 틱 전체를 `except Exception: pass`로 감싸 DB 연결 실패·ORM 예외 등 모든 에러를 무음 처리. 알림이 전혀 발송되지 않는 상황에서도 Render 로그에 아무것도 남지 않아 원인 파악 불가. `pass` → `app.logger.exception('[push] scheduler tick error')` 1줄 교체만으로 운영 가시성을 크게 향상. 기능 변화 없음.
+
+- **`minigame_spin()` 에서 `_get_member_lock` 및 `db.session.refresh(m)` 누락** (`app.py:1383-1399`): `m.cash = m.cash - bet + winnings`(`app.py:1395`)가 락 없이 실행되어 학생이 룰렛 베팅과 동시에 주식 매수(`trade()`), 예금(`create_deposit()`)을 요청하면 현금이 이중 차감되거나 롤백되지 않음. `trade()`(`app.py:1103`), `submit_quiz()`(`app.py:1627`), `create_deposit()`(`app.py:1245`)는 모두 `with _get_member_lock(rid, user.id): db.session.refresh(m)` 패턴인데 `minigame_spin()`만 누락. 2026-08-25·08-27에 이미 지적됐으나 미수정 — 실제 수업 동시 요청 환경에서 재현 가능성이 높음.
+
+- **`PushSubscription.endpoint` 컬럼이 500자로 제한 — Chrome FCM 엔드포인트 길이 초과 가능** (`models.py:87`): `endpoint = db.Column(db.String(500), ...)` 으로 500자 제한. 실제 Chrome/Edge 의 FCM Web Push 엔드포인트는 `https://fcm.googleapis.com/fcm/send/...` 형태로 500자를 초과하는 경우가 있으며, Postgres에서는 `StringDataRightTruncationError`가 발생해 구독 등록이 500 오류를 반환. `String(500)` → `db.Text` (SQLAlchemy의 무제한 텍스트)로 변경하고, `app.py:71-81` 스타트업 DDL 블록에 `"ALTER TABLE push_subscriptions ALTER COLUMN endpoint TYPE TEXT"` 추가(SQLite는 이미 VARCHAR를 유연 처리하므로 무해). `models.py:87` 1줄 + `app.py:75` 이후 1줄 추가.
+
+- **`lottery_skip()` 에서 `round_n` 입력값 유효성 검증 없음** (`app.py:1541-1551`): `round_n = int(d.get('round', 1))`(`app.py:1548`)에서 float 문자열(`"1.5"`)이 입력되면 `int("1.5")` 가 `ValueError`로 500 오류를 반환하고, 음수(`-1`)가 입력되면 `done` 셋에 음수 회차가 추가되어 이후 `_lot_round_due()`의 `rnd not in done` 비교를 오염시킴. `try: round_n = int(d.get('round', 1))\nexcept (TypeError, ValueError): return jsonify({'error': '회차는 정수'}), 400` 블록 추가 + `if round_n <= 0: return jsonify({'error': '회차는 양의 정수'}), 400` 가드 삽입. 약 4줄 추가.
