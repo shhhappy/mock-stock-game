@@ -122,6 +122,19 @@ function confirmLeaveGame() {
   }
 }
 
+async function confirmCancelHostRoom() {
+  // 게임 시작 전(대기실) 상태의 방을 취소하고 나감. 그냥 화면만 벗어나면
+  // 방이 'waiting' 상태로 DB에 남아, 다음 로그인 시 재입장 로직 때문에
+  // 계속 이 방으로 다시 끌려오게 되므로 실제로 방을 종료 처리해야 함.
+  const memberCount = document.getElementById('lobby-count')?.textContent || '0';
+  const msg = memberCount !== '0'
+    ? `방을 취소하고 나가시겠습니까?\n대기 중인 참여자 ${memberCount}명도 함께 나가지게 됩니다.`
+    : '방을 취소하고 나가시겠습니까?';
+  if (!confirm(msg)) return;
+  if (S.room) await api.post(`/api/rooms/${S.room.id}/end`, {}).catch(() => {});
+  goHome();
+}
+
 // ── Room: Create ─────────────────────────────────────────
 function _prefillLastRoomSettings() {
   try {
@@ -629,7 +642,12 @@ function enterParticipantLobby() {
       S.room = r; stopPolling(); enterParticipantGame();
     } else if (r.status === 'ended') {
       S.room = r; stopPolling();
-      if (r.results_published) {
+      if (!r.end_time) {
+        // end_time이 없다는 건 게임이 시작조차 안 된 채(대기실 상태) 진행자가 방을 취소했다는 뜻.
+        // "결과 발표 대기" 화면은 오해를 주므로 바로 홈으로 안내.
+        toast('진행자가 방을 취소했습니다.', 'info');
+        goHome();
+      } else if (r.results_published) {
         await loadResults(); showScreen('screen-results');
       } else {
         showScreen('screen-waiting-results'); startWaitingPoll();
