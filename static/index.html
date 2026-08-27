@@ -99,6 +99,8 @@
       </div>
     </div>
 
+    <button class="btn btn-secondary btn-full btn-sm" id="push-enable-btn" onclick="enablePushNotifications()" style="margin-top:12px">🔔 로또·룰렛 1분 전 알림 켜기</button>
+
     <div class="section-header" style="margin-top:20px">
       <span class="section-title">참여자 <span id="lobby-count">0</span>명</span>
       <button class="btn btn-secondary btn-sm" onclick="loadLobbyMembers()">↻</button>
@@ -133,6 +135,7 @@
       <div style="display:flex;align-items:center;gap:6px;justify-content:flex-end">
         <div style="font-weight:700;letter-spacing:2px;color:var(--accent)" id="host-code">–</div>
         <button onclick="openGameQR()" style="background:none;border:none;cursor:pointer;padding:2px;line-height:1;font-size:18px" title="QR 코드">⊞</button>
+        <button onclick="enablePushNotifications()" id="push-enable-btn-hg" style="background:none;border:none;cursor:pointer;padding:2px;line-height:1;font-size:16px" title="로또·룰렛 1분 전 알림">🔔</button>
       </div>
     </div>
   </div>
@@ -220,6 +223,18 @@
       <button class="btn btn-danger" id="end-game-btn" onclick="doEndGame()" style="flex:1">⏹ 게임 종료</button>
     </div>
     <button class="btn btn-secondary btn-full btn-sm" onclick="openManualLotteryModal()" style="margin-bottom:12px">🎟 복권 지금 시작하기</button>
+
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px">
+      <div class="section-title" style="margin-bottom:4px">🎟 복권 시간 설정 (대한민국 시간 기준)</div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:10px">비워두면 경과 비율 기준 자동 진행. 설정 시각 1분 전 참여자에게 알림이 갑니다.</div>
+      <div id="lottery-times-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
+      <div style="display:flex;gap:6px;margin-bottom:10px">
+        <input id="lottery-time-input" class="form-input" type="time" style="flex:1">
+        <button class="btn btn-secondary btn-sm" onclick="addLotteryTime()">+ 추가</button>
+      </div>
+      <button class="btn btn-primary btn-full btn-sm" onclick="doSaveLotteryTimes()">적용</button>
+      <div id="lottery-times-msg" style="font-size:12px;color:var(--muted);margin-top:6px"></div>
+    </div>
 
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px">
       <div class="section-title" style="margin-bottom:12px">⏰ 남은 시간 조정</div>
@@ -363,6 +378,7 @@
     <div style="font-size:18px;font-weight:700;margin:12px 0 4px" id="plobby-room-name">–</div>
     <div class="muted" style="font-size:13px">진행자: <span id="plobby-host-name">–</span></div>
     <div class="muted" style="font-size:13px;margin-top:16px">진행자가 게임을 시작하면 자동으로 시작됩니다.</div>
+    <button class="btn btn-secondary btn-full btn-sm" id="push-enable-btn-p" onclick="enablePushNotifications()" style="margin-top:16px">🔔 로또·룰렛 1분 전 알림 켜기</button>
     <div style="margin-top:20px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px">
       <div class="section-title" style="margin-bottom:10px">대기 중인 참여자 <span id="plobby-count">–</span>명</div>
       <div id="plobby-members-list"></div>
@@ -387,7 +403,10 @@
     <div style="text-align:right">
       <div style="font-size:10px;color:var(--muted)">내 순위</div>
       <div style="font-weight:700;font-size:16px;color:var(--warn)" id="pg-rank">–</div>
-      <button class="back-btn" style="font-size:11px;margin-top:3px" onclick="confirmLeaveGame()">← 나가기</button>
+      <div style="display:flex;align-items:center;gap:6px;margin-top:3px;justify-content:flex-end">
+        <button class="back-btn" onclick="enablePushNotifications()" id="push-enable-btn-pg" title="로또·룰렛 1분 전 알림" style="font-size:11px">🔔</button>
+        <button class="back-btn" style="font-size:11px" onclick="confirmLeaveGame()">← 나가기</button>
+      </div>
     </div>
   </div>
 
@@ -1018,6 +1037,6 @@
 <div class="toast-container" id="toasts"></div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
-<script src="/static/js/app.js?v=18"></script>
+<script src="/static/js/app.js?v=19"></script>
 </body>
 </html>

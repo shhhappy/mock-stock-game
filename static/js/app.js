@@ -370,6 +370,7 @@ function switchHostTab(tab) {
   document.getElementById('htab-market-content').hidden = tab !== 'market';
   document.getElementById('htab-settings-content').hidden = tab !== 'settings';
   if (tab === 'market') loadHostMarket();
+  if (tab === 'settings') loadLotteryTimes();
 }
 
 async function loadHostMarket() {
@@ -2156,6 +2157,106 @@ function openManualLotteryModal() {
   document.getElementById('lottery-prize-input').value = memberCount * 30000000 || '';
   document.getElementById('lottery-start-err').textContent = '';
   openModal('modal-lottery-start');
+}
+
+// ── 복권 시간 설정 (대한민국 시간 기준 직접 지정) ─────────────
+let _lotteryTimesDraft = [];
+
+function renderLotteryTimesList() {
+  const el = document.getElementById('lottery-times-list');
+  if (!el) return;
+  if (!_lotteryTimesDraft.length) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--muted)">설정된 시간 없음 (자동 모드)</div>';
+    return;
+  }
+  el.innerHTML = _lotteryTimesDraft.map((t, i) => `
+    <div style="display:flex;align-items:center;justify-content:space-between;background:var(--s2);border-radius:8px;padding:6px 10px;font-size:13px">
+      <span>⏰ ${t}</span>
+      <button onclick="removeLotteryTime(${i})" style="background:none;border:none;color:var(--down);cursor:pointer;font-size:14px">✕</button>
+    </div>`).join('');
+}
+
+function addLotteryTime() {
+  const input = document.getElementById('lottery-time-input');
+  if (!input.value) return;
+  if (!_lotteryTimesDraft.includes(input.value)) {
+    _lotteryTimesDraft.push(input.value);
+    _lotteryTimesDraft.sort();
+  }
+  input.value = '';
+  renderLotteryTimesList();
+}
+
+function removeLotteryTime(i) {
+  _lotteryTimesDraft.splice(i, 1);
+  renderLotteryTimesList();
+}
+
+async function loadLotteryTimes() {
+  if (!S.room) return;
+  const data = await api.get(`/api/rooms/${S.room.id}/host/lottery-times`);
+  if (data.times) {
+    _lotteryTimesDraft = data.times.slice();
+    renderLotteryTimesList();
+  }
+}
+
+async function doSaveLotteryTimes() {
+  const msg = document.getElementById('lottery-times-msg');
+  const data = await api.post(`/api/rooms/${S.room.id}/host/lottery-times`, {times: _lotteryTimesDraft});
+  if (data.error) { msg.style.color = 'var(--down)'; msg.textContent = data.error; return; }
+  msg.style.color = 'var(--up)';
+  msg.textContent = _lotteryTimesDraft.length
+    ? `적용됨 · ${_lotteryTimesDraft.join(', ')} (KST)`
+    : '자동 모드로 전환됨 (경과 비율 기준)';
+}
+
+// ── Web Push 구독 (로또·룰렛 1분 전 알림) ─────────────────────
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  const arr = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; i++) arr[i] = rawData.charCodeAt(i);
+  return arr;
+}
+
+async function enablePushNotifications() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+    toast('이 브라우저/기기는 알림을 지원하지 않습니다. (iOS는 홈 화면에 추가한 뒤 사용 가능)', 'error');
+    return;
+  }
+  try {
+    const keyData = await api.get('/api/push/vapid-public-key');
+    if (!keyData.key) { toast('서버에 알림 기능이 아직 설정되지 않았습니다.', 'error'); return; }
+
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') { toast('알림 권한이 거부되었습니다. 브라우저 설정에서 허용해주세요.', 'warn'); return; }
+
+    const reg = await navigator.serviceWorker.register('/static/sw.js');
+    await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(keyData.key),
+      });
+    }
+    const data = await api.post('/api/push/subscribe', sub.toJSON());
+    if (data.error) { toast(data.error, 'error'); return; }
+    try { localStorage.setItem('pushEnabled', '1'); } catch(e) {}
+    toast('🔔 로또·룰렛 1분 전 알림이 켜졌습니다!', 'success');
+    ['push-enable-btn', 'push-enable-btn-p'].forEach(id => {
+      const b = document.getElementById(id);
+      if (b) { b.textContent = '🔔 알림 켜짐'; b.disabled = true; }
+    });
+    ['push-enable-btn-pg', 'push-enable-btn-hg'].forEach(id => {
+      const b = document.getElementById(id);
+      if (b) b.textContent = '🔔✓';
+    });
+  } catch (e) {
+    toast('알림 설정 실패: ' + e.message, 'error');
+  }
 }
 
 async function doStartLottery() {

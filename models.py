@@ -79,6 +79,17 @@ class RoomTransaction(db.Model):
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
 
+class PushSubscription(db.Model):
+    """Web Push 구독 정보 (참여자·진행자 공통) — 로또/룰렛 1분 전 알림 발송에 사용."""
+    __tablename__ = 'push_subscriptions'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    endpoint = db.Column(db.String(500), unique=True, nullable=False)
+    p256dh = db.Column(db.String(200), nullable=False)
+    auth = db.Column(db.String(100), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
 class Deposit(db.Model):
     __tablename__ = 'deposits'
     id = db.Column(db.Integer, primary_key=True)

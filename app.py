@@ -3,14 +3,19 @@ from functools import wraps
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.exc import IntegrityError
 from io import BytesIO
-import os, threading, math, re
+import os, threading, math, re, json
 try:
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side as _XlSide
 except ImportError:
     openpyxl = None
 
-from models import db, User, Room, RoomMember, RoomHolding, RoomTransaction, Deposit
+from models import db, User, Room, RoomMember, RoomHolding, RoomTransaction, Deposit, PushSubscription
+try:
+    from pywebpush import webpush, WebPushException
+except ImportError:
+    webpush = None
+    class WebPushException(Exception): pass
 from stock_service import get_room_service, cleanup_room_service, STOCKS, SECTORS
 from education_data import GLOSSARY, GUIDES, TIPS, QUIZ_QUESTIONS
 import time, random as _random
@@ -20,6 +25,15 @@ app.secret_key = os.environ.get('SECRET_KEY', 'mock-stock-game-secret-2024')
 # 브라우저를 완전히 껐다 켜도(탭 종료가 아닌 앱/브라우저 재시작) 로그인이 유지되도록
 # 세션을 영구 쿠키로 전환 — 수업 시간(최대 6시간) + 여유를 감안해 12시간 유지
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=12)
+
+# ── Web Push (로또/룰렛 1분 전 알림) ──────────────────────────
+# VAPID_PRIVATE_KEY/VAPID_PUBLIC_KEY가 없으면 알림 기능 전체가 조용히 비활성화됨
+# (구독 API는 503, 백그라운드 발송 스케줄러는 시작 안 함) — 로컬 개발 시 설정 불필요.
+VAPID_PRIVATE_KEY = os.environ.get('VAPID_PRIVATE_KEY', '')
+VAPID_PUBLIC_KEY = os.environ.get('VAPID_PUBLIC_KEY', '')
+VAPID_SUBJECT = os.environ.get('VAPID_SUBJECT', 'mailto:admin@example.com')
+PUSH_ENABLED = bool(webpush and VAPID_PRIVATE_KEY and VAPID_PUBLIC_KEY)
+
 _db_url = os.environ.get('DATABASE_URL', 'sqlite:///game.db')
 if _db_url.startswith('postgres://'):
     # Render/Heroku 계열은 postgres:// 스킴을 주는데 SQLAlchemy 1.4+는 postgresql://만 인식함
@@ -127,6 +141,84 @@ def _get_member_lock(rid, uid):
 _ending_soon = set()    # room_ids whose host pressed end (1-min countdown active)
 
 KST = timezone(timedelta(hours=9))
+
+# ── Web Push 발송 + 1분 전 알림 스케줄러 ─────────────────────
+_push_notified = set()  # (room_id, 'lot'|'rlt', 대상 시각 isoformat) — 중복 발송 방지
+
+def _send_push_to_room(rid, payload, include_host=True):
+    """방 참여자(+선택적으로 진행자) 전원에게 구독돼있는 모든 기기로 푸시를 보낸다."""
+    if not PUSH_ENABLED: return
+    room = db.session.get(Room, rid)
+    if not room: return
+    uids = [m.user_id for m in RoomMember.query.filter_by(room_id=rid).all()]
+    if include_host:
+        uids.append(room.host_id)
+    if not uids: return
+    subs = PushSubscription.query.filter(PushSubscription.user_id.in_(uids)).all()
+    stale_ids = []
+    for sub in subs:
+        try:
+            webpush(
+                subscription_info={'endpoint': sub.endpoint,
+                                    'keys': {'p256dh': sub.p256dh, 'auth': sub.auth}},
+                data=json.dumps(payload),
+                vapid_private_key=VAPID_PRIVATE_KEY,
+                vapid_claims={'sub': VAPID_SUBJECT},
+            )
+        except WebPushException as e:
+            code = e.response.status_code if e.response is not None else None
+            if code in (404, 410):  # 구독 만료/취소됨 — 정리
+                stale_ids.append(sub.id)
+        except Exception:
+            pass  # 발송 실패 1건이 나머지 발송을 막으면 안 됨
+    if stale_ids:
+        PushSubscription.query.filter(PushSubscription.id.in_(stale_ids)).delete(synchronize_session=False)
+    db.session.commit()
+
+def _push_scheduler_tick():
+    now = datetime.utcnow()
+    rooms = Room.query.filter(Room.status.in_(['active', 'paused'])).all()
+    for room in rooms:
+        rid = room.id
+        # 룰렛: 게임 종료 5초 전 자동 트리거 → 그 65초 전에 "1분 전" 알림
+        if room.status == 'active' and room.end_time and not room.rlt_triggered:
+            trigger_time = room.end_time - timedelta(seconds=5)
+            secs = (trigger_time - now).total_seconds()
+            key = ('rlt', rid, trigger_time.isoformat())
+            if 0 < secs <= 60 and key not in _push_notified:
+                _push_notified.add(key)
+                _send_push_to_room(rid, {
+                    'title': '🎰 룰렛 1분 전!',
+                    'body': f'{room.name} — 곧 룰렛이 시작됩니다. 화면을 확인하세요!',
+                    'tag': f'roulette-{rid}',
+                })
+        # 복권: 다음 예정 회차(자동/고정 시각 공통)가 1분 이내로 다가오면 알림
+        next_t = _next_lottery_time(room, now)
+        if next_t:
+            secs = (next_t - now).total_seconds()
+            key = ('lot', rid, next_t.isoformat())
+            if 0 < secs <= 60 and key not in _push_notified:
+                _push_notified.add(key)
+                _send_push_to_room(rid, {
+                    'title': '🎟 복권 추첨 1분 전!',
+                    'body': f'{room.name} — 곧 복권 추첨이 시작됩니다. 화면을 확인하세요!',
+                    'tag': f'lottery-{rid}',
+                })
+    # 메모리 누수 방지: 너무 커지면 오래된 키부터 정리 (정확도보단 안전장치용)
+    if len(_push_notified) > 5000:
+        _push_notified.clear()
+
+def _push_scheduler_loop():
+    while True:
+        time.sleep(10)
+        try:
+            with app.app_context():
+                _push_scheduler_tick()
+        except Exception:
+            pass  # 스케줄러 루프 자체는 절대 죽지 않아야 함
+
+if PUSH_ENABLED:
+    threading.Thread(target=_push_scheduler_loop, daemon=True).start()
 
 # ── Helpers ───────────────────────────────────────────────
 
@@ -273,6 +365,7 @@ def _end_room(room):
     _rlt_active.pop(room.id, None)
     _quiz_settings.pop(room.id, None)
     _roulette_config.pop(room.id, None)
+    _lottery_custom_times.pop(room.id, None)
     for k in [k for k in _quiz_state if k[0] == room.id]:
         del _quiz_state[k]
     for k in [k for k in _quiz_history if k[0] == room.id]:
@@ -286,38 +379,74 @@ def _end_room(room):
 
 # ── Lottery System ────────────────────────────────────────
 _lots = {}   # room_id -> {done: set(), current: dict|None}
+_lottery_custom_times = {}  # room_id -> [datetime(UTC), ...] — 진행자가 직접 지정한 KST 시각(설정 시)
 
 LOTTO_PICK_SECS = 60   # participant number-picking window
 LOTTO_DRAW_SECS = 45   # host number-drawing window
 
-def _lot_round_due(room, remaining, total_s):
-    if room.status != 'active' or total_s <= 0: return None
+def _ensure_lot_state(room):
+    """_lots[room.id]가 없으면 DB(lottery_rounds_done)에서 done 집합을 복원해 초기화한다."""
     rid = room.id
-    # 서버 재시작 후 복구: done 집합을 DB에서 복원
     if rid not in _lots:
         raw = (room.lottery_rounds_done or '').strip()
         done_set = set(int(x) for x in raw.split(',') if x.strip().isdigit())
         _lots[rid] = {'done': done_set, 'current': None}
-    lot = _lots[rid]
+    return _lots[rid]
+
+def _auto_lottery_thresholds(total_s):
+    """자동(경과 비율) 모드의 회차별 시작 임계값 목록 [(round, pct), ...]."""
+    if total_s > 10800:    # 180분 초과 → 1/7 주기 6회
+        return [(1, 1/7), (2, 2/7), (3, 3/7), (4, 4/7), (5, 5/7), (6, 6/7)]
+    elif total_s > 3600:   # 60분 초과 → 1/5 주기 4회
+        return [(1, 1/5), (2, 2/5), (3, 3/5), (4, 4/5)]
+    else:                  # 60분 이하 → 1/3 · 2/3 주기 2회
+        return [(1, 1/3), (2, 2/3)]
+
+def _lot_round_due(room, remaining, total_s):
+    if room.status != 'active' or total_s <= 0: return None
+    rid = room.id
+    lot = _ensure_lot_state(room)
     cur = lot.get('current')
     if cur and cur.get('state') in ('picking', 'drawing'): return None
     done = lot.get('done', set())
+
+    custom = _lottery_custom_times.get(rid)
+    if custom:
+        now = datetime.utcnow()
+        for idx, t in enumerate(custom, start=1):
+            if idx not in done and now >= t:
+                return idx
+        return None
+
     pct = 1 - remaining / total_s  # fraction elapsed
-    if total_s > 10800:  # 180분 초과 → 1/7 주기 6회
-        if pct >= 1/7 and pct < 2/7 and 1 not in done: return 1
-        if pct >= 2/7 and pct < 3/7 and 2 not in done: return 2
-        if pct >= 3/7 and pct < 4/7 and 3 not in done: return 3
-        if pct >= 4/7 and pct < 5/7 and 4 not in done: return 4
-        if pct >= 5/7 and pct < 6/7 and 5 not in done: return 5
-        if pct >= 6/7 and 6 not in done: return 6
-    elif total_s > 3600:  # 60분 초과 → 1/5 주기 4회
-        if pct >= 1/5 and pct < 2/5 and 1 not in done: return 1
-        if pct >= 2/5 and pct < 3/5 and 2 not in done: return 2
-        if pct >= 3/5 and pct < 4/5 and 3 not in done: return 3
-        if pct >= 4/5 and 4 not in done: return 4
-    else:                 # 60분 이하 → 1/3 · 2/3 주기 2회
-        if pct >= 1/3 and pct < 2/3 and 1 not in done: return 1
-        if pct >= 2/3 and 2 not in done: return 2
+    thresholds = _auto_lottery_thresholds(total_s)
+    for i, (rnd, lo) in enumerate(thresholds):
+        hi = thresholds[i + 1][1] if i + 1 < len(thresholds) else None
+        if pct >= lo and (hi is None or pct < hi) and rnd not in done:
+            return rnd
+    return None
+
+def _next_lottery_time(room, now):
+    """다음 예정 복권 회차의 절대 UTC 시각(아직 없으면 None) — 1분 전 알림 스케줄러용."""
+    rid = room.id
+    lot = _ensure_lot_state(room)
+    done = lot.get('done', set())
+    custom = _lottery_custom_times.get(rid)
+    if custom:
+        for idx, t in enumerate(custom, start=1):
+            if idx not in done and t > now:
+                return t
+        return None
+    if not room.end_time: return None
+    total_s = room.duration_minutes * 60
+    if total_s <= 0: return None
+    for rnd, pct in _auto_lottery_thresholds(total_s):
+        if rnd in done: continue
+        # end_time은 일시정지 시간만큼 이미 뒤로 밀려있으므로 이를 기준으로 역산하면
+        # 일시정지 구간도 자동으로 반영된다.
+        target_time = room.end_time - timedelta(seconds=(1 - pct) * total_s)
+        if target_time > now:
+            return target_time
     return None
 
 def _do_reveal(rid, cur):
@@ -479,6 +608,42 @@ def get_me():
         return jsonify({'error': 'unauth'}), 401
     ar = find_active_room(user.id)
     return jsonify({'user': user.to_dict(), 'active_room': room_dict(ar, user.id) if ar else None})
+
+
+# ── Web Push 구독 ─────────────────────────────────────────
+
+@app.route('/api/push/vapid-public-key')
+def push_vapid_public_key():
+    return jsonify({'key': VAPID_PUBLIC_KEY if PUSH_ENABLED else None})
+
+@app.route('/api/push/subscribe', methods=['POST'])
+@login_required
+def push_subscribe():
+    if not PUSH_ENABLED:
+        return jsonify({'error': '서버에 알림 기능이 설정되지 않았습니다.'}), 503
+    d = request.json or {}
+    endpoint = (d.get('endpoint') or '').strip()
+    keys = d.get('keys') or {}
+    p256dh, auth = keys.get('p256dh'), keys.get('auth')
+    if not endpoint or not p256dh or not auth:
+        return jsonify({'error': '구독 정보가 올바르지 않습니다.'}), 400
+    user = cur_user()
+    sub = PushSubscription.query.filter_by(endpoint=endpoint).first()
+    if sub:
+        sub.user_id, sub.p256dh, sub.auth = user.id, p256dh, auth
+    else:
+        db.session.add(PushSubscription(user_id=user.id, endpoint=endpoint, p256dh=p256dh, auth=auth))
+    db.session.commit()
+    return jsonify({'ok': True})
+
+@app.route('/api/push/unsubscribe', methods=['POST'])
+@login_required
+def push_unsubscribe():
+    endpoint = (request.json or {}).get('endpoint', '').strip()
+    if endpoint:
+        PushSubscription.query.filter_by(endpoint=endpoint).delete()
+        db.session.commit()
+    return jsonify({'ok': True})
 
 
 # ── Room management ───────────────────────────────────────
@@ -1509,6 +1674,37 @@ def host_roulette_config(rid):
         return jsonify({'error': '확률 합계가 0이 될 수 없습니다.'}), 400
     _roulette_config[rid] = {'multipliers': mults, 'weights': weights}
     return jsonify({'ok': True, 'multipliers': mults, 'weights': weights})
+
+
+@app.route('/api/rooms/<int:rid>/host/lottery-times', methods=['GET', 'POST'])
+@login_required
+def host_lottery_times(rid):
+    """진행자가 복권 추첨 시각을 대한민국(KST) 시:분으로 직접 지정. 비우면 자동(경과 비율) 모드로 복귀."""
+    room = Room.query.get_or_404(rid)
+    user = cur_user()
+    if room.host_id != user.id: return jsonify({'error': '권한 없음'}), 403
+    if request.method == 'GET':
+        times = _lottery_custom_times.get(rid, [])
+        return jsonify({'times': [t.replace(tzinfo=timezone.utc).astimezone(KST).strftime('%H:%M') for t in times]})
+    d = request.json or {}
+    raw_times = d.get('times', [])
+    if not isinstance(raw_times, list) or len(raw_times) > 10:
+        return jsonify({'error': '잘못된 형식입니다 (최대 10개).'}), 400
+    parsed = []
+    now_kst = datetime.utcnow().replace(tzinfo=timezone.utc).astimezone(KST)
+    for t in raw_times:
+        t = (t or '').strip()
+        if not re.fullmatch(r'([01]\d|2[0-3]):([0-5]\d)', t):
+            return jsonify({'error': f'"{t}" 형식이 올바르지 않습니다 (HH:MM, 24시간제).'}), 400
+        hh, mm = (int(x) for x in t.split(':'))
+        target_kst = now_kst.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        parsed.append(target_kst.astimezone(timezone.utc).replace(tzinfo=None))
+    parsed.sort()
+    if parsed:
+        _lottery_custom_times[rid] = parsed
+    else:
+        _lottery_custom_times.pop(rid, None)
+    return jsonify({'ok': True, 'times': raw_times})
 
 
 @app.route('/api/rooms/<int:rid>/host/publish-results', methods=['POST'])
