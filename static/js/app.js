@@ -834,9 +834,34 @@ async function refreshMyRank() {
 }
 
 // ── Timer ─────────────────────────────────────────────────
+let _lastMinigameAlertTarget = null;
+
+function _checkMinigameAlert() {
+  // 서버가 알려주는 다음 복권/룰렛 예정 시각(next_minigame_target) 기준으로
+  // 1분 이내로 남으면 화면 내 배너+소리로 알림 — 푸시 미구독/미지원 기기(iOS 미설치 등)를 위한 백업.
+  const target = S.room?.next_minigame_target;
+  if (!target || target === _lastMinigameAlertTarget) return;
+  const secLeft = (new Date(target) - new Date()) / 1000;
+  if (secLeft > 0 && secLeft <= 60) {
+    _lastMinigameAlertTarget = target;
+    toast('🔔 1분 후 복권/룰렛이 시작됩니다!', 'info');
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      const ctx = new Ctx();
+      const osc = ctx.createOscillator(), gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.frequency.value = 880; gain.gain.value = 0.15;
+      osc.start();
+      setTimeout(() => { osc.stop(); ctx.close(); }, 350);
+    } catch(e) { /* Web Audio 미지원 기기는 배너만 표시 */ }
+    if (navigator.vibrate) navigator.vibrate([300, 100, 300]);  // iOS는 무시됨, 안드로이드는 진동
+  }
+}
+
 function startTimer(elId) {
   stopTimer();
   function tick() {
+    _checkMinigameAlert();
     if (!S.room?.end_time) return;
     const el = document.getElementById(elId);
     if (!el) return;
@@ -2244,12 +2269,23 @@ async function enablePushNotifications() {
     toast('이 브라우저/기기는 알림을 지원하지 않습니다. (iOS는 홈 화면에 추가한 뒤 사용 가능)', 'error');
     return;
   }
+  // 알림 권한 요청은 클릭 핸들러의 가장 먼저(다른 await 없이) 호출해야 함 — 그 앞에
+  // 네트워크 요청 등 다른 비동기 작업이 끼면 "사용자 제스처로 인한 요청"이라는 인식이
+  // 끊겨서 일부 안드로이드 브라우저(삼성인터넷 등)가 권한 팝업 자체를 조용히 무시함.
+  let perm;
+  try {
+    perm = await Notification.requestPermission();
+  } catch (e) {
+    toast('알림 권한 요청 중 오류: ' + e.message, 'error');
+    return;
+  }
+  if (perm !== 'granted') {
+    toast('알림 권한이 거부되었습니다. 브라우저 설정에서 이 사이트 알림을 허용해주세요.', 'warn');
+    return;
+  }
   try {
     const keyData = await api.get('/api/push/vapid-public-key');
     if (!keyData.key) { toast('서버에 알림 기능이 아직 설정되지 않았습니다.', 'error'); return; }
-
-    const perm = await Notification.requestPermission();
-    if (perm !== 'granted') { toast('알림 권한이 거부되었습니다. 브라우저 설정에서 허용해주세요.', 'warn'); return; }
 
     const reg = await navigator.serviceWorker.register('/static/sw.js');
     await navigator.serviceWorker.ready;

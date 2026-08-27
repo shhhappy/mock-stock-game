@@ -3,7 +3,7 @@ from functools import wraps
 from datetime import datetime, timedelta, timezone
 from sqlalchemy.exc import IntegrityError
 from io import BytesIO
-import os, threading, math, re, json
+import os, threading, math, re, json, logging
 try:
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side as _XlSide
@@ -33,6 +33,9 @@ VAPID_PRIVATE_KEY = os.environ.get('VAPID_PRIVATE_KEY', '')
 VAPID_PUBLIC_KEY = os.environ.get('VAPID_PUBLIC_KEY', '')
 VAPID_SUBJECT = os.environ.get('VAPID_SUBJECT', 'mailto:admin@example.com')
 PUSH_ENABLED = bool(webpush and VAPID_PRIVATE_KEY and VAPID_PUBLIC_KEY)
+app.logger.setLevel(logging.INFO)  # 기본(WARNING)으로는 아래 진단 로그가 Render 로그에 안 보임
+app.logger.info(f'[push] PUSH_ENABLED={PUSH_ENABLED} '
+                 f'(webpush_lib={bool(webpush)}, private_key_set={bool(VAPID_PRIVATE_KEY)}, public_key_set={bool(VAPID_PUBLIC_KEY)})')
 
 _db_url = os.environ.get('DATABASE_URL', 'sqlite:///game.db')
 if _db_url.startswith('postgres://'):
@@ -155,7 +158,8 @@ def _send_push_to_room(rid, payload, include_host=True):
         uids.append(room.host_id)
     if not uids: return
     subs = PushSubscription.query.filter(PushSubscription.user_id.in_(uids)).all()
-    stale_ids = []
+    app.logger.info(f'[push] room={rid} 대상 {len(uids)}명, 구독 {len(subs)}건 발송 시도: {payload.get("title")}')
+    sent, failed, stale_ids = 0, 0, []
     for sub in subs:
         try:
             webpush(
@@ -165,12 +169,17 @@ def _send_push_to_room(rid, payload, include_host=True):
                 vapid_private_key=VAPID_PRIVATE_KEY,
                 vapid_claims={'sub': VAPID_SUBJECT},
             )
+            sent += 1
         except WebPushException as e:
+            failed += 1
             code = e.response.status_code if e.response is not None else None
+            app.logger.warning(f'[push] 실패 user={sub.user_id} endpoint={sub.endpoint[:60]}... status={code} body={getattr(e.response, "text", "")[:200]}')
             if code in (404, 410):  # 구독 만료/취소됨 — 정리
                 stale_ids.append(sub.id)
-        except Exception:
-            pass  # 발송 실패 1건이 나머지 발송을 막으면 안 됨
+        except Exception as e:
+            failed += 1
+            app.logger.warning(f'[push] 예외 user={sub.user_id}: {e}')
+    app.logger.info(f'[push] room={rid} 발송 결과: 성공 {sent}건 / 실패 {failed}건')
     if stale_ids:
         PushSubscription.query.filter(PushSubscription.id.in_(stale_ids)).delete(synchronize_session=False)
     db.session.commit()
@@ -380,6 +389,7 @@ def _end_room(room):
 # ── Lottery System ────────────────────────────────────────
 _lots = {}   # room_id -> {done: set(), current: dict|None}
 _lottery_custom_times = {}  # room_id -> [datetime(UTC), ...] — 진행자가 직접 지정한 KST 시각(설정 시)
+_CUSTOM_LOT_ROUND_BASE = 1000  # 자동 모드(1~6)·수동 시작(99, 100, ...) 회차 번호와 안 겹치게 충분히 띄움
 
 LOTTO_PICK_SECS = 60   # participant number-picking window
 LOTTO_DRAW_SECS = 45   # host number-drawing window
@@ -413,7 +423,8 @@ def _lot_round_due(room, remaining, total_s):
     custom = _lottery_custom_times.get(rid)
     if custom:
         now = datetime.utcnow()
-        for idx, t in enumerate(custom, start=1):
+        for i, t in enumerate(custom):
+            idx = _CUSTOM_LOT_ROUND_BASE + i  # 자동 모드 회차 번호(1~6)와 겹치지 않도록 오프셋
             if idx not in done and now >= t:
                 return idx
         return None
@@ -433,7 +444,8 @@ def _next_lottery_time(room, now):
     done = lot.get('done', set())
     custom = _lottery_custom_times.get(rid)
     if custom:
-        for idx, t in enumerate(custom, start=1):
+        for i, t in enumerate(custom):
+            idx = _CUSTOM_LOT_ROUND_BASE + i
             if idx not in done and t > now:
                 return t
         return None
@@ -536,6 +548,17 @@ def room_dict(room, uid=None):
             remaining = max(0, int((room.end_time - now).total_seconds()))
     host = db.session.get(User, room.host_id)
     total_s = room.duration_minutes * 60
+    # 다음 복권/룰렛 예정 시각 (진행 중일 때만) — 클라이언트가 이 값으로 자체 카운트다운해서
+    # 푸시 알림을 못 받는 기기(iOS 미설치 등)에서도 1분 전에 화면 내 알림을 띄울 수 있게 함
+    next_minigame_target = None
+    if room.status == 'active':
+        cands = []
+        if room.end_time and not room.rlt_triggered:
+            cands.append(room.end_time - timedelta(seconds=5))
+        nt = _next_lottery_time(room, now)
+        if nt: cands.append(nt)
+        cands = [c for c in cands if c > now]
+        if cands: next_minigame_target = min(cands)
     return {
         'id': room.id, 'name': room.name, 'code': room.code,
         'host_id': room.host_id, 'host_name': host.username if host else '',
@@ -553,6 +576,7 @@ def room_dict(room, uid=None):
         'lottery_current_round': (_lots.get(room.id, {}).get('current') or {}).get('round'),
         'results_published': bool(room.results_published),
         'ending_soon': room.id in _ending_soon,
+        'next_minigame_target': next_minigame_target.strftime('%Y-%m-%dT%H:%M:%SZ') if next_minigame_target else None,
     }
 
 def find_active_room(uid):
@@ -634,6 +658,7 @@ def push_subscribe():
     else:
         db.session.add(PushSubscription(user_id=user.id, endpoint=endpoint, p256dh=p256dh, auth=auth))
     db.session.commit()
+    app.logger.info(f'[push] 구독 등록 user={user.id}({user.username}) endpoint={endpoint[:60]}...')
     return jsonify({'ok': True})
 
 @app.route('/api/push/unsubscribe', methods=['POST'])
