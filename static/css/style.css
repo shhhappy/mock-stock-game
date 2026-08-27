@@ -22,10 +22,13 @@ body {
   font-family: 'Noto Sans KR', system-ui, sans-serif;
   font-size: 14px;
   -webkit-font-smoothing: antialiased;
+  /* 버튼 연타 시 모바일 브라우저의 "더블탭=확대" 제스처가 발동해 화면이
+     커지는 문제 방지. pinch-zoom 자체는 막지 않아 접근성엔 영향 없음. */
+  touch-action: manipulation;
 }
 
 a { color: inherit; text-decoration: none; }
-button { cursor: pointer; }
+button { cursor: pointer; touch-action: manipulation; }
 
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
