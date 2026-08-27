@@ -4797,3 +4797,59 @@
 
 - **`gen_code()` 의 충돌 최대 10회 재시도 후 중복 코드 반환 가능성** (`models.py:8-13`): `gen_code()`는 10회 시도 후 포기하고 마지막 생성 코드를 그냥 반환 (`models.py:13`). 이 코드가 이미 사용 중인 방과 충돌하면 DB `unique` 제약으로 `IntegrityError`가 발생해 방 생성이 500으로 실패. 현재는 `(A-Z + 0-9)^6 = 2.17억` 조합 대비 동시 사용 방 수가 극히 적어 사실상 발생하지 않지만, 에러 경로가 불명확함. `create_room()` (`app.py:483-522`)에서 `IntegrityError`를 잡는 `try/except` 블록이 없으므로, `db.session.add(room)` + `db.session.commit()` 구간을 `try: ... except IntegrityError: return jsonify({'error': '코드 생성 실패. 다시 시도해 주세요.'}), 500`으로 감싸는 1개 블록 추가.
 
+
+## 2026-08-26
+
+### 추가하면 좋을 기능
+
+- **진행자가 수업 중 커스텀 O/X 퀴즈를 즉석 생성** (`app.py:1388-1462` 퀴즈 API, `education_data.py` `QUIZ_QUESTIONS` 하드코딩): 현재 퀴즈는 `education_data.py`에 하드코딩된 풀에서만 출제되어, 방금 수업에서 설명한 개념이나 당일 뉴스와 연계한 맞춤 문제를 낼 수 없음. 진행자용 `POST /api/rooms/<rid>/host/custom-quiz` 엔드포인트를 추가해 `{question: "PER이 낮을수록 저평가 주식이다", answer: true, explanation: "..."}` 페이로드를 받아 `_quiz_state`의 대기 큐에 삽입. 학생이 다음 `/quiz` GET 요청 시 커스텀 문제를 우선 출제. 진행자 설정 탭에 입력 폼(문제, 정답 토글, 해설) 추가. 서버 약 20줄 + 클라이언트 폼 약 25줄.
+
+- **호스트 화면 "거래 활동 Top5 종목" 위젯** (`app.py` 신규 `GET /api/rooms/<rid>/host/trade-stats`, `models.py:68-79` `RoomTransaction`): 진행자가 현재 학생들이 어떤 종목을 가장 활발히 거래하는지 볼 방법이 없음. `RoomTransaction.query.filter_by(room_id=rid).with_entities(RoomTransaction.symbol, db.func.count()).group_by(RoomTransaction.symbol).order_by(db.func.count().desc()).limit(5).all()`로 종목별 거래 횟수를 집계해 반환. 진행자 "설정" 또는 "순위" 탭 상단에 "🔥 인기 종목: 삼성전자 42건 / NVIDIA 31건 / ..." 배지를 10초마다 갱신. 서버 약 10줄, 클라이언트 약 12줄.
+
+- **학생 보유 종목 급등/급락 인라인 알림** (`static/js/app.js:1267-1297` `pollRoom()` 내 `loadMarket()` 호출, `static/js/app.js:55-60` `toast()`): 현재 `pollRoom()`은 10초마다 방 상태를 체크하지만, 학생이 보유한 종목의 주가가 크게 바뀌어도 아무 알림이 없음. `loadMarket()` 완료 후 `S.stocks` 배열을 이전 가격과 비교해 보유 중인 종목(`S.portfolio` 캐시 또는 `openStockModal` 실행 시 저장된 `S.tradeHolding > 0`) 가격이 ±5% 이상 변동됐을 때 `toast('🔔 삼성전자 +6.2% 급등 — 보유 종목 확인', 'warn')` 표시. 보유 주식 정보는 `S.stocks` 폴링 시 포트폴리오 캐시와 교차해 클라이언트에서만 처리 — 서버 변경 불필요, 클라이언트 약 15줄.
+
+- **게임 재참여 시 보유 종목 배지 시장 화면에 표시** (`static/js/app.js:1374-1411` `renderGrid()`, `static/js/app.js:1431-1443` `openStockModal()`): 학생이 게임에 재접속하거나 화면을 전환한 뒤 마켓 탭으로 돌아왔을 때 어떤 종목을 이미 보유 중인지 주식 카드에서 바로 알 수 없음. `openStockModal()` (`app.js:1431`)에서 호출하는 `get_portfolio()` 결과를 `S._portfolioCache`에 저장하고, `renderGrid()` (`app.js:1374`)에서 각 종목 카드 이름 옆에 `S._portfolioCache` 결과로 보유 주수를 소형 배지("10주")로 오버레이. 포트폴리오 API는 이미 `openStockModal()`에서 호출되므로 신규 API 없음, 클라이언트 렌더 약 10줄 + 캐시 관리 5줄.
+
+- **진행자 "학생 단일 종목 집중 투자 경고" 배지** (`app.py:158-189` `_compute_leaderboard()`, `app.py:716-723` `host_members()`): 자산의 70% 이상을 하나의 종목에 몰아 넣은 학생은 분산투자 미숙의 전형적 사례이지만 진행자 순위표에서 이를 파악하기 어려움. `host_members()` 응답에 `holding_summary: [{symbol, name, weight_pct}]`(상위 1~2개 보유 종목 비중)를 추가하고(`RoomHolding.query.filter_by(room_id=rid, user_id=uid)` 조회 + `get_price()` 계산), 진행자 순위 행에서 `weight_pct >= 70`인 항목이 있으면 "⚠️ 집중 투자" 배지 표시. 교사가 해당 학생을 지목해 "분산투자" 개념을 실시간 지도 가능. 서버 약 15줄, 클라이언트 배지 렌더 약 8줄.
+
+- **게임 중 학생 "개인 통계 요약" 팝업** (`app.py:990-1008` `get_transactions()`, `app.py:941-972` `get_portfolio()`): 학생이 거래 탭에서 자신의 거래 내역을 페이지 단위로 볼 수 있지만, 전체 게임 중 "몇 번 거래했는지", "가장 많이 산 종목", "총 수익 중 주식 수익 vs 예금 이자 비율" 같은 요약이 없음. `GET /api/rooms/<rid>/my-stats`에서 `RoomTransaction.query.filter_by(room_id=rid, user_id=uid)` 결과를 집계해 `{total_trades, top_symbol, quiz_correct_count, deposit_interest}` 반환. 포트폴리오 탭 하단 "내 게임 요약" 접기 섹션으로 표시. 서버 약 15줄, 클라이언트 약 20줄.
+
+### 제거/단순화할 것들
+
+- **`Room.query.get_or_404()` SQLAlchemy 2.x deprecated 패턴 다수 잔존** (`app.py:570, 621, 633, 649, 665, 719, 725, 737` 등): `cur_user()` (`app.py:142`)는 `db.session.get(User, session['user_id'])`로 SQLAlchemy 2.x 권장 패턴을 사용하지만, 대부분의 라우트 핸들러는 여전히 `Room.query.get_or_404(rid)` 구식 Query API를 사용 중. SQLAlchemy 2.0에서 `Query.get()`은 제거됨 — 현재 사용 중인 버전(Flask-SQLAlchemy 3.x)은 하위 호환 레이어를 제공하지만 경고가 발생하며 추후 버전 업 시 일괄 교체 공수가 큼. `db.session.get(Room, rid)` 후 `if room is None: abort(404)` 패턴으로 통일하면 현재 약 15개 라우트를 일관되게 정리 가능. `from flask import abort` 추가 + 핸들러별 1줄 교체.
+
+- **`trade()` 내 베어 `except:` 캐치 — 시스템 예외 오염 위험** (`app.py:906`): `try: shares = int(d.get('shares', 0))\nexcept: return jsonify({'error': '수량 오류'}), 400` 패턴에서 bare `except:`는 `SystemExit`, `KeyboardInterrupt`, `MemoryError`까지 모두 삼켜버려 서버 종료 신호나 메모리 오류를 400 응답으로 처리하는 잘못된 결과를 낳음. `host_market_event()` (`app.py:1482`)의 `except:` (`except: return jsonify({'error': '잘못된 변동률'}), 400`)도 동일. `except (TypeError, ValueError):` 로 두 곳 모두 명시적으로 교체. Python 베스트 프랙티스 PEP8 위반 수정, 2줄 변경.
+
+- **`host_adjust()` 실제 차감액과 `RoomTransaction` 기록액 불일치** (`app.py:765-766`): `m.cash = max(0, m.cash + delta)` 로 현금은 0 이하로 내려가지 않도록 클램프되지만, `RoomTransaction`에는 항상 원래 `delta`값 기록. 예: 현금 100,000원인 학생에게 `delta = -500,000`을 주면 실제 차감은 100,000원이지만 거래 장부에는 -500,000원이 기록되어 누적 수익/손실 계산 오류 발생. `actual_delta = new_cash - old_cash` (= `max(0, m.cash + delta) - m.cash`)를 계산해 `RoomTransaction.amount`에 사용하도록 수정. `app.py:765` 앞에 `old_cash = m.cash` 변수 추가 + `app.py:766` amount 인자를 `actual_delta`로 교체, 약 3줄 수정.
+
+- **룰렛 베팅 클라이언트 검증이 서버 검증과 불일치** (`static/js/app.js:1124`, `app.py:1194`): 클라이언트 `doRouletteSpin()`에서 `if (bet > _rltCash) { errEl.textContent = '잔액이 부족합니다.' }` 조건의 `_rltCash`는 현금(`data.cash`)만 추적하지만, 서버 `minigame_spin()`에서는 `total_assets = member_total_value(rid, user.id)`(현금 + 보유주식 + 예금) 기준으로 베팅 상한을 검증. 주식을 많이 보유한 학생이 현금 < bet 임에도 클라이언트가 "잔액 부족" 에러를 띄워 서버 도달을 막음 — 실제로는 서버가 주식을 청산해 충당할 수 있었던 케이스. `minigame()` GET 응답의 `total_assets`(`app.py:1108`)를 `_rltCash` 초기화 시(`static/js/app.js:1071-1073` `openRoulette()`) 사용해 검증 기준을 일치시킴. 클라이언트 1줄 수정.
+
+- **`openStockModal()` 클릭마다 포트폴리오 API 풀 호출** (`static/js/app.js:1431-1438`): 학생이 종목 카드를 클릭할 때마다 `api.get('/api/rooms/${S.room.id}/portfolio')` 전체 호출이 발생해 보유 종목 전체를 재조회. 30종목 이상 보유한 학생은 매 클릭마다 N+1 수준의 서버 조회(`get_price()` × 보유 종목 수)를 발생시킴. `S._portfolioCache = {data: null, ts: 0}`를 전역에 두고, 마지막 호출 후 5초 이내면 캐시된 값을 반환하도록 `openStockModal()` 내부에서 분기(`Date.now() - S._portfolioCache.ts < 5000`). 서버 변경 불필요, 클라이언트 약 8줄 추가.
+
+- **`create_deposit()` 에서 `(request.json or {})` 두 번 접근** (`app.py:1049, 1052`): `request.json`을 `(request.json or {})`로 감싸서 두 번 별도로 호출 — 1049번 줄 `float((request.json or {}).get('amount', 0))`, 1052번 줄 `(request.json or {}).get('lock_type', 'free')`. Flask의 `request.json`은 호출마다 JSON 파싱을 반복할 수 있음(버전에 따라 캐시되기도 하나 동작을 가정하는 것은 비권장). 핸들러 시작부에 `d = request.json or {}`로 한 번 저장 후 `d.get('amount', 0)`, `d.get('lock_type', 'free')`로 참조하도록 통일. `withdraw_deposit()` (`app.py:1072`), `get_deposits()` 등 다른 핸들러들은 이미 이 패턴을 따르고 있어 `create_deposit()`만 누락된 상태. 2줄 수정.
+
+---
+
+## 2026-08-27
+
+### 추가하면 좋을 기능
+
+- **일시정지 원인을 참가자 화면에 명시** (`app.py:400-427` `room_dict()`, `_rlt_active`, `_lots`): 게임이 `paused` 상태일 때 학생 화면은 단순히 "일시정지" 표시만 나오고 왜 멈췄는지 알 수 없음. `room_dict()`에 `pause_reason` 필드 추가 — 룰렛 대기 시 `'roulette'`, 복권 진행 시 `'lottery'`, 진행자 수동 일시정지 시 `'host'`를 반환. 클라이언트에서 원인별로 "📍 룰렛 진행 중 — 잠시 후 자동 재개", "🎰 복권 번호 추첨 중" 등 안내 문구를 표시. 서버 약 5줄, 클라이언트 일시정지 화면 분기 약 8줄.
+
+- **진행자용 실시간 섹터별 학생 투자 분포 차트** (`app.py:716-722` `host_members()`, `app.py:944-969` `get_portfolio()`): 수업에서 "학생들이 주로 어느 섹터에 투자하는가"를 파악하기 유익하나 진행자에게 집계된 섹터별 투자 현황이 없음. `GET /api/rooms/<rid>/host/sector-distribution` 엔드포인트를 추가해 `RoomHolding`을 전체 조회한 뒤 `STOCKS[sym]['sector']` 기준으로 그룹화, `{sector: 총보유금액, member_count: 투자자 수}` 배열 반환. 진행자 대시보드에 섹터별 바 차트로 표시. 서버 약 15줄, 클라이언트 차트 렌더링 약 20줄.
+
+- **주식 차트에 실제 게임 내 거래 시점 마커 표시** (`app.py:877-883` `get_chart()`, `app.py:887-933` `trade()`): 현재 주식 차트 모달은 가격 히스토리만 보여주고, 학생이 언제 매수/매도했는지 시각적으로 표시되지 않음. `GET /api/rooms/<rid>/stocks/<symbol>/chart` 응답에 해당 참가자의 BUY/SELL 트랜잭션 타임스탬프·가격 배열(`transactions: [{action, price, ts}]`)을 포함시키고, 클라이언트 차트에 매수는 ▲ 초록, 매도는 ▼ 빨강 마커로 표시. "내가 언제 사고 팔았는지"를 한눈에 파악해 매매 복기 학습 효과 제공. 서버 `RoomTransaction` 쿼리 약 8줄 추가, 클라이언트 마커 렌더링 약 15줄.
+
+- **종목별 보유 한도 설정 (진행자 옵션)** (`app.py:486-524` `create_room()`, `app.py:891-933` `trade()`): 현재 학생이 단일 종목에 보유 현금을 전액 투자하는 것이 가능해, 포트폴리오 분산 학습 목적이 약화될 수 있음. 방 생성 옵션에 `max_single_stock_pct: float(default=100)` 필드를 추가하고(`Room` 모델 컬럼 추가 또는 `room_kwargs`에 임시 저장), `trade()` 매수 처리 시 해당 종목의 현재 보유액 + 매수금액이 총자산의 `max_single_stock_pct%`를 초과하면 거부. 선택적 기능이므로 기본값 100%(제한 없음)로 두면 기존 운영 방식과 동일. 서버 약 15줄, 클라이언트 방 생성 UI 슬라이더 약 10줄.
+
+### 제거/단순화할 것들
+
+- **`Room.query.get_or_404()` 사용 — SQLAlchemy 2.x deprecated API** (`app.py` 전반): `app.py` 전체에서 `Room.query.get_or_404(rid)` 패턴이 약 20곳에서 반복됨(예: `app.py:567,619,633` 등). `Query.get()` 형태는 SQLAlchemy 2.0에서 deprecated, 2.x 최신에서는 경고 로그를 생성하며 Render 배포 로그를 오염시킴. 전체 일괄 교체: `db.get_or_404(Room, rid)` (Flask-SQLAlchemy 3.x), 또는 `db.session.get(Room, rid) or abort(404)`. `sed -i 's/Room\.query\.get_or_404(rid)/db.get_or_404(Room, rid)/g' app.py` 한 줄로 일괄 치환 가능.
+
+- **`stock_service.py:get_history()` 차트 데이터가 요청마다 역방향 랜덤 시뮬레이션 — 재현성 없음** (`stock_service.py:303-332`): `get_history()`는 현재가에서 과거로 역산해 완전 무작위 OHLC 바를 생성함(`stock_service.py:316-328`). 캐시 TTL(120초) 내에는 같은 데이터를 반환하지만, 캐시가 만료되거나 `get_price()` 호출로 캐시가 invalidate되면 완전히 다른 차트가 생성됨. 학생이 차트를 5분 간격으로 두 번 열면 전혀 다른 과거 흐름이 표시되어 교육적 일관성이 깨짐. 근본 해결책은 08-26 제안과 동일(실제 가격 히스토리 저장)이나, 단기 간편 수정으로 `_init_prices()` 시점(`stock_service.py:143`)에 각 종목별 `random.seed(hash(sym))` 또는 종목별 고정 시드를 사용해 `get_history()`가 항상 동일한 "가상 과거" 바를 반환하도록 해 최소한의 일관성 확보. 약 3줄 수정.
+
+- **`_lot_round_due()` 조건 분기가 겹치는 백분율 범위로 가독성 저하 + 부동소수점 오차 위험** (`app.py:293-321`): `_lot_round_due()`의 조건문(`app.py:306-321`)은 `pct >= 1/3 and pct < 2/3`, `pct >= 2/3` 등 부동소수점 나눗셈 비교에 의존. `1/3 == 0.3333...`이므로 `remaining`이 정확히 `total_s * 2/3`인 경우 경계값 처리가 불명확해 round_due가 한 틱 밀릴 수 있음. 또한 세 분기가 별도 if-elif 없이 독립 if로 작성되어 동시에 여러 round가 due로 판정될 여지가 있음(현재는 `done` 셋이 방어하지만 불필요한 복잡성). 리팩터링: 분기 수와 비율 목록을 `[(rounds, breakpoints)]` 형태의 상수로 추출하고 반복문으로 처리. 예: `LOTTERY_SCHEDULE = {10801: [1/7, 2/7, 3/7, 4/7, 5/7, 6/7], 3601: [1/5, 2/5, 3/5, 4/5], 0: [1/3, 2/3]}` 처리. 50줄→15줄로 단순화.
+
+- **`_do_reveal()` 에서 당첨금 prize 계산이 하드코딩된 나눗셈 — 교육 의도 불명확** (`app.py:323-343`): `_do_reveal()`의 당첨금 계산식(`app.py:326-332`)이 `round(cur['prize'] / 25)`, `round(cur['prize'] / 18)`, `round(cur['prize'] / 11)` 등 임의의 제수를 사용. 왜 25, 18, 11인지 주석이 없어 유지보수 시 이해하기 어렵고, 수업마다 변경하기도 어려움. 상단에 상수 블록으로 분리: `LOTTO_PRIZE_RATIOS = {6: 1.0, 5: 1/25, 4: 1/18, 3: 1/11, 2: None}` (None은 고정 100,000원)으로 정의하고 반복문으로 처리. 상수 변경만으로 당첨금 구조를 바꿀 수 있어 수업 운영 유연성 향상.
+
+- **`_ending_soon` 집합이 `set()` 전역 변수 — 서버 재시작 후 `room.end_time` 이미 60초 미만인 종료 직전 방 처리 불일치** (`app.py:127`, `app.py:663-679`): `_ending_soon`은 인메모리 `set`이므로 서버 재시작 시 초기화됨. 재시작 전 "60초 카운트다운"이 시작된 방(`room.end_time = now + 60s`로 이미 단축됨)은 재시작 후 `_ending_soon`에 없어 `end_room()` 재호출 시 `if rid not in _ending_soon` 조건을 통과해 `room.end_time`을 다시 60초 뒤로 설정하는 중복 지연이 발생할 수 있음. 해결: `get_room()` 내 자동 종료 로직(`app.py:572-574`) 처럼 `end_room()` 에서도 `room.end_time`이 이미 `now + 60초` 이하면 즉시 `_end_room()` 호출하도록 분기 추가. 약 3줄.
