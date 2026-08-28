@@ -2,6 +2,38 @@
 
 ---
 
+## 2026-08-28 (daily-analysis)
+
+### 추가하면 좋을 기능
+
+- **진행자 게임 재시작(Reset) 기능** (`app.py:676-715` `create_room()`, `app.py:335-388` `_end_room()`): 게임 종료 후 같은 학급과 다음 회차를 진행하려면 진행자가 방을 새로 만들고 학생 전원이 코드를 다시 입력해야 함. `POST /api/rooms/<rid>/reset` 엔드포인트를 추가해 `_end_room()` 내부 청산 로직을 참고하되, 방 자체를 삭제하지 않고 `room.status = 'waiting'`, 모든 `RoomMember.cash = room.starting_cash`, `RoomHolding` 삭제, `RoomTransaction` 삭제, `Deposit` 삭제, `room.code` 유지(기존 QR 재사용) 처리. 이미 있는 코드(`_end_room()`의 청산 루프 + `start_room()`의 타이머 초기화)를 재조합하면 서버 약 30줄. 클라이언트에서 진행자 결과 화면에 "이 방 재사용 (다음 회차)" 버튼 1개 추가.
+
+- **종목 가격 변동 히트맵 (진행자 전용)** (`app.py:1008-1028` `get_stocks()`, `stock_service.py:196-212` `get_price()`): 진행자 화면에서 60개 종목의 전체 시세를 숫자 목록으로 보는 것은 한눈에 파악하기 어려움. 기존 `GET /api/rooms/<rid>/stocks` 응답의 `change_pct` 필드를 활용해 진행자 화면에 5×12 격자(종목 이름 + 등락률)를 표시하고, 상승은 녹색(`rgba(0,200,0, change_pct/10)`), 하락은 적색으로 채도를 비율에 맞게 설정. 서버 변경 불필요. `app.js` 진행자 "시장" 탭에 히트맵 렌더 함수 약 25줄 추가. 교사가 어느 섹터가 현재 강세인지 3초 폴링으로 시각적으로 파악 가능.
+
+- **학생 포트폴리오 섹터 파이 차트** (`app.py:1131-1162` `get_portfolio()`, `static/js/app.js` 포트폴리오 탭): 기존 `get_portfolio()` 응답의 `holdings` 배열에 이미 `sector` 필드가 포함되어 있으나(`app.py:1150`), 포트폴리오 탭에 섹터별 비중을 시각화하는 파이 차트가 없음. `S.portChart` 상태와 이미 CDN으로 로드된 `Chart.js`를 활용해(`app.js:7`) 섹터별 평가금액 합산 파이 차트를 포트폴리오 탭 하단에 렌더링. "배터리 60% · IT 25% · 현금 15%" 형태로 분산투자 여부를 시각적으로 자가 진단 가능. 서버 변경 불필요. `app.js` 포트폴리오 렌더 함수 내 약 20줄 추가.
+
+- **진행자 커스텀 O/X 퀴즈 문제 추가** (`education_data.py:QUIZ_QUESTIONS`, `app.py:1581-1652` 퀴즈 엔드포인트): 현재 퀴즈 문제는 `education_data.py`에 하드코딩된 목록만 사용 가능해 당일 수업 주제와 관련된 맞춤 문제를 출제할 수 없음. `POST /api/rooms/<rid>/host/quiz-custom` 엔드포인트를 추가해 진행자가 `{'question': str, 'answer': bool, 'explanation': str}` 형식으로 최대 10개의 커스텀 문제를 인메모리 `_custom_quiz: dict = {}  # rid -> [q, ...]`에 저장. `get_quiz()`에서 `QUIZ_QUESTIONS + _custom_quiz.get(rid, [])` 합집합에서 선택. `_end_room()`에서 `_custom_quiz.pop(rid, None)` 정리. 서버 약 20줄 + 진행자 설정 탭에 문제/정답 입력 폼 약 20줄.
+
+- **매수/매도 수량 프리셋 버튼 (빠른 거래)** (`static/js/app.js` 거래 모달 렌더, `static/index.html` 거래 UI): 수업 현장에서 학생이 수량 입력칸에 손으로 숫자를 타이핑하다 실수하거나 시간이 걸리는 사례가 많음. 거래 모달 수량 입력란 아래에 "10주 / 50주 / 100주 / 최대" 프리셋 버튼 4개를 추가. "최대" 버튼은 `Math.floor(member.cash / currentPrice)` (매수) 또는 `holding.shares` (매도)를 자동 입력. 모달 열기 핸들러 내 약 15줄 + `static/index.html` 버튼 4개. 서버 변경 불필요. 실제 MTS(모바일 트레이딩 시스템) UX와 동일해 교육 현실감 향상.
+
+- **참여자 최근 접속 기반 오프라인 감지 (진행자 대시보드)** (`app.py:757-806` `get_room()`, `app.py:906-912` `host_members()`): 수업 중 학생이 브라우저를 닫거나 화면을 벗어나면 폴링이 멈추지만 진행자가 이를 감지할 방법이 없음. 앱 레벨에서 `_last_poll = {}  # (rid, uid) -> float` 딕셔너리를 선언하고, `get_room()` 진입 시 `_last_poll[(rid, user.id)] = time.time()`으로 갱신. `host_members()` 응답에 `'offline': int(time.time() - _last_poll.get((rid, m.user_id), 0)) > 30` 필드 추가(30초 미갱신 시 오프라인 판정). 진행자 순위 표에 ⚠️ 아이콘으로 표시. 서버 약 8줄, 클라이언트 아이콘 표시 약 5줄. `_end_room()` 에서 해당 방 키 정리 필요.
+
+### 제거/단순화할 것들
+
+- **`force_sector_event()` 이후 `_current_biases` 미갱신 — 섹터 이벤트 직후 가격 역전 가능** (`stock_service.py:266-298`): `force_price()` (2026-08-26에 지적)과 동일하게 `force_sector_event()`도 해당 섹터 종목들의 `_current_biases`를 갱신하지 않음. 섹터 이벤트 발동 직후 20초 뒤 `get_price()` 첫 호출에서 `_current_biases.get(symbol)`이 이전 방향(예: 'down')을 반환해 방금 적용한 상승 이벤트 방향과 반대로 가격이 움직일 수 있음. 해결: `stock_service.py:296` `return affected` 직전에 `for sym in affected: self._current_biases[sym] = direction` 1줄 추가. `force_price()` 수정 시 함께 적용할 것.
+
+- **`enter()` 동명이인 학생이 기존 계정을 그대로 탈취** (`app.py:610-614`): `User.query.filter_by(username=u).first()`가 이미 존재하는 사용자를 반환하면 검증 없이 해당 계정으로 session을 부여. 학번+이름 포맷(`{sid} {name}`)으로 username을 구성하므로(`app.js:77-78`) 같은 학번+이름 학생이 없으면 충돌이 드물지만, 교사가 실수로 동일 학번을 복수 학생에게 부여하거나 악의적으로 타인의 학번+이름을 입력하면 상대방 계정의 자산·거래내역에 접근할 수 있음. 해결: `enter()`에서 기존 사용자가 발견되고 `session['user_id']`가 해당 uid와 다를 때 새 username(`u + f'_{user.id+1}'`)을 자동 생성하거나, 클라이언트에서 더 유일한 식별자(브라우저 fingerprint)를 추가해 username 충돌을 원천 차단.
+
+- **`_push_notified.clear()` 전체 초기화 — 알림 중복 발송 가능** (`app.py:217-218`): `len(_push_notified) > 5000`이 되면 `.clear()`로 전체 삭제 후 다음 `_push_scheduler_tick()`에서 이미 발송했던 키가 set에 없으므로 중복 발송됨. 수업 방이 수십 개 동시 운영되거나 tick이 10초 간격으로 누적되면 5000건 상한에 도달 가능. 해결: `_push_notified.clear()` 대신 `now_iso = datetime.utcnow().isoformat()` 기준 `_push_notified = {k for k in _push_notified if k[2] >= now_iso}` 만료 키만 제거하는 시간 기반 정리로 교체. 또는 `collections.OrderedDict`(LRU 근사) 구조로 교체해 가장 오래된 항목부터 삭제.
+
+- **`_do_reveal()` 당첨자 루프 내 N+1 쿼리** (`app.py:464-483`): `for uid_str, picks in cur.get('picks', {}).items():` 루프에서 `prize > 0`인 당첨자마다 `RoomMember.query.filter_by(room_id=rid, user_id=uid).first()`를 개별 호출(`app.py:478`). 30명이 전원 복권 번호를 선택하고 대부분이 2개 이상 일치하면 최대 30회의 SELECT가 순차 실행됨. 해결: `_do_reveal()` 함수 첫 줄에 `member_map = {m.user_id: m for m in RoomMember.query.filter_by(room_id=rid).all()}` 한 줄을 추가하고, 루프 내 `m = RoomMember.query.filter_by(...).first()`를 `m = member_map.get(uid)`로 교체. 쿼리 최대 30회 → 1회로 단축.
+
+- **`minigame_spin()` 내 `import math` 중복 선언** (`app.py:1379`): `app.py` 상단 6번째 줄에 `import math`가 이미 선언되어 있으나, `minigame_spin()` 함수 본문 내에서 `import math`(`app.py:1379`)가 다시 호출됨. Python 모듈 캐싱으로 기능 상 문제없으나, 매 함수 호출 시 불필요한 `sys.modules` 조회가 발생하고 코드 일관성을 해침. `app.py:1379`의 `import math` 한 줄을 삭제하면 됨. 같은 파일에서 `math.isfinite()`, `math.floor()` 등 math를 사용하는 다른 함수들은 모두 상단 임포트에 의존하므로 이 함수만 내부 임포트를 중복 선언한 것.
+
+- **`submit_quiz()` `room.status == 'paused'` 시 답변 차단 — 룰렛 중 퀴즈 패널티 강제** (`app.py:1606-1608`): `submit_quiz()`는 `if room.status != 'active': return ..., 400`으로 'paused' 상태에서 답변을 차단. 룰렛 미니게임으로 방이 일시정지되는 순간 퀴즈 30초 타이머가 진행 중인 학생은 답변 제출이 불가능해 쿨다운 종료 후 다음 퀴즈 요청 시 암묵적으로 오답 처리됨(`_quiz_state`의 `cooldown_until`이 0이 아니므로). 이는 학생 귀책이 아닌 서버 상태 변경으로 인한 불이익. 해결: `app.py:1607`의 조건을 `if room.status not in ('active', 'paused'):` 로 완화하고, 퀴즈 정산은 `member.cash` 실제 갱신 시에만 member lock 내에서 처리하도록 유지. 1줄 수정으로 수업 중 룰렛-퀴즈 동시 진행 시나리오에서 학생 불이익 제거.
+
+---
+
 ## 2026-08-25
 
 ### 추가하면 좋을 기능
