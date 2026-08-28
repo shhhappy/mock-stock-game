@@ -32,6 +32,34 @@
 
 - **`kick_member()` 이후 `_member_locks` 잔류 — 메모리 누수** (`app.py:724-732`, `app.py:115-122`): `kick_member()`에서 `db.session.delete(m)` 후 `db.session.commit()`을 하지만, 해당 `(rid, uid)` 키의 `threading.Lock` 객체가 `_member_locks` 딕셔너리에 잔류함. `_end_room()`(`app.py:277-279`)이 방 종료 시 정리하므로 단기 누수이나, 대규모 수업 운영(대기 중 강퇴 반복)에서 불필요한 Lock 객체가 쌓임. 해결: `app.py:731` `db.session.commit()` 직후에 `with _member_locks_meta: _member_locks.pop((rid, uid), None)` 추가. `_member_locks_meta`가 이미 존재하므로 2줄 추가.
 
+---
+
+## 2026-08-28
+
+### 추가하면 좋을 기능
+
+- **참여자 화면의 총자산 실시간 그래프 (시계열 포트폴리오 트래킹)** (`static/js/app.js:19` `S.assetHistory`, `app.py:1131-1162` `get_portfolio()`): 현재 `S.assetHistory` 배열이 프론트엔드 상태에 이미 선언되어 있지만 총자산 추이를 꺾은선 그래프로 보여주는 UI 컴포넌트가 존재하지 않음. 포트폴리오 폴링 응답의 `total_value`를 `S.assetHistory`에 타임스탬프와 함께 누적하고, 포트폴리오 탭 상단에 `Chart.js`(이미 CDN 로드됨, `S.portChart` 상태도 선언됨) 꺾은선 차트를 렌더링하면 학생이 자신의 자산 흐름을 시각적으로 파악할 수 있음. 서버 변경 불필요. `app.js` 포트폴리오 렌더 함수 내 약 20줄 추가.
+
+- **룰렛 종료 후 전체 결과 공유 화면 (진행자 전용)** (`app.py:1283-1405` 룰렛 엔드포인트 군, `_rlt_active`): 룰렛이 끝나고 게임이 종료되면 누가 얼마를 땄는지 진행자가 즉시 확인하거나 학생들에게 보여줄 화면이 없음. `GET /api/rooms/<rid>/host/roulette-results` 엔드포인트를 추가해 `RoomTransaction.query.filter_by(room_id=rid, action='RLT')` 결과를 집계(`user_id` 별 `amount` 합산)하여 반환하고, 진행자 화면 종료 후 "룰렛 결과" 탭에 학생별 획득 금액 순위를 표시. 서버 약 15줄, 클라이언트 탭 렌더 약 15줄.
+
+- **복권 번호 자동 추천 (랜덤 채우기 버튼)** (`static/js/app.js` 복권 번호 선택 UI, `app.py:1481-1515` `lottery_pick()`): 60초의 번호 선택 시간 안에 1~45 중 6개를 직접 누르는 것이 느린 학생에게 부담. "자동 선택" 버튼 하나로 아직 선택하지 않은 개수만큼 미선택 숫자 중 무작위 채우기. 순수 클라이언트 로직으로 구현 가능(`Math.random` 기반, 서버 불필요). `app.js` 버튼 핸들러 약 10줄.
+
+- **거래 체결 확인 모달 (큰 금액 실수 방지)** (`static/js/app.js` 거래 submit 함수, `app.py:1081-1126` `trade()`): 현재 "매수/매도" 버튼 클릭 즉시 API가 호출되어, 수량 입력 실수로 전 재산의 80% 이상을 단번에 투입하는 사례가 수업 중 자주 발생. 거래 금액이 보유 현금의 50% 초과일 때 `confirm('삼성전자 500주 매수 — 5,000,000원. 진행하시겠습니까?')` 다이얼로그 또는 인라인 확인 모달을 추가. 서버 불필요. `app.js` 거래 함수 내 조건 분기 약 8줄.
+
+- **진행자 화면 — 섹터별 평균 보유 현황 집계** (`app.py:906-912` `host_members()`, `stock_service.py:36-119` `STOCKS`): 진행자가 전체 학생의 섹터별 분산도를 한눈에 파악할 수 없음. `GET /api/rooms/<rid>/host/sector-summary` 신규 엔드포인트를 추가해 `RoomHolding` 전체를 불러온 뒤 `STOCKS[symbol]['sector']` 기준으로 보유 주식 가치를 집계하고, 섹터별 참여 학생 수·총 보유 금액을 반환. 교사가 "배터리 섹터에 30%가 몰렸다"는 수업 토론 소재를 즉시 확인 가능. 서버 약 20줄, 진행자 대시보드 탭에 가로막대 차트 약 15줄.
+
+### 제거/단순화할 것들
+
+- **`get_room()` 내 룰렛 60초 하드 타임아웃이 `rlt_triggered` 방 외에도 적용될 위험** (`app.py:796-801`): `room.rlt_triggered and room.status == 'paused' and room.paused_at` 세 조건을 모두 확인하지만, 진행자가 수동으로 `pause_room()`을 누른 뒤 60초가 지났을 때도 동일 코드 경로가 실행되어 게임이 의도치 않게 종료될 수 있음. 실제로 `rlt_triggered=True`인 방만 해당되므로 현재 코드는 세 번째 조건에서 걸러지기는 하지만, 다른 개발자가 `paused_at` 재활용 시 오해를 유발. 해결: 타임아웃 블록 직전에 `# rlt_triggered=True인 경우에만: 룰렛 대기 최대 60초` 주석을 명시하고, 조건을 `if room.rlt_triggered and room.status == 'paused' and room.paused_at and _rlt_active.get(rid):` 처럼 `_rlt_active` 내 상태도 함께 확인하도록 강화.
+
+- **`submit_quiz()` 쿨다운 설정이 `_quiz_state`에만 반영되고 DB에 저장 안 됨 — 서버 재시작 시 쿨다운 소실** (`app.py:1603-1621`): 퀴즈 제출 후 `_quiz_state[key]['cooldown_until'] = time.time() + cooldown`으로 인메모리 상태에만 저장. Render free tier는 활동이 없으면 인스턴스를 슬립시키므로, 재시작 시 쿨다운이 초기화되어 학생이 즉시 다음 퀴즈를 받아 반복 수령 가능. 수업 중 재시작이 드물긴 하나, `_quiz_history` 딕셔너리(이미 선언됨, `app.py:1579`)에 `last_ts` 필드를 저장해 두면 `get_quiz()`에서 재시작 후에도 남은 쿨다운을 추정 가능. 단기 해결: `RoomTransaction`에 `action='QUIZ'` 레코드를 추가로 기록하고 `get_quiz()` 진입 시 최근 퀴즈 트랜잭션 타임스탬프로 쿨다운 재계산.
+
+- **`_compute_leaderboard()` 에서 `RoomHolding.query.filter_by(room_id=rid).all()` 전체 로드 후 `user_id` 별 분리** (`app.py:268-274`): 현재 방의 모든 보유 종목을 한 번에 가져온 뒤 Python dict로 분리하는 방식은 올바르나, `Deposit.query.filter_by(room_id=rid).all()` 도 `status` 필터 없이 전체를 불러온 뒤 `member_total_value()` 내부에서 `status='active'` 필터링(`app.py:256-259`)을 Python 레벨에서 재적용. 즉 이미 `'withdrawn'`·`'matured'`인 예금도 네트워크·DB에서 전송되고, 메모리에서 버려짐. `app.py:274`의 `Deposit.query.filter_by(room_id=rid).all()`을 `Deposit.query.filter_by(room_id=rid, status='active').all()`로 교체해 DB 레벨에서 필터링. 단순 1줄 수정, 예금이 많은 방에서 최대 수십% 쿼리 데이터 절감.
+
+- **`_end_room()` 에서 `cleanup_room_service()` 호출 전 `RoomHolding` 현금 청산 시 `db.session.delete(h)` 후 `db.session.commit()`을 루프 외부에서 한 번만 호출하지 않고 청산 완료 후 일괄 커밋하는 구조 혼재** (`app.py:362-371`): `for h in ...: db.session.delete(h)` 루프와 그 앞 예금 정산 루프 모두 `db.session.commit()`을 루프 밖 `app.py:371`에서 단 한 번 호출하는 것은 정상이나, `member_map.get(h.user_id)` 미스(참여자 탈퇴·강퇴 후 잔류 holding) 시 `m.cash`를 갱신 없이 `h`만 삭제해 해당 주식 가치가 소멸. 소수 엣지 케이스이나 교실 환경에서 발생 가능. 해결: `if m:` 블록을 `m.cash += ...; db.session.delete(h)` 둘 다 포함하도록 이미 되어 있으나, `m`이 없을 때도 `db.session.delete(h)`는 실행됨(`app.py:370`). 구조를 `if m: m.cash += ...\ndb.session.delete(h)` → `if m: m.cash += price * h.shares` / `db.session.delete(h)` 처럼 현재 코드와 동일하게 보이지만 `m` 미스 시 현금 손실 경로에 `app.logger.warning` 로그를 추가해 운영 중 탐지 가능하게 개선.
+
+- **`RoomTransaction.action` 컬럼이 `String(4)`로 선언되어 있으나 실제 값 'SELL', 'LOTTO', 'RLT', 'QUIZ' 등 4자 초과** (`models.py:74`): `action = db.Column(db.String(4), ...)` 이나 코드 전반에서 `'SELL'`(4자), `'LOTTO'`(5자, `app.py:481`), `'ROULETTE'`(8자, `app.py:1397`), `'QUIZ'`(4자) 등이 삽입됨. SQLite는 `String` 길이를 강제하지 않아 현재 정상 동작하지만, PostgreSQL 마이그레이션 후 `VARCHAR(4)` 컬럼에 'LOTTO', 'ROULETTE' 삽입 시 `DataError`로 게임 중 오류 발생 가능. 해결: `models.py:74`를 `db.Column(db.String(10), ...)` 으로 변경하고, Alembic 없이 운영 중인 경우 `app.py:71-81`의 `ALTER TABLE` 자동 마이그레이션 블록에 `ALTER TABLE room_transactions ALTER COLUMN action TYPE VARCHAR(10)` 추가(PostgreSQL) 또는 SQLite는 재생성. 수업 중 Render PostgreSQL 업그레이드 전에 반드시 적용 필요.
+
 - **`_quiz_state` 서버 재시작 시 `qid` 유실로 진행 중 퀴즈 답변 불가** (`app.py:1384-1408`, `app.py:1410-1459`): `_quiz_state`는 인메모리 딕셔너리이므로 서버 재시작(Render free tier 슬립 복귀 포함) 시 초기화됨. 학생이 `GET /quiz`로 문제를 받은 뒤 서버가 재시작되면 `POST /quiz` 시 `state = _quiz_state.get(key)`가 None을 반환해 `'퀴즈를 먼저 시작하세요'` 오류가 발생하고 답변이 기록되지 않음. 해결: `get_quiz()` 응답에 `'qid': q['id']`를 포함시키고(`app.py:1408`), `submit_quiz()`에서 `state`가 None일 때 요청 바디의 `qid` 필드로 문제를 재조회해 답변 처리하되 쿨다운은 설정 안 하는 fallback 경로 추가. 서버 약 10줄 수정, 클라이언트 `qid` 전송 1줄 추가.
 
 ---
