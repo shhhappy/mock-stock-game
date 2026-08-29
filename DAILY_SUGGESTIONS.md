@@ -2,6 +2,34 @@
 
 ---
 
+## 2026-08-29
+
+### 추가하면 좋을 기능
+
+- **진행자 예금 금리 게임 중 실시간 변경** (`app.py:706-712` `create_room()`, `app.py:1230-1260` `create_deposit()`): 현재 `room.deposit_rate`는 방 생성 시에만 설정되고(`Room` 모델 `app.py:706`), 게임 도중에는 변경 수단이 없음. `PATCH /api/rooms/<rid>/host/deposit-rate` 엔드포인트를 추가해 `room.deposit_rate`를 갱신하고, 이후 신규 예금에만 새 금리를 적용(`create_deposit()` 내 `rate = room.deposit_rate * ...` 분기가 이미 룸 객체를 참조하므로 서버 약 12줄이면 충분). 기존 예금은 생성 당시 금리(`d.rate`)를 유지하므로 소급 적용 없이 구현 가능. 교실에서 "한국은행이 금리를 0.5%p 올렸습니다" 시나리오를 실시간으로 연출해 금리 정책의 경제적 파급효과를 직접 체험하는 교육 연출이 가능.
+
+- **엑셀 내보내기 2번째 시트: 학생별 거래 요약** (`app.py:1766-1836` `export_rankings()`): 현재 Excel은 최종 순위 1개 시트만 포함함. `RoomTransaction.query.filter_by(room_id=rid).all()`에서 `user_id`별 매수 횟수·매도 횟수·복권 수익·룰렛 수익·퀴즈 보상을 집계해 2번째 시트("거래 요약")로 추가. 교사가 "가장 거래가 많은 학생" 또는 "복권만 의존한 학생"을 수업 이후 피드백 자료로 활용 가능. `openpyxl` 이미 임포트됨(`app.py:8-11`), `wb.create_sheet('거래 요약')` 이후 데이터 삽입 약 30줄 추가. 서버만 수정, 클라이언트 버튼 변경 불필요.
+
+- **진행자 특정 종목 상장폐지 이벤트 (가격 강제 0원)** (`app.py:1030-1044` `host_force_price()`, `stock_service.py:240-264` `force_price()`): `host_force_price()`의 `abs(pct) > 50` 상한(`app.py:1039`)으로 인해 진행자가 특정 기업의 주가를 0으로 만드는 "상장폐지" 이벤트를 연출할 수 없음. 별도 `POST /api/rooms/<rid>/host/delist` 엔드포인트를 추가해 `symbol`의 `StockService._prices[symbol]`을 0으로, `_current_biases[symbol]`를 `None`으로 설정하고, 해당 종목 뉴스를 "⚠️ {name} 상장폐지 결정" 헤드라인으로 발행. 보유 학생 자산에 즉각 0원으로 반영되는 극단적 시나리오가 "분산투자의 필요성"을 실감나게 교육하는 수단이 됨. 서버 약 20줄, 클라이언트 진행자 시장 탭 버튼 약 5줄.
+
+- **참가자 총자산 목표 달성 클라이언트 알림** (`static/js/app.js` 포트폴리오 폴링 콜백, 브라우저 Notification API): 주식 가격 임계값 알림(이미 2026-08-25 제안)과 별개로, "내 총자산이 목표 금액(예: 1500만원)에 도달하면 알림"을 학생 스스로 설정하는 기능. `localStorage`에 `goalAmount`를 저장하고, 포트폴리오 폴링 응답의 `total_value >= goalAmount` 조건에서 `new Notification('🎯 목표 달성! 총자산 1,500만원 돌파')`를 발송. 이미 2026-08-25에 제안한 종목 가격 알림과 동일한 인프라(`Notification.requestPermission()`)를 공유해 클라이언트 약 15줄 추가. 서버 변경 불필요. 학생이 자발적으로 목표를 설정하는 주도적 학습 습관 형성 효과.
+
+- **룰렛·복권 미니게임 진행 중 학생 대기 화면 개선 (카운트다운 + 참여 인원 표시)** (`static/js/app.js` 게임 폴링 루프, `app.py:574-576` `room_dict()` lottery 관련 필드): `lottery_active=true`이면서 `lottery_current_round`가 있을 때 참가자 화면에 아무런 카운트다운이나 참여 현황이 표시되지 않아 학생들이 "뭔가 진행 중인지" 인지하지 못함. `GET /api/rooms/<rid>/lottery` 응답의 `pick_deadline`·`state` 필드를 활용해 참가자 화면에 ① 현재 단계(번호 선택 중/당첨번호 발표 대기 중), ② 남은 초 카운트다운, ③ "현재 N명이 번호를 선택했습니다" 참여 인원(클라이언트 측에서 `picks` 길이 사용)을 표시하는 오버레이 추가. 서버 변경 불필요, `app.js` 복권 UI 렌더 함수 약 20줄.
+
+### 제거/단순화할 것들
+
+- **`lobby_members()` 내 N+1 개별 User 쿼리** (`app.py:927-938`): `RoomMember.query.filter_by(room_id=rid).all()` 루프 안에서 매 회원마다 `db.session.get(User, m.user_id)`를 호출함. 30명 대기 중인 로비에서 진행자·참가자 화면이 5초마다 `GET /api/rooms/<rid>/host/lobby-members`를 폴링하면 요청당 31회(멤버 조회 1 + 유저 조회 30) DB 쿼리가 발생. 해결: `app.py:935` 루프 시작 전에 `uids = [m.user_id for m in members]; user_map = {u.id: u for u in db.session.query(User).filter(User.id.in_(uids)).all()}` 2줄 추가 후 루프 내 `db.session.get(User, m.user_id)` → `user_map.get(m.user_id)`로 교체. 쿼리 최대 31회 → 2회로 단축. `_compute_leaderboard()`(`app.py:262-290`)가 이미 동일 패턴으로 구현되어 있어 코드 참고 가능.
+
+- **`export_rankings()` username 파싱 취약성** (`app.py:1784-1786`): `parts = e['username'].split(' ', 1)` 이후 `sid = parts[0] if len(parts) > 1 else ''` / `name = parts[1] if len(parts) > 1 else e['username']` 로직은 학생이 "학번 이름" 형식으로 등록했다고 가정함. 학생이 이름만 입력하거나 여러 단어로 된 닉네임을 쓴 경우 `sid`가 공백이 되어 Excel의 "학번" 열 전체가 비어버림. 보다 견고하게 하려면 `User.username`에 `{sid}_{name}` 같은 구분자 포맷을 강제하거나, 또는 `export_rankings()` 내에서 `sid = ''`일 때 "학번 미등록" 대체 텍스트를 삽입하고 진행자에게 `toast` 경고를 표시(`클라이언트에서 Content-Disposition 파일명 옆 메시지`). 최소 수정은 `app.py:1784`에 `# 학번+이름이 공백으로 구분되어 있지 않으면 학번 열이 비어있을 수 있음` 주석과 Excel 헤더에 "(학번 공백 없으면 비어있을 수 있음)" 주석 행 추가.
+
+- **`get_rankings()` / `host_members()` 호출마다 `_compute_leaderboard()` 전체 재계산 — 캐시 없음** (`app.py:1167-1175` `get_rankings()`, `app.py:906-912` `host_members()`): 학생 30명이 3초마다 순위를 폴링하면 분당 600회의 `_compute_leaderboard()` 호출이 발생함. `_compute_leaderboard()`는 `RoomMember`·`User`·`RoomHolding`·`Deposit` 4개 테이블을 매번 전체 로드하고 Python에서 가격 계산. 기존 `_get_room_cached()` / `ROOM_CACHE_TTL`(`app.py:84-105`) 패턴을 그대로 적용해 `_leaderboard_cache: dict = {}` + TTL 2.0초의 캐시 래퍼를 추가하면 캐시 히트 시 DB 쿼리 0회. 구현 약 15줄, 실제 순위 지연은 2초로 수업 UX에 영향 없음. Render free tier PostgreSQL 연결 압박이 심한 환경에서 특히 효과적.
+
+- **`_roulette_config` 서버 재시작 시 기본값 복귀** (`app.py:513-514` `_roulette_config`, `app.py:1681-1701` `host_roulette_config()`): 진행자가 게임 시작 전 룰렛 배수·확률을 커스터마이즈해도(`app.py:1700` `_roulette_config[rid] = ...`), Render free tier 슬립 후 재시작 시 `_roulette_config`가 초기화되어 룰렛이 기본 설정(`_DEFAULT_RLT_CFG`)으로 실행됨. 교사가 "이번 수업은 25배 확률을 높게 설정"했어도 게임 중 재시작 시 무효화. 해결: `Room` 테이블에 `rlt_multipliers VARCHAR(100) DEFAULT NULL`, `rlt_weights VARCHAR(100) DEFAULT NULL` 컬럼을 추가(`app.py:70-81`의 `ALTER TABLE` 패턴 활용). `host_roulette_config()` POST 시 DB에도 JSON 직렬화해 저장, GET 시 DB 우선 조회 후 `_roulette_config` 인메모리 갱신. 서버 약 10줄 추가.
+
+- **`Room.query.get_or_404()` 사용 불일치 — SQLAlchemy 2.x deprecation 경고** (`app.py:760`, `app.py:808`, `app.py:823`, `app.py:836` 등 `get_or_404()` 호출 약 20곳): `_end_room()`, `_compute_leaderboard()`, `minigame_spin()` 등 내부 함수들은 `db.session.get(Room, rid)` (SQLAlchemy 2.x 권장 방식)를 사용하는데, `@app.route` 핸들러들 대부분은 `Room.query.get_or_404(rid)` (Flask-SQLAlchemy 구 API, 2.x에서 `LegacyAPIWarning`)를 사용. 두 방식이 혼재하면 향후 SQLAlchemy 2.x 완전 전환 시 일괄 수정이 어려워짐. `app.py:808` 이하 모든 핸들러에서 `Room.query.get_or_404(rid)` → `room = db.session.get(Room, rid); if not room: abort(404)` 패턴으로 일괄 교체. `abort`는 `flask` 에서 이미 임포트 가능. 기능 변경 없이 미래 호환성 확보.
+
+---
+
 ## 2026-08-28 (daily-analysis)
 
 ### 추가하면 좋을 기능
