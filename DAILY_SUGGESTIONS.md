@@ -2,6 +2,34 @@
 
 ---
 
+## 2026-08-29 (daily-analysis)
+
+### 추가하면 좋을 기능
+
+- **QR 코드 자동 생성 — 방 입장 URL용** (`static/js/app.js` 진행자 대기 화면, `app.py:593-599` `index()`): 교사가 학생에게 방 코드를 공유할 때 외부 QR 생성 사이트를 별도로 열어야 함. 진행자 로비 화면에서 `?code=ABCDEF` URL을 담은 QR 코드를 즉시 생성·표시하면 학생이 한 번의 카메라 스캔으로 입장 가능. 구현: `cdnjs.cloudflare.com` 허용 CDN에서 `qrcodejs` 로드 또는 순수 JS QR 인코더 인라인 삽입 후 `new QRCode(el, location.origin + '/?code=' + room.code)` 약 5줄. 서버 변경 불필요, 클라이언트 약 10줄. 수업 초반 코드 배포 시간을 단축해 실질 게임 시간 확보.
+
+- **주식 배당금 지급 시뮬레이션** (`stock_service.py:127-141` `StockService.__init__()`, `app.py:262-290` `_compute_leaderboard()`): 금융·통신 섹터 종목(KBFIN, SKTEL 등)은 현실에서 정기 배당을 지급하는 대표 종목임에도 게임 내에서 배당 개념이 전혀 없음. 진행자 전용 `POST /api/rooms/<rid>/host/dividend` 엔드포인트를 추가해 `{'symbol': 'KBFIN', 'per_share': 500}` 형태로 호출 시 `RoomHolding.query.filter_by(room_id=rid, symbol=symbol)`로 보유자를 조회해 `shares * per_share` 금액을 각 `RoomMember.cash`에 지급하고 `RoomTransaction(action='ADJ', note='배당금 수령')`으로 기록. 서버 약 20줄, 클라이언트 진행자 시장 탭 배당 버튼 약 10줄. "배당률 vs 주가 상승" 트레이드오프를 직접 체험하는 교육 포인트 생성.
+
+- **게임 설정 프리셋 자동 저장/복원** (`static/js/app.js` 방 생성 폼, `app.py:676-715` `create_room()`): 매 수업마다 동일 설정(게임 시간 30분, 시작 자산 1000만원, 예금 금리 3%)을 반복 입력해야 함. 방 생성 폼 제출 시 `localStorage.setItem('room_preset', JSON.stringify({duration, cash, rate}))` 저장, 다음 방문 시 `JSON.parse(localStorage.getItem('room_preset'))`으로 폼 자동 채우기. 서버 변경 불필요, 클라이언트 약 15줄. Render free tier 슬립 재시작 후 같은 설정으로 방을 빠르게 재생성할 때 특히 유용하며, 추가로 "설정 초기화" 버튼 1개 제공으로 기본값 복원 가능.
+
+- **학생 투자 일지 (개인 메모장)** (`static/js/app.js` 포트폴리오 탭, `static/index.html` 포트폴리오 섹션): 실제 투자자들은 매매 일지를 기록해 전략을 회고함. 포트폴리오 탭 하단에 `<textarea>` 메모란을 추가하고 `localStorage.setItem('trade_journal_' + rid, text)` 로 로컬에 자동 저장(300ms `debounce`). "삼성전자를 산 이유: 반도체 섹터 상승 뉴스" 형태로 학생이 투자 결정 근거를 기록하도록 유도. 서버 변경 불필요, 클라이언트 약 15줄. 게임 종료 후 교사가 "왜 그 종목을 샀나요?" 질문 시 학생이 메모를 근거로 대답하는 수업 토론 활성화 효과.
+
+- **진행자 게임 종료 즉시 학급 전체 통계 요약 화면** (`app.py:335-388` `_end_room()`, `app.py:1735-1745` `host_publish_results()`): 게임 종료 후 진행자는 Excel 다운로드 또는 "결과 공개" 버튼을 눌러야만 내용을 확인할 수 있어, 수업 마무리 순간 즉각적인 피드백이 불가능함. `GET /api/rooms/<rid>/host/game-summary` 신규 엔드포인트를 추가해 평균 수익률·표준편차·최고/최저 수익률 학생·가장 많이 거래된 종목·총 거래 건수·복권/룰렛 총 지급액 등 학급 통계를 반환. `_end_room()` 호출 후 진행자 클라이언트 폴링이 `ended` 상태를 감지하면 자동으로 요약 카드를 표시. `_compute_leaderboard()`·`RoomTransaction` 집계 재활용, 서버 약 25줄 + 클라이언트 약 20줄.
+
+### 제거/단순화할 것들
+
+- **`app.secret_key` 하드코딩 기본값 — 세션 위조 보안 취약점** (`app.py:24`): `os.environ.get('SECRET_KEY', 'mock-stock-game-secret-2024')` 구성에서 환경변수 미설정 시 GitHub 공개 저장소에 노출된 `'mock-stock-game-secret-2024'`가 기본값으로 사용됨. Flask 세션은 서버 비밀키로 서명된 쿠키에 `user_id`를 저장하므로, 비밀키가 공개되면 공격자가 임의 `user_id`로 서명된 쿠키를 위조해 타인 계정으로 인증 우회 가능. 해결: 기본값을 제거하고 `SECRET_KEY = os.environ.get('SECRET_KEY'); assert SECRET_KEY, 'SECRET_KEY 환경변수 미설정'` 으로 강제하거나, 로컬 개발 편의를 위해 `os.urandom(24).hex()`를 임시 기본값으로 사용(재시작마다 세션 무효화 허용). Render 배포 환경에서는 Environment Variables 탭에서 고유 키 설정 필수.
+
+- **`_next_price()` 클램핑 범위(`±40%`)와 `force_price()` 허용 범위(`+200%/−70%`) 불일치** (`stock_service.py:161`, `stock_service.py:247`): `_next_price()`는 `max(base * 0.6, min(base * 1.4, new_price))`로 기준가 대비 ±40%만 허용. 반면 `force_price()`는 `max(base * 0.3, min(base * 3.0, new_price))`로 최대 +200%까지 허용. 결과적으로 진행자가 `force_price(+100%)`로 기준가의 2배를 설정해도, 다음 자연 업데이트 틱(최대 20초)에서 `_next_price()` 클램핑에 의해 `base * 1.4`로 즉시 내려감. "주가 2배 이벤트"를 연출했는데 20초 후 원상복귀하는 교육 혼란 발생. 해결: `stock_service.py:161` 클램핑 범위를 `base * 0.3 ~ base * 3.0`으로 `force_price()` 범위와 통일하거나, `force_price()` 후 `_prices[symbol]`의 타임스탬프를 현재 시각으로 리셋해 다음 자연 업데이트까지 클램핑 없이 유지.
+
+- **`create_room()` 방 이름 길이 상한 미검증 → PostgreSQL `DataError`** (`app.py:681-682`): `Room.name = db.Column(db.String(100))`으로 정의되어 있으나 `create_room()`의 유효성 검사는 `if not name or len(name) < 2:` 하한 조건만 있고 상한이 없음. PostgreSQL에서 100자를 초과하는 방 이름 삽입 시 `DataError: value too long for type character varying(100)` → 500 Internal Server Error 반환. SQLite는 길이를 강제하지 않아 DB 간 동작 불일치 발생. `app.py:682` 조건에 `or len(name) > 100` 추가 후 `return jsonify({'error': '방 이름은 100자 이하여야 합니다.'}), 400` 한 줄 추가.
+
+- **`_push_scheduler_loop()` `except Exception: pass` — 알림 스케줄러 오류 완전 소거** (`app.py:225-227`): 알림 스케줄러 루프의 예외 처리가 `pass`로 모든 오류를 조용히 소거. DB 연결 오류, VAPID 키 만료, `webpush()` 라이브러리 내부 예외 발생 시 Render 로그에 아무것도 남지 않아 "알림이 왜 안 오나요?" 문제를 진단할 수단이 없음. `PUSH_ENABLED=True`임에도 알림이 전혀 발송되지 않는 사태를 수업 도중에 인지 불가. `app.py:227`의 `pass`를 `app.logger.error(f'[push] scheduler tick error: {e}', exc_info=True)` 로 교체. 기존 `app.logger.setLevel(logging.INFO)` 설정(`app.py:36`)에 의해 Render 로그에서 즉시 확인 가능. 1줄 수정.
+
+- **`starting_cash` 상한 미검증 → 퀴즈 보상·패널티 과대 계산** (`app.py:701`): `max(100000, float(d.get('starting_cash', 10_000_000)))` 처리에 상한이 없음. 시작 자산을 1조 원(10^12)으로 설정하면 퀴즈 정답 보상 `int(room.starting_cash * reward_pct / 100)`(`app.py:1630`)이 10^10원 규모가 되어 화면에 지수 표기로 출력되고 게임 밸런스 완전 붕괴. `deposit_rate`도 `max(0, min(50, float(...)))`으로 상한 50%가 적용되어 있으나 `starting_cash`만 상한 없음. `app.py:701`을 `max(100_000, min(100_000_000, float(d.get('starting_cash', 10_000_000))))` 로 상한 1억 원 추가. 클라이언트 방 생성 폼 `<input>` 에도 `max="100000000"` 속성 추가(서버 1줄 + 클라이언트 1줄).
+
+---
+
 ## 2026-08-29
 
 ### 추가하면 좋을 기능
