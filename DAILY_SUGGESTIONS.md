@@ -5000,3 +5000,32 @@
 - **`PushSubscription.endpoint` 컬럼이 500자로 제한 — Chrome FCM 엔드포인트 길이 초과 가능** (`models.py:87`): `endpoint = db.Column(db.String(500), ...)` 으로 500자 제한. 실제 Chrome/Edge 의 FCM Web Push 엔드포인트는 `https://fcm.googleapis.com/fcm/send/...` 형태로 500자를 초과하는 경우가 있으며, Postgres에서는 `StringDataRightTruncationError`가 발생해 구독 등록이 500 오류를 반환. `String(500)` → `db.Text` (SQLAlchemy의 무제한 텍스트)로 변경하고, `app.py:71-81` 스타트업 DDL 블록에 `"ALTER TABLE push_subscriptions ALTER COLUMN endpoint TYPE TEXT"` 추가(SQLite는 이미 VARCHAR를 유연 처리하므로 무해). `models.py:87` 1줄 + `app.py:75` 이후 1줄 추가.
 
 - **`lottery_skip()` 에서 `round_n` 입력값 유효성 검증 없음** (`app.py:1541-1551`): `round_n = int(d.get('round', 1))`(`app.py:1548`)에서 float 문자열(`"1.5"`)이 입력되면 `int("1.5")` 가 `ValueError`로 500 오류를 반환하고, 음수(`-1`)가 입력되면 `done` 셋에 음수 회차가 추가되어 이후 `_lot_round_due()`의 `rnd not in done` 비교를 오염시킴. `try: round_n = int(d.get('round', 1))\nexcept (TypeError, ValueError): return jsonify({'error': '회차는 정수'}), 400` 블록 추가 + `if round_n <= 0: return jsonify({'error': '회차는 양의 정수'}), 400` 가드 삽입. 약 4줄 추가.
+
+---
+
+## 2026-08-30
+
+### 추가하면 좋을 기능
+
+- **거래 수수료(슬리피지) 설정 옵션** (`app.py:1082-1126` `trade()`, `app.py:706-715` `create_room()`): 현재 매수·매도가 정확한 현재가로 수수료 없이 실행됨. 방 생성 시 `commission_rate` 필드(기본 0%, 범위 0~1%)를 추가하고, `trade()` 내 `amount = price * shares` 계산 이후 `fee = round(amount * room.commission_rate / 100)` 만큼 `member.cash`에서 추가 차감하면 됨. `RoomTransaction`에 `note='수수료 포함'` 기록. 서버 약 15줄, 클라이언트 방 생성 폼에 입력란 1개. "잦은 단타 vs 장기 보유" 전략 차이를 체감하게 해 교육적 토론을 유도함.
+
+- **진행자 화면에서 개별 학생 보유 종목 조회** (`app.py:906-912` `host_members()`, `app.py:962-984` `host_member_transactions()`): 진행자는 현재 순위표에서 총자산만 볼 수 있고 각 학생이 어떤 종목을 들고 있는지 확인할 수 없음. `GET /api/rooms/<rid>/host/members/<uid>/portfolio` 엔드포인트를 추가해 `RoomHolding`과 현재가를 조합한 포트폴리오를 반환하면, 진행자가 수업 중 "지금 삼성전자를 많이 들고 있는 학생"을 찾아 질문하거나 지도하는 상호작용이 가능해짐. 서버 약 20줄(기존 `get_portfolio()` 로직 재사용), 클라이언트 순위표 행 클릭 시 드로어 표시 약 20줄.
+
+- **실시간 거래 피드 (최근 n건 공개 열람)** (`app.py:1180-1198` `get_transactions()`, `models.py:68-79` `RoomTransaction`): 현재 거래 내역은 각 참가자 본인만 볼 수 있음. `GET /api/rooms/<rid>/feed?limit=20` 엔드포인트를 추가해 방 전체 최근 거래를 `RoomTransaction.query.filter_by(room_id=rid).order_by(timestamp.desc()).limit(20)`로 반환(사용자명·종목·수량·방향만 노출, 금액 제외). 클라이언트 시장 탭 하단에 스크롤 피드로 표시. "ㅇㅇ님이 삼성전자 50주 매수" 형태의 활동 로그가 시장 분위기를 실감나게 만들고 집단 투자 심리 학습에 활용 가능.
+
+- **방 생성 설정 자동 저장 (localStorage 프리셋)** (`static/index.html:62-79` 방 생성 폼, 관련 JS `doCreateRoom()`): 매 수업마다 게임 시간·시작 자금·예금 금리를 동일하게 입력해야 함. 방 생성 성공 시 `localStorage.setItem('room_preset', JSON.stringify({duration, cash, rate}))` 저장, 다음 방문 시 폼 자동 채우기. Render free tier 슬립 후 재시작 시 같은 설정으로 방을 빠르게 만들 때 유용. 서버 변경 없음, 클라이언트 약 10줄.
+
+- **학생 입장 URL 파라미터 지원 (`?code=XXXX` 자동 입력)** (`static/index.html:27-33` 참가 화면, `app.py:717-731` `join_room()`): 교사가 학생에게 `https://앱주소/?code=ABC123` 형태의 링크를 공유하면, 페이지 로드 시 `new URLSearchParams(location.search).get('code')`로 방 코드 필드를 자동 채우고 참가 화면으로 포커스를 이동해 줌. 서버 변경 없음, 클라이언트 약 5줄. QR 코드나 단축 URL과 결합하면 학생 입장 시간을 크게 단축.
+
+### 제거/단순화할 것들
+
+- **`_member_locks` 딕셔너리 무제한 성장** (`app.py:132-142` `_member_locks`, `app.py:382-384` `_end_room()`): `_end_room()` 호출 시 해당 방의 락을 정리하지만, 서버 재시작 없이 방이 많이 생성·종료되면 일시적으로 메모리가 증가함. `_get_member_lock()`에서 `weakref.WeakValueDictionary`를 사용하거나, 현재 구현처럼 `_end_room()` 내 정리 로직을 유지하되 정리가 누락되는 코드 경로(예: stale 방 자동 종료 `app.py:684-692`)에서도 동일하게 `_member_locks`를 비우도록 보완 필요.
+
+- **`get_or_404` 구식 패턴 전면 교체** (`app.py:757, 808, 823, 836, 852` 등 다수): `Room.query.get_or_404(rid)` 호출이 20곳 이상 존재하는데, SQLAlchemy 2.0에서는 `Query.get()`이 deprecated됨. Flask-SQLAlchemy 3.x 기준 `db.get_or_404(Room, rid)`로 일괄 치환하면 향후 업그레이드 시 경고·에러 없음. `sed -i 's/Room.query.get_or_404(rid)/db.get_or_404(Room, rid)/g'` 수준의 단순 치환으로 해결 가능.
+
+- **`stock_service.py` 차트 데이터 완전 가상 생성 — 안내 문구 추가** (`stock_service.py:303-332` `get_history()`): `get_history()`는 현재가에서 역산한 랜덤 OHLCV를 반환하므로, 학생이 1개월 차트를 보면 실제 게임 진행과 무관한 완전 가상 데이터를 '역사적 가격'으로 오해할 수 있음. 클라이언트의 차트 컴포넌트 상단에 "이 차트는 학습용 모의 데이터입니다" 안내 배너를 추가하거나(`static/js/app.js` 차트 렌더 부분), API 응답에 `"simulated": true` 필드를 추가해 UI가 면책 문구를 표시하도록 처리하면 혼동을 방지할 수 있음.
+
+- **룰렛 칸 수 5개 하드코딩 제거** (`app.py:505-511` `ROULETTE_OUTCOMES`, `app.py:1693` `host_roulette_config()`): `len(raw_m) == 5 and len(raw_w) == 5` 조건이 박혀 있어 진행자가 배율/확률 조합만 바꿀 수 있고 칸 수 자체를 변경할 수 없음. 교육적으로 "꽝/2배/10배 3칸" 같은 단순 구성이 유용할 때가 있는데 현재 불가능. `ROULETTE_OUTCOMES` 리스트 길이를 configurable하게 만들고 `_rlt_outcomes()`의 `enumerate(ROULETTE_OUTCOMES)`를 설정값 길이 기반으로 동적 생성하면 5줄 내외 변경으로 해결 가능.
+
+- **`_push_notified` set 정리 기준이 너무 느슨함** (`app.py:216-218` `_push_scheduler_tick()`): 현재 5000건 초과 시 `_push_notified.clear()` 전체 삭제로 중복 방지 상태를 리셋함. 운영 중 clear가 일어나면 1분 이내 동일 알림이 재발송될 수 있음. 대신 `(type, room_id)` 키로 발송 완료 플래그만 유지하고, 방이 종료될 때(`_end_room()` 내) 해당 방 관련 키를 선택적으로 정리하면 메모리와 안전성 두 가지 모두 개선 가능. 변경 범위: `app.py:149, 196-215, 385` 약 10줄.
+
