@@ -2,6 +2,38 @@
 
 ---
 
+## 2026-08-30
+
+### 추가하면 좋을 기능
+
+- **진행자 전용 텍스트 공지 브로드캐스트** (`app.py` 신규 `POST /api/rooms/<rid>/host/announce`, `room_dict()` `app.py:562-580`): 교사가 뉴스(주가 방향 힌트 포함)와 별개로 학생 화면에 순수 텍스트 팝업을 띄우고 싶을 때 (예: "지금부터 배터리 섹터 매수 금지 실험", "5분 후 랜덤 이벤트 발생") 현재 수단이 없음. `POST /api/rooms/<rid>/host/announce {'message': str}` 를 추가하고 인메모리 `_announcements: dict = {}  # rid -> {text, ts}`에 저장. `room_dict()` 응답에 `'announcement': {text, ts}` 포함해 학생 3초 폴링에서 새 `ts` 감지 시 팝업 표시 → 5초 자동 닫힘. `_end_room()` 에서 `_announcements.pop(room.id, None)` 정리. 서버 약 10줄, 클라이언트 팝업 렌더 약 15줄. 기존 뉴스 시스템과 독립적이라 주가 방향 힌트 없는 순수 진행자 소통 가능.
+
+- **학생 그룹(팀) 대항전 모드** (`app.py` 신규 `POST /api/rooms/<rid>/host/teams`, `app.py:1167-1175` `get_rankings()`): 현재 게임은 개인전만 지원. 진행자가 `POST /api/rooms/<rid>/host/teams {'groups': [[uid1, uid2], [uid3, uid4]]}` 로 학생을 팀으로 배치하면 인메모리 `_teams: dict = {}  # rid -> {uid: team_id}`에 저장. `get_rankings()` 응답에 팀별 평균 수익률 및 팀 색상 코드 추가. 학생 순위표에 팀 배지 표시. `_end_room()`에서 `_teams.pop(rid, None)` 정리. 모둠별 토론·협력 수업에서 전략을 공유하며 경쟁하는 교육 형태 지원. 서버 약 20줄 + 클라이언트 팀 배지 약 10줄.
+
+- **거래량 기반 주가 영향 메커니즘** (`stock_service.py:151-161` `_next_price()`, `app.py:1122-1124` trade 기록): 현재 주가는 학생 거래와 완전히 독립적으로 변동돼 "많이 사면 주가 오른다"는 수요-공급 원리가 교육 내에서 체험되지 않음. `StockService`에 `_trade_pressure: dict = {}  # sym -> float` 누적기를 추가하고, `trade()` 핸들러에서 BUY 거래 시 `svc.add_pressure(symbol, +shares)`, SELL 시 `-shares`를 호출. `_next_price()`에서 `drift += min(0.02, pressure * 0.001)` 형태로 반영 후 압력 감쇠. `stock_service.py` 약 15줄 + `app.py` 거래 핸들러 1줄. "내가 많이 사니 주가가 올랐다" 직접 체험으로 시장가격 결정 원리를 학습.
+
+- **미리 준비된 시나리오 이벤트 카드 (진행자용)** (`app.py:1663-1678` `host_market_event()`, `education_data.py` 신규 `MARKET_SCENARIOS`): 진행자가 수업 중 실시간으로 변동률과 섹터를 타이핑하는 번거로움 없이, 사전 정의된 시나리오 카드를 버튼 한 번으로 실행. `education_data.py`에 `MARKET_SCENARIOS = [{'label': '🇺🇸 미국 금리 인상', 'sector': '금융', 'pct': -15, 'desc': '해외금융·국내금융 동반 하락'}, ...]` 목록 약 10가지 하드코딩. `GET /api/education/market-scenarios` 신규 엔드포인트 약 3줄. 진행자 시장 탭에 카드 UI 렌더링, 클릭하면 기존 `host_market_event()` API 호출. 교사의 수업 중 타이핑 부담 제거 및 교육적으로 검증된 시나리오로 일관성 있는 경험 제공.
+
+- **학생 투자 스타일 자동 분류 배지** (`app.py:987-1005` `get_transactions()`, 신규 `GET /api/rooms/<rid>/my-style`): 게임 종료 후 학생의 거래 패턴을 분석해 투자 성향을 자동 분류. 규칙: 총 거래 횟수 > 10 → "단기 트레이더 🏃", 보유 섹터 수 >= 4 → "분산투자자 🎯", 복권·룰렛 수익 / 총 수익 > 50% → "투기꾼 🎰", 나머지 → "장기 투자자 🏦". `RoomTransaction`과 `RoomHolding` 집계, 서버 약 30줄. `results_published=True` 이후 학생 화면에 "나의 투자 성향" 카드 자동 표시, 클라이언트 약 15줄. "자신의 투자 습관 인식"이 핵심 금융 교육 목표 중 하나이며, 게임 직후 피드백으로 즉각 연결.
+
+- **게임 종료 D-Day 카운트다운 위젯 (진행자 설정)** (`app.py` 신규 `POST /api/rooms/<rid>/host/target-date`, `room_dict()` `app.py:562-580`): 교사가 "결산 발표일", "금융 수업 최종 시험일" 등 외부 일정을 게임과 연동해 학생에게 시각화하고 싶을 때 수단이 없음. `POST /api/rooms/<rid>/host/target-date {'date': '2026-09-30'}` 엔드포인트 추가, 인메모리 `_target_dates: dict = {}  # rid -> date` 저장. `room_dict()` 에 `'target_date': ...`, `'days_remaining': int` 포함. 학생 화면 상단 `"결산까지 D-15"` 배지로 표시. 서버 약 8줄, 클라이언트 카운트다운 배지 약 5줄. `_end_room()`에서 `_target_dates.pop(rid, None)` 정리.
+
+### 제거/단순화할 것들
+
+- **`host_adjust()` NaN/Infinity delta 미검증 → 학생 현금 영구 오염** (`app.py:949-951`): `delta = float(d.get('delta', 0))` 변환 후 `math.isfinite()` 검사가 없음. `delta = float('nan')` 이면 `m.cash = max(0, m.cash + NaN)` → `max(0, nan)` = nan (Python 동작), RoomMember.cash에 NaN이 저장돼 이후 `_compute_leaderboard()`의 모든 순위·수익률 계산이 NaN 전파로 깨짐. `delta = float('inf')` 이면 해당 학생의 현금이 무한대로 설정. 해결: `app.py:950` `if delta == 0:` 조건 바로 앞에 `if not math.isfinite(delta): return jsonify({'error': '숫자 오류'}), 400` 1줄 추가. `math`는 이미 `app.py:6`에서 임포트됨.
+
+- **`lottery_start()` `_lottery_lock` 없이 `lot['current']` 쓰기 — 경쟁 조건** (`app.py:1420-1443`): 진행자 수동 복권 시작 핸들러가 `_lottery_lock` 없이 `lot.get('current')` 상태를 확인하고 `lot['current'] = {…}`를 기록. 동시에 `get_room()` 폴링 스레드가 `_auto_start_lottery_if_due()` → `with _lottery_lock:` 내에서 동일 `lot['current']`를 초기화하면 두 복권이 겹쳐 첫 번째 복권이 덮어써지거나, 모든 참가자가 번호를 골랐음에도 두 번째 복권이 시작되는 교육 혼란 발생. 해결: `app.py:1420-1443` 전체를 `with _lottery_lock:` 블록으로 감싸기. `_auto_start_lottery_if_due()`가 이미 동일 락을 사용하므로 상호 배제 보장.
+
+- **`withdraw_deposit()` 락 밖 `dep.amount` 읽기 → lost update** (`app.py:1265`, `app.py:1270-1278`): `dep = db.session.get(Deposit, did)` 이 `with _get_member_lock(rid, user.id):` 획득 전에 실행됨. 락 획득 후 `m.cash += dep.amount`가 스테일 snapshot 값을 사용. 동시 `_liquidate_shortfall()` 호출이 `dep.amount -= take`로 부분 차감했다면 `withdraw_deposit()`은 감소 전 전체 금액을 현금에 더해 학생이 실제보다 많은 돈을 수령. 해결: `app.py:1275` 위에 `db.session.refresh(dep)` 1줄 추가. 이미 동일 락 블록 내에 `db.session.refresh(m)` 패턴이 있으므로 일관성 있게 적용 가능.
+
+- **`get_prev_close()` 는 항상 게임 시작 당시 초기가격 반환 — "전일 종가" 아님** (`stock_service.py:143-149` `_init_prices()`, `stock_service.py:300-301`): `self._prev[sym] = start`는 `_init_prices()`에서만 설정되며 이후 `get_price()` 내 가격 갱신 시 업데이트되지 않음. 결과적으로 `get_stocks()`의 `change_pct = (price - prev) / prev * 100`는 "현재가 vs 게임 시작가" 비율이 되어, 게임 후반부로 갈수록 등락률 수치가 누적 변동률로 점점 커져 의미가 변함. 해결: `stock_service.py:206-207` `new_price = self._next_price(…)` 계산 직전에 `self._prev[symbol] = price` (= 갱신 전 현재가)를 추가해 매 틱마다 이전 가격을 실제로 기록. 1줄 추가로 "전 틱 대비 등락"으로 수정.
+
+- **`join_room()` 게임 진행·일시정지 중 참가 허용 — 불공정 자산 지급** (`app.py:722-723`): `if room.status == 'ended':` 만 블록하고 `'active'`·`'paused'` 상태에서도 `RoomMember(cash=room.starting_cash)` 지급 후 참가 가능. 게임 시작 20분 후 늦게 참가한 학생이 초반 손실 없이 전액 자산을 받아 기존 참가자 대비 유리한 출발점. 룰렛·복권이 진행 중인 `'paused'` 상태에서 입장하면 미니게임 기회도 무조건 부여. 해결: `app.py:722` `if room.status == 'ended':` 조건을 `if room.status != 'waiting':` 으로 변경하고 에러 메시지를 `'게임이 이미 시작되었습니다. 대기 중인 방에만 참가할 수 있습니다.'`로 교체. 단, 진행자가 의도적으로 중간 참가를 허용하려면 `POST /api/rooms/<rid>/host/allow-late-join` 같은 옵션 추가 가능.
+
+- **`get_stocks()` 종목당 락 2회 획득 (get_price + get_prev_close) — 63종목 = 126회/요청** (`app.py:1017-1018`, `stock_service.py:196-212`): `get_stocks()` 핸들러가 63개 종목 루프에서 `svc.get_price(sym)` (내부 `with self._lock:`)와 `svc.get_prev_close(sym)` (락 없음, 단 별도 호출)를 순차 실행. 학생 30명 × 3초 폴링 = 분당 63,000회 가격 조회. 해결: `StockService`에 `def snapshot(self) -> dict` 메서드를 추가해 `with self._lock:` 한 번에 `{sym: (price, prev)}` 딕셔너리를 반환. `get_stocks()` 핸들러에서 루프 전 `prices = svc.snapshot()` 1회 호출 후 반복 없이 사용. 락 획득 126회 → 1회로 단축, Render 무료 티어 GIL 병목도 감소.
+
+---
+
 ## 2026-08-29 (daily-analysis)
 
 ### 추가하면 좋을 기능
