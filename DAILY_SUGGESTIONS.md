@@ -2,6 +2,38 @@
 
 ---
 
+## 2026-08-31
+
+### 추가하면 좋을 기능
+
+- **학생 총자산 시계열 스냅샷 그래프** (`app.py` 신규 `GET /api/rooms/<rid>/asset-history`, `app.py:1131-1162` `get_portfolio()`): 현재 학생은 현재 포트폴리오 총자산만 알 수 있고, 게임 시작 후 자산이 어떻게 변해왔는지 추적하는 시각적 수단이 없음. `_asset_snapshots: dict = {}  # (rid, uid) -> [(ts, total_value), ...]` 딕셔너리를 선언하고, `get_portfolio()` 진입 시마다 마지막 스냅샷 이후 30초 이상 경과한 경우 현재 `total_value`를 기록(최대 200개 cap). `GET /api/rooms/<rid>/asset-history` 신규 엔드포인트에서 스냅샷 배열 반환. 포트폴리오 탭 하단에 이미 로드된 Chart.js(app.js 상단 CDN) 라인 차트로 시각화. 서버 약 15줄 + 클라이언트 약 25줄. `_end_room()` 에서 해당 rid 키 정리 필요. "내 자산이 뉴스 이후 얼마나 변했는지" 인과관계를 직접 확인하는 교육 핵심 포인트.
+
+- **진행자 특정 종목 보유자 실시간 조회** (`app.py` 신규 `GET /api/rooms/<rid>/host/holders/<symbol>`, `app.py:262-290` `_compute_leaderboard()` 참조): 수업 중 교사가 "삼성전자를 보유한 학생은 몇 명이고 왜 샀나요?"라고 묻고 싶어도 현재 확인 수단이 없음. `RoomHolding.query.filter_by(room_id=rid, symbol=symbol).all()`로 보유자를 조회하고, `user_map`에서 이름·보유 수량·평균 단가·현재 평가금액을 반환하는 엔드포인트 추가. 서버 약 15줄. 진행자 시장 탭 종목 행 클릭 시 보유자 목록 패널 표시, 클라이언트 약 10줄. "가장 많이 분산된 학생 vs 한 종목 집중 학생" 비교 토론 자료로 직접 활용 가능.
+
+- **주식 관심목록 / 즐겨찾기 (localStorage 기반)** (`static/js/app.js` 주식 목록 렌더 함수, `static/index.html` 주식 탭): 63개 종목 중 관심 종목 5~6개를 빠르게 찾으려면 매번 스크롤·필터가 필요. 각 종목 행에 "☆" 아이콘 버튼을 추가하고, 클릭 시 `localStorage.setItem('watchlist_' + rid, JSON.stringify([...symbols]))` 저장. 주식 탭 상단에 "관심 종목" 섹션을 추가해 즐겨찾기 종목을 우선 표시. 서버 변경 불필요. `app.js` 약 20줄. 실제 증권앱 UX와 동일, 학생이 관심 종목을 정기적으로 모니터링하는 능동적 투자 습관 형성 효과.
+
+- **세션 기반 자동 재입장 (새로고침 시 마지막 방 복귀)** (`static/js/app.js` 초기화 로직 `init()`, `app.py:562-580` `room_dict()`): 학생이 실수로 페이지를 새로고침하면 로그인 화면으로 돌아가 방 코드를 다시 입력해야 함. `sessionStorage.setItem('last_room_id', rid)` 로 마지막 참여 방 ID를 저장하고, `init()` 에서 세션이 유효하면 `GET /api/rooms/{last_room_id}` 를 자동 요청해 방이 진행 중이면 해당 화면으로 즉시 복귀. `room_dict()` 응답의 `status == 'ended'` 이거나 방이 없으면 복귀하지 않음. 서버 변경 불필요. `app.js` 약 10줄 추가. 수업 중 브라우저 사고로 인한 재로그인·코드 재입력 시간 완전 제거.
+
+- **게임 진행 중 남은 시간 경고 자동 토스트** (`app.py:562-580` `room_dict()`): 게임 종료 10분·5분·1분 전에 학생 화면에 자동 팝업 알림이 없어, 종료 직전 매도 타이밍을 놓치는 학생이 발생함. `room_dict()` 내에서 `remaining_seconds`를 계산한 뒤 600(10분), 300(5분), 60(1분) 이하 구간에서 `'time_alert': '5분 남았습니다!'` 필드를 응답에 추가. 클라이언트 폴링에서 이 필드를 감지하면 토스트 팝업 1회 표시, `sessionStorage` 로 중복 방지. 서버 약 8줄 + 클라이언트 토스트 핸들러 약 10줄. 종료 직전 급매도 의사결정 상황 연출로 "패닉 셀" 교육 포인트 생성.
+
+- **복권 회차별 결과 누적 히스토리 조회** (`app.py:464-503` `_do_reveal()`, `app.py:390` `_lots`): 현재 `_lots[rid]`의 `current` 딕셔너리는 다음 회차가 시작되거나 게임 종료 시 덮어써져 이전 회차 결과(`winning`, `all_results`)가 소실됨. 복수 복권 진행 후 "1회차 당첨자가 누구였지?" 확인이 불가능. `_do_reveal()`의 `cur['state'] = 'revealed'`(line 486) 직후에 `lot.setdefault('history', []).append({'round': cur['round'], 'winning': cur['winning'], 'results': dict(cur.get('results', {}))})` 1줄 추가. `GET /api/rooms/<rid>/lottery/history` 신규 엔드포인트에서 이 목록 반환. 진행자 탭에 "복권 결과 기록" 패널 추가. 서버 약 8줄 + 클라이언트 약 10줄.
+
+### 제거/단순화할 것들
+
+- **`minigame_spin()` `_get_member_lock` 미사용 — m.cash 동시 수정 시 lost-update** (`app.py:1383-1399`): `trade()` (line 1103), `create_deposit()` (line 1245), `withdraw_deposit()` (line 1270), `submit_quiz()` (line 1627) 모두 `with _get_member_lock(rid, user.id):` + `db.session.refresh(member)` 패턴을 사용. 그런데 `minigame_spin()`은 보호 없이 `m.cash = m.cash - bet + winnings` (line 1395)를 직접 수정하고 `db.session.commit()`. 룰렛 베팅과 동시에 거래 요청이 처리되면 한쪽의 cash 변경이 덮어써지는 lost-update 발생. 해결: lines 1387-1399 전체를 `with _get_member_lock(rid, user.id):` 블록으로 감싸고, 블록 진입 즉시 `db.session.refresh(m)` 추가. `_liquidate_shortfall()`도 같은 블록 내에 포함해 원자성 확보.
+
+- **`minigame_spin()` `spins_used` 체크가 락 밖에서 수행 — 동시 요청 시 3회 초과 가능** (`app.py:1372-1374`): `spins_used = RoomTransaction.query.filter_by(..., action='RLT').count()` 와 `if spins_used >= 3: return ...` 체크(line 1373)가 `_get_member_lock` 획득 없이 실행됨. 학생이 룰렛 버튼을 빠르게 2번 동시 클릭하면 두 요청 모두 `spins_used < 3` 조건을 통과해 4번째 스핀이 실행될 수 있음. 해결: `spins_used` 쿼리를 위 항목의 `with _get_member_lock(rid, user.id):` 블록 내부로 이동해 멤버 락 획득 후 최신 카운트를 확인.
+
+- **`host_force_price()` `pct` float 변환 try/except 없음 → 비정상 입력 시 500** (`app.py:1038`): `pct = float(d.get('pct', 0))` 에 try/except 없음. 진행자 UI 오류 또는 네트워크 조작으로 `pct: "abc"` 가 전송되면 `ValueError` → Flask 500 Internal Server Error. 동일 패턴의 `host_market_event()`(line 1671)는 `try: pct = float(...) / except: return jsonify({'error': '잘못된 변동률'}), 400` 으로 올바르게 처리. `host_force_price()` 만 예외처리가 누락된 일관성 결함. 해결: `app.py:1038` 에 `try:` + `except (TypeError, ValueError): return jsonify({'error': '변동률 오류'}), 400` 추가.
+
+- **`host_news_interval()` float 변환 try/except 없음 → 500** (`app.py:996-998`): `svc.set_news_interval(float(d['news_seconds']))` 와 `svc.set_price_interval(float(d['price_seconds']))` 모두 try/except 없음. 진행자가 뉴스·주가 인터벌 설정 UI에서 비숫자 값을 전송하면 `ValueError` → 500. `d.get('news_seconds')`가 없으면 `float(None)` → `TypeError`. 두 변환을 각각 `try / except (TypeError, ValueError): return jsonify({'error': '초 단위 숫자를 입력하세요.'}), 400` 으로 감싸기. 총 4줄 추가.
+
+- **`get_history()` 락 해제 후 bars 랜덤 생성 — 동시 요청 시 차트 캐시 불일치** (`stock_service.py:307-331`): 캐시 miss 시 첫 번째 `with self._lock:` 블록 종료(line 312) 후 `bars` 배열을 락 없이 생성(lines 314-328)하고, 두 번째 `with self._lock:` 블록에서 캐시에 저장(lines 330-331). 30명 학생이 동시에 같은 종목 차트를 요청하면 모두 캐시 miss를 보고 각자 다른 `random.gauss()` 기반 bars를 생성해 마지막 완료 요청이 캐시를 점유. 학생마다 다른 차트 데이터가 표시됨. 해결: 두 번째 `with self._lock:` 블록 진입 직후 캐시를 재확인(double-check)해 이미 채워졌으면 그 데이터를 반환하는 3줄 추가, 또는 bars 생성 전체를 단일 `with self._lock:` 블록으로 통합.
+
+- **`create_deposit()` 최소 금액 미검증 → 소액 예금 수천 건 스팸 가능** (`app.py:1239-1241`): `if not (0 < amount < float('inf'))` 체크로 양수만 검사하고 하한이 없음. 학생이 1원 예금을 반복 생성하면 `Deposit` 테이블에 수천 개의 행이 쌓이고, `_compute_leaderboard()` 내 `Deposit.query.filter_by(room_id=rid).all()` (app.py:273), `_end_room()` 이자 정산 루프 (app.py:353), `get_deposits()` 목록 조회가 모두 느려짐. `member_total_value()` 호출마다 다수의 Deposit 행을 로드해 30명 × 3초 폴링 환경에서 DB 부하 급증. 해결: `app.py:1241` 조건에 `or amount < 1000` 을 추가해 최소 1,000원 이상 예금하도록 강제. 클라이언트 입력 폼 `min="1000"` 속성도 추가.
+
+---
+
 ## 2026-08-30
 
 ### 추가하면 좋을 기능
