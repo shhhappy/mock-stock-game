@@ -5061,3 +5061,29 @@
 
 - **`_push_notified` set 정리 기준이 너무 느슨함** (`app.py:216-218` `_push_scheduler_tick()`): 현재 5000건 초과 시 `_push_notified.clear()` 전체 삭제로 중복 방지 상태를 리셋함. 운영 중 clear가 일어나면 1분 이내 동일 알림이 재발송될 수 있음. 대신 `(type, room_id)` 키로 발송 완료 플래그만 유지하고, 방이 종료될 때(`_end_room()` 내) 해당 방 관련 키를 선택적으로 정리하면 메모리와 안전성 두 가지 모두 개선 가능. 변경 범위: `app.py:149, 196-215, 385` 약 10줄.
 
+
+## 2026-08-31
+
+### 추가하면 좋을 기능
+
+- **실시간 거래 피드 (학생 화면)** (`app.py:1081-1126` `trade()`, 신규 `GET /api/rooms/<rid>/feed`): 현재 학생들은 다른 학생이 무슨 종목을 거래했는지 전혀 알 수 없어 군중심리·쏠림 현상 체험이 불가능. `trade()` 핸들러에서 거래 완료 후 인메모리 `_recent_trades: dict = {}  # rid -> deque(maxlen=20)`에 `{username, symbol, action, shares, timestamp}` 추가(닉네임은 `User.username`). 신규 `GET /api/rooms/<rid>/feed` 엔드포인트 약 5줄로 최근 20건 반환. 학생 화면 우측에 스크롤 피드를 띄워 "홍길동이 삼성전자 100주 매수" 형태로 표시, 3초 폴링에서 기존 `room_dict()`와 함께 로드. `_end_room()`에서 `_recent_trades.pop(rid, None)` 정리. "많은 학생이 같은 종목을 사면 주가가 어떻게 될지" 예측하는 군중심리 토론 소재가 됨.
+
+- **진행자 화면 — 종목별 보유 학생 수 히트맵** (`app.py:906-912` `host_members()`, 신규 `GET /api/rooms/<rid>/host/holdings-overview`): 진행자는 현재 순위와 총자산만 볼 수 있고, 어느 종목에 학생이 집중됐는지 알 수 없음. `RoomHolding.query.filter_by(room_id=rid)` 전체를 종목별로 group-by해 `{symbol, name, holder_count, total_shares}` 반환, 서버 약 10줄. 진행자 화면에 종목별 보유 학생 수를 색 농도로 표시하는 간단한 표 추가. "전체 반의 70%가 삼성전자 보유 → 집중 위험" 같은 포트폴리오 분산 수업 토론 소재 제공.
+
+- **차트에 내 매수·매도 시점 마커 오버레이** (`app.py:1067-1076` `get_chart()`, `app.py:1180-1198` `get_transactions()`): 현재 차트 API 응답에는 가격 히스토리만 있고 학생 자신의 거래 시점이 표시되지 않음. `get_chart()` 응답에 `my_trades: [{timestamp, action, price, shares}, ...]` 필드를 추가하려면 해당 symbol의 `RoomTransaction` 필터 1쿼리 추가로 충분(약 8줄). 차트 JavaScript에서 BUY는 ▲ 초록, SELL은 ▽ 빨강 마커로 오버레이. "최고가에서 팔았어야 했는데" 같은 직관적 복기로 손절·익절 타이밍 교육.
+
+- **게임 종료 후 학생에게 투자 스타일 배지 자동 부여** (`app.py:1768-1836` `export_rankings()`, 신규 `GET /api/rooms/<rid>/my-result`): 결과 공개 후(`results_published=True`) 학생이 접근하면 자신의 거래 패턴을 분류. 규칙: 총 거래 횟수 > 10 → "단기 트레이더 🏃", 보유 섹터 수 ≥ 4 → "분산투자자 🎯", 복권·룰렛 수익 / 총 수익 > 50% → "투기꾼 🎰", 나머지 → "장기 투자자 🏦". `RoomTransaction` 집계 서버 약 25줄. 게임 직후 "나의 투자 성향" 카드를 자동으로 학생 화면에 표시, 수업 마무리 성찰 활동과 연계.
+
+- **Excel 결과에 개인 거래 내역 시트 추가** (`app.py:1768-1836` `export_rankings()`): 현재 엑셀은 최종 순위 시트 1장만 생성. `openpyxl` 이 이미 임포트돼 있으므로 `wb.create_sheet('거래내역')` 추가 후 `RoomTransaction.query.filter_by(room_id=rid).order_by(...)` 전체를 학생별·시간순으로 정렬해 두 번째 시트에 기록(약 30줄). 교사가 수업 후 각 학생의 투자 의사결정 과정을 추적·평가하는 채점 자료로 활용 가능. `_end_room()` 이후 홀딩이 이미 청산돼 있으므로 거래 원장은 `RoomTransaction` 에 완전히 남아있음.
+
+### 제거/단순화할 것들
+
+- **`_quiz_state`/`_quiz_history`/`_quiz_settings` 서버 재시작 시 초기화 — 퀴즈 쿨다운 소멸** (`app.py:1577-1579`): `lottery_rounds_done`은 DB(`models.py:41`)에 저장돼 재시작 후 복구되지만 퀴즈 관련 세 딕셔너리는 모두 인메모리라 Render free tier 슬립 해제 후 학생이 60초 쿨다운 없이 퀴즈를 무한 재시도해 보상금을 남발 수령할 수 있음. 해결: `RoomMember` 모델(`models.py:47-54`)에 `quiz_cooldown_until = db.Column(db.Float, default=0)` 컬럼 추가(마이그레이션 1줄) 후 `get_quiz()`·`submit_quiz()`에서 `member.quiz_cooldown_until`을 읽고 쓰도록 변경. 쿨다운 상태가 DB에 영속화되어 서버 재시작에 안전해짐.
+
+- **`host_force_price()` pct=0 미검증** (`app.py:1039`): `if not symbol or abs(pct) > 50:` 조건이 `pct=0`을 통과시켜 아무 효과 없는 API 호출이 성공 200 응답을 반환. 서버 로직 상 문제는 없으나 진행자 UX 혼란 야기. `abs(pct) > 50` → `pct == 0 or abs(pct) > 50` 한 글자 수정으로 방어. `host_market_event()` (`app.py:1673`)는 이미 `if pct == 0 or abs(pct) > 50:` 검증이 있어 일관성을 맞추는 것이기도 함.
+
+- **`DAILY_SUGGESTIONS.md` 무한 증가로 Read 도구 한도 초과** (현재 파일 약 1.2MB): 이 스케줄 작업이 매일 섹션을 추가해 파일이 256KB Read 한도를 이미 초과. 현재 분석 작업 자체가 파일 전체를 읽지 못하는 상태. 해결: `DAILY_SUGGESTIONS_archive_2026.md`를 분리 생성 후 최근 30일치를 제외한 섹션을 이동, 또는 월 단위 파일(`DAILY_SUGGESTIONS_2026_08.md`)로 분리 관리 권장. 매달 첫째 날 아카이브 rotate 스크립트를 Render 배포 스크립트에 포함.
+
+- **`gen_code()` 동시 방 생성 시 race condition** (`models.py:8-13`, `app.py:676-715` `create_room()`): `Room.query.filter_by(code=code).first()`로 유니크 여부 확인 후 커밋하는 사이에 다른 트랜잭션이 동일 코드로 방을 먼저 생성하면 `IntegrityError` 발생. `join_room()` (`app.py:729`)에는 `except IntegrityError` 처리가 있으나 `create_room()`에는 없어 500 에러가 학생·교사 화면에 노출됨. 해결: `create_room()` 내 `db.session.commit()` (`app.py:714`) 호출을 `try/except IntegrityError`로 감싸고 `db.session.rollback()` 후 `gen_code()`를 한 번 더 시도하도록 재시도 로직 추가(약 6줄).
+
+- **`_push_notified` 집합 무조건 clear로 알림 재발송 위험** (`app.py:216-218`): `if len(_push_notified) > 5000: _push_notified.clear()`는 누적 키 5000개 초과 시 전체 지우기 때문에 정리 직후 동일한 룰렛·복권 예정 시각 키가 다시 추가돼 1분 전 알림이 중복 발송될 수 있음. 교실에서 학생 전원 폰에 알림이 두 번 오면 혼란. 해결: `_push_notified`를 `set` 대신 `dict[key, float(expiry_ts)]`로 교체해 `expiry_ts < time.time()` 인 키만 선택 정리하도록 변경(약 5줄 수정). 또는 만료 타임스탬프 기반으로 12시간 이상 된 키를 주기적으로 삭제하는 단순 필터 적용.
