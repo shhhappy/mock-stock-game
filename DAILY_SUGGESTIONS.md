@@ -5119,3 +5119,30 @@
 - **`gen_code()` 동시 방 생성 시 race condition** (`models.py:8-13`, `app.py:676-715` `create_room()`): `Room.query.filter_by(code=code).first()`로 유니크 여부 확인 후 커밋하는 사이에 다른 트랜잭션이 동일 코드로 방을 먼저 생성하면 `IntegrityError` 발생. `join_room()` (`app.py:729`)에는 `except IntegrityError` 처리가 있으나 `create_room()`에는 없어 500 에러가 학생·교사 화면에 노출됨. 해결: `create_room()` 내 `db.session.commit()` (`app.py:714`) 호출을 `try/except IntegrityError`로 감싸고 `db.session.rollback()` 후 `gen_code()`를 한 번 더 시도하도록 재시도 로직 추가(약 6줄).
 
 - **`_push_notified` 집합 무조건 clear로 알림 재발송 위험** (`app.py:216-218`): `if len(_push_notified) > 5000: _push_notified.clear()`는 누적 키 5000개 초과 시 전체 지우기 때문에 정리 직후 동일한 룰렛·복권 예정 시각 키가 다시 추가돼 1분 전 알림이 중복 발송될 수 있음. 교실에서 학생 전원 폰에 알림이 두 번 오면 혼란. 해결: `_push_notified`를 `set` 대신 `dict[key, float(expiry_ts)]`로 교체해 `expiry_ts < time.time()` 인 키만 선택 정리하도록 변경(약 5줄 수정). 또는 만료 타임스탬프 기반으로 12시간 이상 된 키를 주기적으로 삭제하는 단순 필터 적용.
+
+## 2026-09-01
+
+### 추가하면 좋을 기능
+
+- **룰렛 60초 타임아웃 연장 옵션** (`app.py:796-801`): 룰렛 대기 하드 타임아웃이 현재 60초로 고정되어 있음. 참여자가 많거나 인터넷이 느린 교실에서는 60초 안에 모든 학생이 룰렛을 마치기 어렵고 게임이 강제 종료됨. `Room` 모델에 `roulette_timeout` 컬럼을 추가하거나, 방 생성 시 `duration_minutes`와 연동해 참가자 수(`RoomMember` count) × 5초를 최솟값으로 동적 산정하는 로직을 `get_room()` 내 타임아웃 체크부(app.py:796)에 적용. 교실 환경에서 가장 빈번한 게임 중단 원인임.
+
+- **진행자 대시보드에 학생별 실시간 포트폴리오 요약** (`app.py:906-912` `host_members()`): 현재 순위표(총자산·수익률·순위)만 반환하고 주식 보유 내역은 학생별 거래내역 모달에서만 확인 가능. `_compute_leaderboard()` 응답에 `top_holding` (보유 주식 중 평가금액 1위 종목명·보유량) 필드를 추가하면 진행자가 "어떤 종목에 몰빵했는지"를 한눈에 파악하고 수업 토론 소재로 쓸 수 있음. `RoomHolding` 쿼리는 `_compute_leaderboard()`가 이미 `holdings_map`으로 전량 가져오므로 추가 DB 쿼리 없이 필드만 확장 가능 (app.py:269-274).
+
+- **복권 번호 자동 선택 버튼** (`static/js/app.js` lottery pick UI 부분): 학생이 1~45 중 6개를 수동으로 클릭해야 하는데, 시간이 촉박한 수업(LOTTO_PICK_SECS=60초, app.py:394)에서 번호 입력을 못 끝내는 학생이 발생. "자동 선택" 버튼 하나로 랜덤 6개를 즉시 채워주는 클라이언트 로직(약 5줄의 JS)을 추가하면 참여율이 크게 개선됨. 서버 변경 없이 프론트엔드만 수정.
+
+- **퀴즈 쿨다운 진행자 면제 + 진행자 전용 퀴즈 통계 뷰** (`app.py:1581-1661`): 퀴즈 기능이 학생에게만 노출되며, 진행자는 어떤 문제에서 학생들이 많이 틀렸는지 알 수 없음. `_quiz_history` 딕셔너리에 누적된 (rid, uid) 데이터를 집계해 `GET /api/rooms/<rid>/host/quiz-stats` 엔드포인트(문제별 정답률, 평균 반응 시간)를 추가하면 수업 후 복습 포인트를 선생님이 쉽게 확인 가능. 서버 약 12줄.
+
+- **Render 슬립 방지용 self-ping 엔드포인트** (`app.py:593-599`): Render 무료 플랜은 15분 이상 요청이 없으면 앱이 슬립 상태로 전환되어 다음 접속 시 30~60초 지연이 발생함. 현재 `/api/auth/me`를 학생이 방에 있을 때 `pollInterval`(app.js:8)로 폴링하지만, 대기실(waiting) 상태나 종료 후에는 폴링이 멈춤. `GET /api/ping` 처럼 응답 비용이 거의 없는 헬스체크 엔드포인트를 추가하고, 클라이언트가 화면 종류에 관계없이 5분마다 호출하도록 하면 수업 시작 전 슬립을 방지 가능. 서버 2줄 + 클라이언트 3줄.
+
+### 제거/단순화할 것들
+
+- **`gen_code()` 내 중복 코드 생성 루프 단순화** (`models.py:8-13`): 최대 10번 시도 후에도 고유 코드를 못 찾으면 마지막 시도 결과를 unique 체크 없이 반환하므로 IntegrityError가 발생할 수 있음. `Room.code`가 nullable unique라 `NULL` 반환이 안전하므로, `secrets.token_hex` + `[:6].upper()` 방식으로 단일 시도 후 DB에서 충돌 시 예외로 처리하는 간단한 패턴으로 교체하거나, 루프 횟수를 3회로 줄이고 실패 시 `None`을 반환해 호출부에서 에러 핸들링하도록 정리.
+
+- **인메모리 상태 변수(`_lots`, `_rlt_active`, `_quiz_state`, `_quiz_settings` 등) 서버 재시작 시 유실** (`app.py:390-515`): 현재 `lottery_rounds_done`만 DB에 영속화하고 나머지 미니게임 상태는 메모리에만 존재. Render 배포나 워커 크래시 시 진행 중인 복권·룰렛 상태가 증발함. 단기적으로는 `_quiz_settings`처럼 수업 설정값이라도 방 생성 파라미터로 DB `Room` 컬럼에 포함시켜 영속화를 확대하거나, README에 "서버 재시작 시 미니게임 상태 유실" 경고를 명시해 진행자가 인지하도록 함.
+
+- **`_set_sqlite_pragmas` 이중 실행** (`app.py:54-68`): `event.listen`으로 연결마다 PRAGMA를 설정하는 리스너를 등록하면서(app.py:65), 동시에 `with db.engine.connect()`로 즉시 한 번 더 실행(app.py:66-68). 리스너 하나만으로 충분하므로 즉시 실행 블록 2줄 삭제 가능.
+
+- **`_ending_soon` 집합이 `_end_room()`에서만 정리됨** (`app.py:144`, `app.py:385`): 호스트가 종료 요청 후 60초 카운트다운 도중 방을 수동으로 재개(resume)하면 `_ending_soon`에서 해당 `room_id`가 제거되지 않아 이후 `/api/rooms/<rid>`에서 `ending_soon: True`가 계속 반환됨. `resume_room()` (app.py:836-850) 내에서 `_ending_soon.discard(rid)` 한 줄 추가로 해결.
+
+- **Excel 내보내기에서 학번/이름 파싱이 공백 split에 의존** (`app.py:1784-1788`): `username` 필드가 `{sid} {name}` 형식이라고 가정해 `split(' ', 1)`로 파싱하는데, 학번 없이 이름만 입력한 참가자(`doAuth` 호출 시 sid 미입력)는 `sid=''`, `name=username` 전체로 처리되어 Excel에서 학번 컬럼이 비어 있고 이름 컬럼도 `sid+name`이 합쳐진 값이 들어감. `User` 모델에 `student_id` 컬럼을 별도로 두거나, 최소한 입력 단계에서 학번 필드가 반드시 숫자임을 검증해 파싱 오류를 방지.
+
