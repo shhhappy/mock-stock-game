@@ -2,6 +2,38 @@
 
 ---
 
+## 2026-09-01
+
+### 추가하면 좋을 기능
+
+- **섹터별 누적 성과 지수 실시간 바 차트** (`app.py:1008-1028` `get_stocks()`, `stock_service.py:300-301` `get_prev_close()`): 학생이 어느 섹터가 강세/약세인지 파악하려면 63개 종목 목록을 직접 훑어야 함. 기존 `GET /api/rooms/<rid>/stocks` 응답에서 섹터별 `change_pct` 평균을 클라이언트에서 계산해 주식 탭 상단에 소형 수평 바 차트로 표시. 섹터 이름 | 변동률 바(녹색/적색)를 격자로 나열. 서버 변경 불필요. `app.js` 주식 탭 렌더 함수 약 25줄 추가. 3초 폴링 주기에 자연스럽게 갱신되며, 뉴스 발생 후 어느 섹터가 영향을 받았는지를 한눈에 파악할 수 있어 뉴스-주가 인과관계 학습 효과 극대화.
+
+- **진행자 실시간 거래 피드 패널** (`app.py` 신규 `GET /api/rooms/<rid>/host/trade-feed`, `app.py:1167-1175` `get_rankings()` 참조): 진행자가 현재 어떤 학생이 어떤 종목을 거래하는지 실시간으로 파악할 수단이 없음. `GET /api/rooms/<rid>/host/trade-feed?since=<timestamp>` 엔드포인트를 추가해 `RoomTransaction.query.filter_by(room_id=rid).filter(RoomTransaction.timestamp >= since).order_by(RoomTransaction.timestamp.desc()).limit(30).all()` 결과를 반환. 진행자 화면 우측 사이드패널에 "김철수 삼성전자 100주 매수 @72,500" 형태의 피드를 5초 폴링으로 갱신. 서버 약 15줄 + 클라이언트 약 20줄. "활발히 거래하는 학생 vs 홀딩 학생" 비교 토론을 실시간으로 유도 가능.
+
+- **학생 개인 최고 자산 기록(ATH) 추적 및 표시** (`static/js/app.js` 포트폴리오 폴링 콜백, `static/index.html` 포트폴리오 탭): 현재 포트폴리오 탭은 현재 총자산과 수익률만 표시해 게임 중 자산 등락의 역동성을 인식하기 어려움. 포트폴리오 폴링 응답의 `total_value`를 `localStorage.getItem('ath_' + rid)`와 비교해 더 크면 갱신하고, 화면에 "최고 자산: 12,345,678원 (현재 -8.3%)" 형태로 표시. 서버 변경 불필요. `app.js` 약 12줄 추가. 게임 내 "손실 구간 진입" 심리를 시각화해 "손절 타이밍 언제?"라는 교육 토론 자연 발생.
+
+- **주식 목록 종목별 스파크라인 미니 차트** (`app.py:1067-1076` `get_chart()`, `stock_service.py:303-332` `get_history()`): 63개 종목 목록에 현재가와 등락률 숫자만 있고 추세를 알 수 없어, 학생이 "이 종목이 계속 오르는 중인가, 반등인가?"를 판단하기 어려움. 각 종목 행에 `<canvas width="60" height="24">` 스파크라인을 추가하고, 주식 탭 진입 시 백그라운드에서 `GET /api/rooms/<rid>/stocks/<symbol>/chart?period=1d` 를 배치 호출(최초 1회, 이후 캐시 TTL 120초)해 종가 배열 30개를 단색 꺾은선으로 렌더링. `get_history()` 결과가 이미 120초 캐시(`HISTORY_CACHE_TTL`, `stock_service.py:124`)에 보관되므로 서버 부하 미미. 클라이언트 스파크라인 렌더 함수 약 20줄.
+
+- **퀴즈 정답률 학급 집계 통계 (게임 종료 후 공개)** (`app.py:1654-1660` `get_quiz_history()`, `app.py:1735-1745` `host_publish_results()`): 게임 종료 후 개별 학생의 퀴즈 기록만 조회 가능하고, 학급 전체의 문제별 정답률을 파악할 방법이 없어 수업 피드백이 빈약함. `GET /api/rooms/<rid>/host/quiz-stats` 신규 엔드포인트를 추가해 `_quiz_history` 인메모리 딕셔너리를 전체 순회, 문제 ID별 정답 횟수/시도 횟수를 집계한 뒤 정답률 오름차순으로 반환. 진행자 결과 화면에 "가장 틀린 문제 TOP 5" 카드 표시. `results_published=True` 이후 학생 화면에서도 학급 통계 열람 허용(옵션). 서버 약 20줄 + 클라이언트 약 20줄. 교사가 "이 개념을 가장 많이 헷갈렸으니 다음 시간에 복습"이라는 데이터 기반 수업 계획 수립 가능.
+
+- **포트폴리오 목표 섹터 배분 설정 및 드리프트 시각화** (`static/js/app.js` 포트폴리오 탭, `app.py:1131-1162` `get_portfolio()`): 분산투자 수업에서 교사가 "IT 30%, 바이오 20%, 현금 50%" 목표 배분을 제시해도 학생이 자신의 현황과 얼마나 차이나는지 직관적으로 확인할 수단이 없음. 포트폴리오 탭에 섹터별 목표 비중을 입력하는 간단한 폼을 추가하고(`localStorage`에 저장), 현재 배분과 목표 배분을 나란히 표시하는 이중 막대 그래프 렌더링. `get_portfolio()` 응답의 기존 `sector` 필드 활용. 서버 변경 불필요. `app.js` 약 35줄. "나의 IT 비중 47% → 목표 30% 대비 +17%p 과다" 형태로 리밸런싱 필요성을 즉각 인지.
+
+### 제거/단순화할 것들
+
+- **`submit_quiz()` `room.end_time` 미체크 → 게임 시간 초과 후 퀴즈 보상 수령 가능** (`app.py:1606-1608`): `trade()` (`app.py:1087-1088`) 및 `create_deposit()` (`app.py:1235`)는 `if room.end_time and datetime.utcnow() >= room.end_time: return ..., 400` 를 별도로 체크하지만 `submit_quiz()`는 `if room.status != 'active':` 조건만 존재. `get_room()` 폴링이 `end_time` 초과를 감지해 `_end_room()`을 호출하기까지 최대 수 초의 레이스 윈도우가 있어, 이 구간에 퀴즈를 제출하면 보상이 정상 지급됨. 해결: `app.py:1608` 다음 줄에 `if room.end_time and datetime.utcnow() >= room.end_time: return jsonify({'error': '게임이 종료되었습니다.'}), 400` 2줄 추가. `get_quiz()` (`app.py:1585`)도 동일 체크 추가 필요.
+
+- **`host_roulette_config()` list comprehension 내 `float()` 예외 처리 없음 → 500** (`app.py:1696-1697`): `mults = [0] + [max(0, float(x)) for x in raw_m[1:]]`와 `weights = [max(0, float(x)) for x in raw_w]` 에 try/except가 없음. `raw_m = [0, "two", 3.0, 0.5, 0.1]` 처럼 비숫자가 포함되면 `float("two")` → `ValueError` → 500. 동일 파일의 `host_market_event()` (`app.py:1671`)는 `try/except (TypeError, ValueError)` 패턴을 사용. 해결: 두 list comprehension을 각각 try/except로 감싸고 `return jsonify({'error': '배수·확률은 숫자여야 합니다.'}), 400` 반환. 4줄 추가.
+
+- **`datetime.utcnow()` Python 3.12+ Deprecation 경고 — 코드베이스 전반** (`app.py:188`, `app.py:343`, `app.py:763`, `models.py:21`, `models.py:33` 등 30+곳): Python 3.12에서 `datetime.utcnow()`는 `DeprecationWarning` 대상이며 향후 제거 예정. `models.py`의 `default=datetime.utcnow` 람다 참조 7곳도 동일. Render 환경이 Python 3.12+로 업그레이드되면 로그에 경고가 폭증하고 최종적으로 코드가 깨짐. 해결: `app.py` 상단(line 6 근처)에 `_utcnow = lambda: datetime.now(timezone.utc).replace(tzinfo=None)` 헬퍼 선언, 전체 `datetime.utcnow()` → `_utcnow()` 일괄 교체. `models.py`의 `default=datetime.utcnow` → `default=lambda: datetime.now(timezone.utc).replace(tzinfo=None)`. `timezone`은 `app.py:6`에서 이미 임포트됨.
+
+- **`_lots` 진행 중 복권 상태가 서버 재시작 시 소실 — 진행 중 복권 통째로 분실** (`app.py:397-403` `_ensure_lot_state()`, `app.py:487-492` `_do_reveal()`): `lottery_rounds_done` DB 컬럼은 완료(revealed) 회차 번호만 기록하고(`_do_reveal()` line 490-492), `lot['current']` (참여자 번호 선택, 마감 시각, 상금 등)는 순수 인메모리. Render free tier 슬립→웨이크업 또는 예외 크래시 후 재시작 시 `_ensure_lot_state()` (`app.py:398`)가 done 집합만 복원하고 `current=None`으로 초기화해, 학생들이 번호를 이미 선택했던 복권이 소실됨. 해결: `Room` 테이블에 `lottery_current TEXT DEFAULT NULL` 컬럼 추가 (app.py:71-81 ALTER TABLE 패턴 재활용), `lot['current']` 변경마다 `json.dumps(lot['current'])` 직렬화 후 DB 저장. `_ensure_lot_state()`에서 컬럼이 NULL이 아니면 `json.loads()`로 복원. `_do_reveal()` 완료 후 컬럼 NULL 리셋.
+
+- **`_quiz_state` 동시 접근 보호 없음 → 같은 학생의 동시 요청 시 qid 불일치** (`app.py:1577`, `app.py:1583-1601` `get_quiz()`, `app.py:1603-1652` `submit_quiz()`): `_quiz_state[(rid, user.id)]` 딕셔너리의 읽기·쓰기가 어떤 락도 없이 수행됨. 학생이 "퀴즈 시작" 버튼을 빠르게 2회 클릭하면 두 `get_quiz()` 스레드가 동시에 `seen` 집합을 읽고 각자 다른 `q` 를 선택해 마지막 요청이 `_quiz_state[key]`를 덮어씀. 학생 화면에 표시된 문제와 서버가 인식하는 `qid`가 달라져 정답이 오답으로 처리될 수 있음. 해결: `_quiz_state_lock = threading.Lock()` 전역 락 추가, `get_quiz()` 내 `state` 읽기+`_quiz_state[key]` 쓰기, `submit_quiz()` 내 `state` 읽기+`_quiz_state[key]` 쓰기를 각각 `with _quiz_state_lock:` 블록으로 보호. 약 6줄 추가.
+
+- **`PushSubscription.endpoint` `String(500)` → 긴 Firefox/Chrome 엔드포인트 잘림** (`models.py:87`): 실제 Firefox(`updates.push.services.mozilla.com/wpush/v2/...`) 엔드포인트는 500자를 초과하는 경우가 있음. `db.Column(db.String(500))` 정의로 PostgreSQL에서 500자 초과 구독 저장 시 `DataError: value too long` → 500 오류 발생, 해당 학생은 알림을 전혀 받지 못함. SQLite는 길이를 강제하지 않아 DB 간 동작 불일치. 해결: `models.py:87`의 `db.String(500)` → `db.Text`로 변경, `app.py:71-81`의 `ALTER TABLE` 패턴으로 `ALTER TABLE push_subscriptions ALTER COLUMN endpoint TYPE TEXT` (PostgreSQL) 마이그레이션 추가. `unique=True` 제약은 `TEXT` 컬럼에도 적용 가능하지만 PostgreSQL에서 인덱스 크기를 제한하려면 `unique=False` + 별도 함수 인덱스 고려.
+
+---
+
 ## 2026-08-31
 
 ### 추가하면 좋을 기능
