@@ -34,6 +34,34 @@
 
 ---
 
+## 2026-09-02
+
+### 추가하면 좋을 기능
+
+- **Excel 결과 파일에 "거래 내역" 시트 추가** (`app.py:1766-1836` `export_rankings()`): 현재 Excel에는 순위·이름·학번·총자산·수익률·수익금액 6열짜리 시트 한 장만 포함됨(`app.py:1803`). 수업 후 디브리핑 시 "이 학생이 왜 1등인가?"를 설명하려면 거래 내역이 없어 교사가 UI를 다시 열어야 함. `openpyxl`로 두 번째 시트를 추가하고, `RoomTransaction.query.filter_by(room_id=rid).order_by(RoomTransaction.timestamp)` 결과를 학생별로 그룹화해 "학번·이름·종목·매수/매도·수량·가격·금액·시각" 컬럼으로 출력. 서버 `export_rankings()` 함수 약 30줄 추가. 교사가 "30분 게임에서 가장 많이 거래한 학생"·"초기에 분산투자한 학생" 등의 스토리를 데이터 기반으로 설명 가능.
+
+- **중도 참여 방지 옵션 (`allow_late_join` 플래그)** (`app.py:717-731` `join_room()`, `app.py:706-715` `create_room()`): `join_room()`은 `room.status == 'active'`일 때도 참여를 허용(`app.py:722-723`)해, 게임 시작 후 늦게 접속한 학생이 과거 가격 변동 없이 `starting_cash` 전액을 갖고 합류하므로 형평성 문제 발생. `Room` 모델에 `allow_late_join = db.Column(db.Boolean, default=True)` 컬럼 추가(`models.py:40` 근처), `join_room()` 에서 `if not room.allow_late_join and room.status == 'active': return 403`. 방 생성 시 진행자가 체크박스로 설정. 서버 약 10줄 + 클라이언트 폼 1줄. 교실 시작 시각을 통제하는 교사에게 필수 기능.
+
+- **룰렛 60초 타임아웃 카운트다운 UI** (`app.py:796-801` `get_room()` 내 하드 타임아웃): `rlt_triggered=True` 상태로 `paused_at`에서 60초가 경과하면 `_end_room()`이 조용히 호출되어 게임이 강제 종료됨. 학생·교사 모두 이 카운트다운을 볼 수 없어 게임이 예기치 않게 끝나는 현상 발생. `room_dict()` (`app.py:562-580`)에 `rlt_deadline: room.paused_at + 60s` 필드를 추가하고, 클라이언트 룰렛 화면에 "⏱ 00:45 — 이 시간 안에 룰렛을 완료하지 않으면 게임이 종료됩니다" 배너 표시. 서버 3줄 + 클라이언트 약 10줄. 학생 이탈로 인한 예상치 못한 게임 종료 방지.
+
+- **진행자 특정 학생 강제 참여 취소 (게임 중 가능)** (`app.py:914-925` `kick_member()`): 현재 `kick_member()`는 `room.status != 'waiting'`일 경우 400을 반환(`app.py:920`)해, 게임 시작 후 문제를 일으키는 학생을 내보낼 수 없음. 게임 중 강퇴 시 보유 주식을 현재가로 자동 청산하고(`_end_room()` 내 청산 로직 `app.py:363-371` 참조) `RoomMember` 행을 삭제하는 로직으로 제한을 해제. `waiting` 상태 여부 체크 제거 후 `if room.status in ('active', 'paused'):` 분기에서 청산 처리. 서버 약 15줄 수정. 수업 중 이탈 학생·결석 학생 처리 및 부정행위 대응에 필수.
+
+- **퀴즈 설정 DB 영속화** (`app.py:1759-1763` `quiz_settings()`, `app.py:1748-1763`): `_quiz_settings` 딕셔너리(`app.py:1577`)는 순수 인메모리로, Render free tier 슬립→웨이크업 재시작 시 진행자가 설정한 `reward_pct`·`penalty_pct`가 기본값(1.0/0.5)으로 초기화됨. `Room` 테이블에 `quiz_reward_pct FLOAT DEFAULT 1.0`, `quiz_penalty_pct FLOAT DEFAULT 0.5` 컬럼을 추가(`app.py:71-81`의 `ALTER TABLE` 패턴 활용)하고, `quiz_settings()` POST 시 DB에도 저장, `get_quiz()` 진입 시 `_quiz_settings.get(rid)` 없으면 DB에서 로드. 서버 약 15줄.
+
+### 제거/단순화할 것들
+
+- **`_compute_leaderboard()` 캐시 없음 → 30명 폴링 시 초당 수십 건 DB 쿼리** (`app.py:262-290` `_compute_leaderboard()`, `app.py:1167-1175` `get_rankings()`, `app.py:906-912` `host_members()`): `_compute_leaderboard()`는 매 호출마다 `RoomMember`, `User`, `RoomHolding`, `Deposit` 4개 테이블을 풀스캔. `get_rankings()`는 각 학생이 3초마다 폴링하므로 30명 기준 초당 10회 호출, 각각 4 쿼리 = 초당 40 쿼리. 방 상태 캐시(`_room_cache`, TTL 1.5s)와 유사하게 `_leaderboard_cache: dict = {}` (TTL 2.0s)를 추가해 동일 방에 대한 중복 계산 제거. `_compute_leaderboard()` 결과를 캐시하는 헬퍼 약 10줄 추가, `host_adjust()` 등 자산 변경 시 `_invalidate_room_cache()` 패턴으로 무효화 처리. SQLite WAL 모드라도 동시 읽기 부하 감소 효과 즉각적.
+
+- **`trade()` 내 가격 조회와 멤버 Lock 사이 레이스 윈도우** (`app.py:1100`, `app.py:1103`): `price = get_room_service(rid).get_price(symbol)` (line 1100)은 멤버 Lock `with _get_member_lock(rid, user.id):` (line 1103) **바깥**에서 실행됨. 가격이 Lock 진입 전후 사이에 변경되면 `amount = price * shares`(line 1101)와 실제 차감액이 불일치. 해결: `price` 조회를 `with _get_member_lock` 블록 안으로 2줄 이동 (line 1103 다음으로). 이미 `db.session.refresh(member)` (line 1104)가 Lock 내부에 있으므로 패턴 일관성도 확보됨. 1줄 이동으로 레이스 윈도우 완전 제거.
+
+- **`User.username` 중복 → 동명이인 같은 학번 시 자동 계정 공유** (`app.py:604-618` `enter()`, `models.py:19`): `enter()` 에서 `username = f"{sid} {name}"` 으로 `User`를 조회·생성하는데(`app.py:610-614`), 두 학생의 학번+이름이 같으면 두 번째 학생이 첫 번째 학생 계정에 로그인됨. 교실 환경에서는 동명이인보다 학생이 학번을 잘못 입력(예: "20301"을 "20310"으로)할 가능성이 더 높음. 해결: `enter()` 에서 `user.id == session.get('user_id')` 인 경우에만 기존 계정 재사용을 허용하고, 세션 없이 이름이 충돌하면 `'닉네임이 이미 사용 중입니다.' 400` 반환. 또는 username에 `_{room_code}` suffix를 추가해 방별 고유성 보장. 2~3줄 수정.
+
+- **게임 중 뉴스 팝업에 연관 종목 바로가기 링크 없음** (`stock_service.py:6-34` 뉴스 템플릿, `app.py:1060-1064` `get_room_news()`): 뉴스 팝업에 "`{name}` 깜짝 실적…" 텍스트는 있지만 해당 종목 거래 화면으로 바로 이동하는 버튼이 없어, 학생이 뉴스를 읽고 주식 탭 → 검색 → 종목 클릭의 3단계를 거쳐야 함. `get_room_news()` 응답에 `symbol` 필드를 추가(`stock_service.py`의 `get_news()` 반환값에 포함)하고, 뉴스 팝업 하단에 "📈 {name} 바로 거래하기" 버튼을 렌더링해 클릭 시 `openTrade(symbol)` 호출. 서버 `get_news()` 1줄 + 클라이언트 약 5줄. 뉴스→거래 반응 속도를 높여 "뉴스 선반영 학생 vs 후반영 학생" 간 수익률 차이 교육 효과 극대화.
+
+- **`_quiz_settings` 등 인메모리 딕셔너리 서버 재시작 후 모두 소실 — 중복 정리 대상** (`app.py:1577` `_quiz_settings`, `app.py:513` `_roulette_config`, `app.py:391` `_lottery_custom_times`): 위 세 딕셔너리는 모두 `_lots`처럼 서버 재시작 시 소실되는 인메모리 상태. `_lottery_custom_times` (진행자가 직접 지정한 복권 추첨 시각)가 소실되면 이미 공지된 추첨 일정이 초기화되고 자동 모드로 폴백. 단기 해결: Render free tier에서 슬립을 막는 Cron 핑(`/api/auth/me` 등)을 `.render.yaml`에 추가해 재시작 빈도를 줄임. 장기 해결: 위 "퀴즈 설정 DB 영속화" 제안과 묶어 `Room` 테이블에 `meta_json TEXT DEFAULT NULL` 컬럼을 두고 일괄 직렬화. 단기 fix는 `render.yaml` 또는 외부 Cron 서비스 1줄.
+
+---
+
 ## 2026-08-31
 
 ### 추가하면 좋을 기능
