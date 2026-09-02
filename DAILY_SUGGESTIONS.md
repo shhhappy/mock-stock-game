@@ -5206,3 +5206,32 @@
 
 - **Excel 내보내기에서 학번/이름 파싱이 공백 split에 의존** (`app.py:1784-1788`): `username` 필드가 `{sid} {name}` 형식이라고 가정해 `split(' ', 1)`로 파싱하는데, 학번 없이 이름만 입력한 참가자(`doAuth` 호출 시 sid 미입력)는 `sid=''`, `name=username` 전체로 처리되어 Excel에서 학번 컬럼이 비어 있고 이름 컬럼도 `sid+name`이 합쳐진 값이 들어감. `User` 모델에 `student_id` 컬럼을 별도로 두거나, 최소한 입력 단계에서 학번 필드가 반드시 숫자임을 검증해 파싱 오류를 방지.
 
+
+---
+
+## 2026-09-02
+
+### 추가하면 좋을 기능
+
+- **진행자 종목별 실시간 거래량 순위 패널** (`app.py:1122-1124` 거래 기록 생성, `app.py:1167-1175` `get_rankings()`): 수업 중 어느 종목이 가장 활발히 거래되는지 진행자가 파악할 수단이 없어, "학생들이 삼성전자에 집중하는가, 분산하는가?"를 실시간으로 관찰하는 교육 토론이 불가능함. `GET /api/rooms/<rid>/host/trade-volume` 신규 엔드포인트에서 `db.session.query(RoomTransaction.symbol, func.count(RoomTransaction.id).label('cnt')).filter_by(room_id=rid).filter(RoomTransaction.action.in_(['BUY','SELL'])).group_by(RoomTransaction.symbol).order_by(func.count().desc()).limit(10).all()` 결과에 종목명·섹터를 붙여 반환. `sqlalchemy.func`는 이미 패키지에서 사용 가능. 진행자 화면 "시장" 탭 우측에 "🔥 거래량 TOP 10" 수평 막대 차트 표시, 3초 폴링 갱신. 서버 약 12줄 + 클라이언트 약 20줄. "왜 이 종목이 1위인가?" 즉석 토론 유도 및 교실 분위기 반영 수업 진행 가능.
+
+- **포트폴리오 단일 섹터 과집중 경고 배지** (`app.py:1131-1162` `get_portfolio()`, `static/js/app.js` 포트폴리오 탭 렌더): 현재 포트폴리오 탭에 섹터 파이 차트(2026-08-28 제안)는 없지만, 그 전에 "집중도 경고"를 텍스트 배지로 먼저 제공할 수 있음. `get_portfolio()` 응답의 `holdings` 배열에는 이미 `sector`, `current_value` 필드가 포함됨(`app.py:1149-1150`). 클라이언트에서 섹터별 `current_value` 합산 후 총 주식평가액 대비 비중을 계산해, 단일 섹터가 80% 초과이면 포트폴리오 탭 상단에 `"⚠️ 과집중 경고: {섹터} 비중 {N}% — 분산투자를 고려하세요."` 배지 표시. 서버 변경 불필요. `app.js` 포트폴리오 렌더 함수 약 15줄 추가. 교사가 별도로 언급하지 않아도 학생 스스로 분산투자 필요성을 인지하는 피드백 루프 자동 생성.
+
+- **뉴스 발생 후 학생 거래 반응 시간 분석 (게임 종료 후 공개)** (`stock_service.py:180` `_news` timestamp 필드, `app.py:1122` RoomTransaction 생성, `app.py:1766-1836` `export_rankings()`): 현재 뉴스 발생 시각(`self._news['timestamp']`)과 이후 거래 기록(`RoomTransaction.timestamp`)이 모두 존재하지만, "뉴스 이후 최초 관련 거래까지의 반응 시간"을 집계하는 엔드포인트가 없음. `GET /api/rooms/<rid>/host/news-reaction` 신규 엔드포인트에서 `RoomTransaction` 전체와 `get_room_service(rid).get_news()` 타임스탬프를 비교해 학생별 "뉴스 대응 거래 최단 반응 시간(초)"을 반환. Excel 내보내기 3번째 시트 "뉴스 반응 속도"로도 추가. 서버 약 25줄. "정보를 빠르게 반영한 학생이 수익률이 높은가?" 직접 검증 수업 자료로 활용, 정보 효율 시장 가설 교육 효과 극대화.
+
+- **학생 간 1:1 포트폴리오 비교 패널** (`app.py:1131-1162` `get_portfolio()`, `app.py:1167-1175` `get_rankings()`): 순위표에서 다른 학생을 클릭해도 해당 학생의 포트폴리오를 볼 방법이 없어, "1등 학생은 어떤 종목을 얼마나 보유했나?"를 직접 비교하며 배우는 피어 학습 기회가 없음. `GET /api/rooms/<rid>/members/<uid>/portfolio` 신규 엔드포인트를 추가해 `RoomHolding.query.filter_by(room_id=rid, user_id=uid)`로 타 학생의 보유 종목(보유수량·현재가·섹터)만 반환(개인 현금 액수는 제외). 순위표 클릭 시 현재 학생과 선택 학생의 섹터 비중·종목 목록을 나란히 표시하는 비교 패널 렌더링. 서버 약 15줄 + 클라이언트 약 25줄. "1등 학생과 나의 포트폴리오 차이" 직접 시각화로 동료 학습 촉진.
+
+- **게임 대기·종료 후 교육 탭 퀴즈 자가 연습 모드** (`app.py:1581-1601` `get_quiz()`, `app.py:1554-1572` 교육 탭 엔드포인트, `education_data.py:QUIZ_QUESTIONS`): 현재 퀴즈는 `room.status == 'active'`일 때만 사용 가능(`app.py:1585`)해, 게임 전 예습·게임 후 복습을 위한 자가 퀴즈가 불가능함. `GET /api/education/practice-quiz`·`POST /api/education/practice-quiz` 신규 엔드포인트를 추가해 세션 기반 `seen` 집합(`session['quiz_seen']`)으로 중복 제거 후 무작위 문제를 반환, 정오답·해설을 즉시 피드백. 보상·패널티 없이 순수 학습 목적. `app.py`에서 기존 `get_quiz()`·`submit_quiz()` 로직 재활용, 약 20줄. 교육 탭에 "📚 퀴즈 연습하기" 버튼 추가, 클라이언트 약 15줄. 게임 시작 전 준비도 확인 및 종료 후 오답 복습 완결성 확보.
+
+### 제거/단순화할 것들
+
+- **`quiz_settings()` POST에서 `float()` 변환 try/except 없음 → 500** (`app.py:1760`): `_quiz_settings[rid] = {'reward_pct': max(0, min(10, float(d.get('reward_pct', 1.0)))), 'penalty_pct': ...}` 두 `float()` 호출에 try/except가 없음. 진행자 설정 UI 오류 또는 조작으로 `"reward_pct": "abc"` 가 전송되면 `ValueError` → Flask 500 Internal Server Error. 이미 `host_news_interval()`(`app.py:997`), `host_force_price()`(미비, 2026-08-31 문서화), `host_roulette_config()`(2026-09-01 문서화) 등 동일 패턴 취약점 시리즈의 하나이지만 이 함수만 아직 미수정. 해결: `app.py:1760` 전체 딕셔너리 생성을 `try:` 블록으로 감싸고 `except (TypeError, ValueError): return jsonify({'error': '보상·패널티는 숫자여야 합니다.'}), 400` 추가. 3줄 추가.
+
+- **`lottery_start()` `prize` float 변환 try/except 없음 → 500** (`app.py:1418`): `prize = float(d.get('prize', 0))` 에 try/except가 없음. `{"prize": "삼백만"}` 같은 비숫자 입력 시 `ValueError` → 500. `lottery_start()`는 진행자 전용이지만, 네트워크 탭을 통한 직접 요청이 가능하므로 방어 처리 필요. 같은 함수 내 `round_n = int(raw_round)` (`app.py:1431`) 도 try/except 없어 동일 문제. 해결: `app.py:1418`을 `try: prize = float(...); if prize <= 0: return ..., 400 / except (TypeError, ValueError): return jsonify({'error': '상금은 숫자여야 합니다.'}), 400` 로 교체. `raw_round` 변환에도 try/except 동일 패턴 적용. 4줄.
+
+- **`RoomTransaction` 테이블에 `(room_id, user_id, action)` 복합 인덱스 없음 → 전체 풀스캔** (`models.py:68-80`): `minigame_spin()`(`app.py:1372`) 내 `RoomTransaction.query.filter_by(room_id=rid, user_id=user.id, action='RLT').count()` 와 `host_member_transactions()`(`app.py:970`) 내 `.filter_by(room_id=rid, user_id=uid)` 쿼리가 인덱스 없이 실행됨. 30명 룰렛 세션에서 각 학생이 `/minigame` GET + `/minigame/spin` POST를 반복하면 초당 수십 회의 `room_transactions` 풀스캔이 발생. PostgreSQL `EXPLAIN` 기준 테이블이 수천 행 이상이면 Seq Scan → 성능 급락. 해결: `models.py:79` `__table_args__` 위에 `db.Index('ix_rt_room_user_action', 'room_id', 'user_id', 'action')` 클래스 속성 추가 및 `app.py:71-81` ALTER 패턴으로 `CREATE INDEX IF NOT EXISTS` 마이그레이션 추가.
+
+- **`host_lottery_times()` 과거 시각 입력 허용 → 복권 즉시 발동** (`app.py:1719-1726`): `now_kst.replace(hour=hh, minute=mm, second=0, microsecond=0)` 처리에서 현재 시각보다 이전인 KST 시각(예: 현재 14:30, 입력 `"13:00"`)이 유효하게 UTC 변환되어 저장됨. `_lot_round_due()` 내 `if idx not in done and now >= t:` 조건(`app.py:428`)을 즉시 만족하므로 저장 직후 다음 `get_room()` 폴링(3초 이내)에서 복권이 즉각 시작됨. 교사가 "오늘 오후 2시 복권"을 입력하려다 현재 시각이 오후 2시 이후이면 의도치 않게 즉발. 해결: `app.py:1725` `target_kst` 생성 직후 `if target_kst <= now_kst: target_kst += timedelta(days=1)` 1줄 추가로 과거 시각은 다음 날로 자동 진행. `from datetime import timedelta`는 이미 임포트됨.
+
+- **`trade()` 최대 수량 상한 미검증 → 극단적 수량 매수 가능** (`app.py:1095-1099`): `shares = int(d.get('shares', 0))` 후 `if shares <= 0: return ...` 하한 체크만 있고 상한이 없음. 저가 종목(예: `HMMCO` 17,000원)을 `shares=999999999`로 요청하면 `amount = 17000 * 999999999 ≈ 1.7e13` — Python `float` 연산은 정상이지만 `member.cash`가 충분할 경우 `RoomHolding.shares = 999999999`가 DB에 저장됨. 이후 `member_total_value()`·`get_portfolio()`에서 `price * 999999999` 계산이 `float` 범위를 넘어 `inf` 반환, 순위표 정렬·Excel 내보내기가 모두 오염됨. 해결: `app.py:1098` `if shares <= 0:` 조건을 `if shares <= 0 or shares > 1_000_000:` 으로 확장, 에러 메시지에 "1회 최대 1,000,000주" 문구 추가. 1줄 수정. 클라이언트 거래 수량 입력 `<input>` 에도 `max="1000000"` 속성 추가.
+
