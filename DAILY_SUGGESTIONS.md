@@ -2,6 +2,38 @@
 
 ---
 
+## 2026-09-03
+
+### 추가하면 좋을 기능
+
+- **퀴즈 연속 정답 콤보 보너스** (`app.py:1647-1651` `_quiz_history`, `app.py:1620-1631` `submit_quiz()`): 현재 정답/오답 보상이 매 문제 독립적으로 계산되어, 전략 없이 "찍기"와 집중적으로 맞히는 학생의 보상 체계가 동일함. `_quiz_history[(rid, user.id)]` 리스트의 최근 항목을 확인해 연속 정답 수(`streak`)를 계산하고, `streak >= 3`이면 보상에 `1 + streak * 0.1` 배수를 곱해 지급(`streak` 3연속 → +30%, 5연속 → +50%). `submit_quiz()` 내 `correct` 분기(`app.py:1630`) 직전에 3줄 추가. `hist` 배열은 이미 `_quiz_state[key]`와 동기화돼 있으므로 서버 로직 추가만으로 완결. 퀴즈를 단순 복불복이 아닌 "집중력을 유지하면 유리한" 전략 게임으로 전환해 수업 몰입도 향상.
+
+- **종목 예약 주문 (지정가 자동 매수/매도)** (`app.py` 신규 `POST /api/rooms/<rid>/orders`, `app.py:1081-1126` `trade()` 참조): 현재 거래는 "지금 즉시" 시장가 매수/매도만 가능해, 학생이 주식 화면을 떠나면 타이밍을 놓침. 인메모리 `_pending_orders: dict = {}  # rid -> [{'uid', 'symbol', 'action', 'target_price', 'shares', 'created_at'}]` 구조를 추가하고, `GET /api/rooms/<rid>/stocks` 폴링 경로 내 `get_room_service(rid).get_price(sym)` 조회 후 조건 매치 시 `trade()` 내부 로직을 재호출. 주문은 30분 또는 게임 종료 시 자동 취소. 진행자 화면에서는 방별 미체결 주문 현황 조회(`GET /api/rooms/<rid>/host/orders`) 추가. 서버 약 40줄 + 클라이언트 "예약 주문" 탭 약 30줄. "뉴스 발표 전 미리 주문" 전략이 가능해져 정보 비대칭·선반영 교육 포인트 실현.
+
+- **가격 갱신까지 남은 시간 바 표시** (`stock_service.py:123` `PRICE_TTL=20`, `app.py:1008-1028` `get_stocks()`): 주식 가격은 `PRICE_TTL`(기본 20초)마다 갱신되지만 학생 UI에 이 정보가 없어 "언제 새 가격이 뜰지" 알 수 없음. `get_stocks()` 응답에 `'next_price_in': max(0, round(PRICE_TTL - (time.time() - ts), 1))` 필드를 추가(이미 `ts, price = svc._prices[sym]` 접근이 가능). 주식 탭 상단에 "⏱ 다음 시세 갱신 17초 후" 진행 바를 표시. 서버 1줄 + 클라이언트 바 렌더링 약 8줄. 학생이 "가격이 곧 바뀌니 지금 팔아야 할까?"라는 실시간 의사결정 압박 상황을 경험하며 시장가 vs 지정가 개념 학습 유도.
+
+- **거래 활성도 별도 랭킹** (`app.py:1167-1175` `get_rankings()`, `app.py:1178-1198` `get_transactions()`): 수익률 순위만 있어 "가장 열심히 트레이딩한 학생"을 가시화할 수단이 없음. `GET /api/rooms/<rid>/rankings?by=activity` 파라미터를 추가하고, `RoomTransaction.query.filter_by(room_id=rid, action__in=['BUY','SELL'])` 결과를 `user_id`별로 집계해 거래 횟수·총 거래 금액 순 랭킹을 반환. 클라이언트 순위표 상단에 "수익률 순 | 거래 횟수 순" 토글 버튼 추가. 서버 `get_rankings()` 분기 약 15줄 + 클라이언트 토글 약 5줄. "소극적으로 보유한 학생"과 "활발히 거래한 학생" 비교 토론, "잦은 거래가 실제로 수익률에 도움이 됐나?" 분석 자료로 활용 가능.
+
+- **진행자 특정 학생 실시간 포트폴리오 열람** (`app.py` 신규 `GET /api/rooms/<rid>/host/portfolio/<uid>`, `app.py:1131-1162` `get_portfolio()` 참조): 진행자가 "지금 이 학생의 포트폴리오를 보여주자"고 하려면 현재 수단이 없어 학생이 직접 화면을 공유해야 함. `get_portfolio()` 로직을 uid 파라미터화한 진행자 전용 엔드포인트를 추가 — `user = db.session.get(User, uid)`, `m = RoomMember.query.filter_by(...)` 후 `get_portfolio()` 내부와 동일한 계산 수행. 응답에 `username` 필드를 추가로 포함. 진행자 순위표에서 학생 이름 클릭 시 포트폴리오 모달 표시. 서버 약 20줄 + 클라이언트 모달 약 15줄. 교사가 "1등 학생이 어떤 전략을 쓰고 있나?" 실시간 해설 가능.
+
+- **게임 결과 공개 링크(비인증 접근 가능 결과 페이지)** (`app.py:1735-1745` `host_publish_results()`, `app.py:1167-1175` `get_rankings()`): 현재 `results_published=True`이어도 최종 순위는 로그인한 참여자만 열람 가능. 교사가 결과를 학부모·동료 교사에게 공유하거나 수업 자료로 쓰려면 다시 로그인이 필요함. `GET /api/rooms/<rid>/public-results` 신규 비인증 엔드포인트를 추가하되 `room.results_published=True` 검사 후만 응답. `_compute_leaderboard()` 결과의 `user_id` 제거 + `username`만 포함한 안전한 공개 목록 반환. `app.py` 약 12줄. 클라이언트에서 "이 링크 공유" 버튼 1개 추가. 수업 후 결과를 교내 SNS·알림장에 공유하는 교육 피드백 루프 완성.
+
+### 제거/단순화할 것들
+
+- **`quiz_settings()` POST `float()` 변환 try/except 없음 → ValueError 500** (`app.py:1760-1761`): `'reward_pct': max(0, min(10, float(d.get('reward_pct', 1.0))))` 와 `'penalty_pct': max(0, min(10, float(d.get('penalty_pct', 0.5))))` 에 try/except 없음. 클라이언트 UI 오류 또는 직접 API 호출로 `{"reward_pct": "두배"}` 같은 비숫자 값이 전송되면 `float("두배")` → `ValueError` → Flask 500. 동일 파일의 `host_market_event()` (`app.py:1671`), `host_adjust_time()` (`app.py:886-889`) 등은 try/except 패턴을 일관되게 사용. `app.py:1758-1762`의 dict 리터럴 전체를 `try:` 블록으로 감싸고 `except (TypeError, ValueError): return jsonify({'error': '퍼센트 값은 숫자여야 합니다.'}), 400` 추가. 4줄 수정.
+
+- **`host_lottery_times()` 과거 시각 검증 없음 → 복권 즉시 발동 또는 영구 미발동** (`app.py:1720-1726`): `target_kst = now_kst.replace(hour=hh, minute=mm, second=0, microsecond=0)` 로 오늘 날짜의 KST 시각을 계산하지만, 입력 시각이 현재보다 과거이면 `target_kst < now_kst`이 되어 `_lot_round_due()` 내부 `now >= t` 조건이 즉시 참이 됨 — 저장 직후 다음 `get_room()` 폴링에서 복권이 즉시 발동. 또는 23:59 시각을 00:05에 설정하면 오늘 자정이 이미 지났으므로 영구 미발동. 해결: `app.py:1726` `parsed.append(...)` 직전에 `if target_kst.replace(tzinfo=None) <= datetime.utcnow(): target_kst = target_kst + timedelta(days=1)` 1줄 추가. `timedelta`는 `app.py:3`에서 이미 임포트됨. 교사가 실수로 과거 시각을 입력해도 익일 동일 시각으로 자동 보정.
+
+- **`minigame_close()` `_rlt_lock` 내부 DB commit → 락 과다 보유** (`app.py:1333-1357`): `with _rlt_lock:` 블록 내에서 `db.session.commit()`(`app.py:1351`)을 호출함. `minigame_open()`의 동일 문제는 2026-08-25에 지적됐으나 `minigame_close()`는 놓친 상태. DB 응답이 느릴 때(Render free 슬립→웨이크업) `_rlt_lock`을 수백ms 보유해 `minigame_spin()`, `minigame_open()` 등 `_rlt_lock` 의존 요청이 전부 블로킹됨. 해결: `with _rlt_lock:` 블록에서는 `state['count']` 변경과 `resumed`, `new_end_time` 플래그 세팅만 수행하고, `db.session.commit()`은 락 해제 후 `if resumed: (update + commit)` 블록으로 이동. `minigame_open()`의 `paused_now` 패턴(`app.py:1310-1322`)을 그대로 따르면 됨. 5줄 리팩터.
+
+- **`get_minigame()` `member_total_value()` 호출 시 이미 로드한 `m` 재사용 안 함** (`app.py:1291-1296`): `m = RoomMember.query.filter_by(room_id=rid, user_id=user.id).first()` (line 1291)로 member를 조회한 직후 `member_total_value(rid, user.id)` (line 1296)를 호출하는데, `member_total_value()` 내부(`app.py:247`)가 다시 `RoomMember.query.filter_by(...)` 쿼리를 실행해 동일 행을 중복 조회. 해결: `app.py:1296`을 `total_assets = member_total_value(rid, user.id, preloaded_member=m)` 으로 교체. `member_total_value()`의 `preloaded_member` 파라미터(`app.py:245-260`)가 이미 이 용도로 존재. 1줄 수정으로 요청당 DB 쿼리 1회 감소. `_compute_leaderboard()` (`app.py:278`)와 동일 패턴.
+
+- **`_auto_start_lottery_if_due()` DB commit이 `_lottery_lock` 내부에서 실행** (`app.py:740-753`): `with _lottery_lock:` 블록(`app.py:740`) 내에서 `room.status = 'paused'`·`db.session.commit()`(`app.py:746-747`)을 수행. `get_room()` 폴링 중 `_auto_start_lottery_if_due()` 호출 시 DB 응답이 느리면 `_lottery_lock`을 장시간 보유 — 동시에 `lottery_start()`, `lottery_pick()`, `get_lottery()` 요청도 `_lottery_lock`을 대기하며 블로킹. 30명 × 3초 폴링 환경에서 복권 자동 시작 직후 잠깐의 병목이 발생. 해결: `_lottery_lock` 블록 내에서는 `_lots` 딕셔너리 조작과 `paused_flag` 로컬 변수 설정만 수행, DB 커밋은 `with _lottery_lock:` 블록 종료 후 `if paused_flag:` 분기에서 실행. `room.paused_at = now`를 락 바깥으로 이동해도 `now`가 이미 계산돼 있으므로 타이밍 정확도 유지됨. 약 5줄 리팩터.
+
+- **`get_room()` `cur_user()` 최대 4회 중복 호출 — 불필요한 DB 쿼리** (`app.py:757-806`): `get_room()` 핸들러에서 `cur_user()` = `db.session.get(User, session['user_id'])` 호출이 line 762, 764, 806에 반복됨(각 조기 반환 분기마다). 학생 30명 × 3초 폴링 = 분당 600회의 `get_room()` 호출이 각각 최대 4회 User SELECT를 실행 → 분당 2,400회 쿼리가 단순 캐싱으로 0회로 줄어들 수 있는 불필요한 조회. 해결: `app.py:761` `room = Room.query.get_or_404(rid)` 다음 줄에 `user = cur_user()` 1줄 추가, 이후 모든 `cur_user()` 호출을 `user`로 대체. `login_required` 데코레이터가 이미 `session['user_id']` 유효성을 보장하므로 None 체크 불필요. 5줄 수정으로 코드 단순화 + 쿼리 감소.
+
+---
+
 ## 2026-09-01
 
 ### 추가하면 좋을 기능
