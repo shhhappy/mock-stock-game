@@ -5235,3 +5235,29 @@
 
 - **`trade()` 최대 수량 상한 미검증 → 극단적 수량 매수 가능** (`app.py:1095-1099`): `shares = int(d.get('shares', 0))` 후 `if shares <= 0: return ...` 하한 체크만 있고 상한이 없음. 저가 종목(예: `HMMCO` 17,000원)을 `shares=999999999`로 요청하면 `amount = 17000 * 999999999 ≈ 1.7e13` — Python `float` 연산은 정상이지만 `member.cash`가 충분할 경우 `RoomHolding.shares = 999999999`가 DB에 저장됨. 이후 `member_total_value()`·`get_portfolio()`에서 `price * 999999999` 계산이 `float` 범위를 넘어 `inf` 반환, 순위표 정렬·Excel 내보내기가 모두 오염됨. 해결: `app.py:1098` `if shares <= 0:` 조건을 `if shares <= 0 or shares > 1_000_000:` 으로 확장, 에러 메시지에 "1회 최대 1,000,000주" 문구 추가. 1줄 수정. 클라이언트 거래 수량 입력 `<input>` 에도 `max="1000000"` 속성 추가.
 
+
+## 2026-09-03
+
+### 추가하면 좋을 기능
+
+- **진행자 로비 화면 QR 코드 자동 생성** (`app.py:706-715` `create_room()`, `static/js/app.js` 로비 화면 렌더): 진행자가 방 코드를 칠판에 직접 쓰거나 구두로 불러줘야 함. 방 코드(`room.code`)를 기반으로 CDN에서 `qrcode.min.js`(예: `cdnjs.cloudflare.com`)를 로드해 로비 화면에 QR 이미지 자동 렌더링. 학생이 스마트폰 카메라로 바로 입장 가능. 서버 변경 불필요, `app.js` 로비 렌더 함수에 약 15줄 추가. 수업 시작 시간 단축에 즉각적 효과.
+
+- **게임 종료 후 자산 순위 변동 히스토리(오버타임 차트)** (`static/js/app.js:19` `S.assetHistory`, `app.py:1735` `host_publish_results()`): `S.assetHistory`가 클라이언트 메모리에만 누적되어 게임 종료 후 결과 화면에서 소실됨. 결과 공개(`results_published`) 시점에 `_compute_leaderboard()` 스냅샷 배열을 `Room` 테이블 신규 `TEXT` 컬럼(`result_history`)에 JSON 저장, 결과 화면에 상위 5명의 순위 변동 라인 차트 표시. `app.py` 약 10줄 + `app.js` 약 30줄. 수업 마무리 복기 토론("언제 1위가 뒤집혔나?")에 핵심 자료.
+
+- **학생 포트폴리오 섹터 배분 도넛 차트** (`app.py:1131-1162` `get_portfolio()`, `static/js/app.js` 포트폴리오 탭): 포트폴리오 응답의 `holdings[].sector` 필드가 이미 있으나 섹터 집계 시각화가 없음. 클라이언트에서 `holdings`를 섹터별로 `current_value` 합산해 도넛 차트로 렌더링. 현금·예금도 별도 슬라이스로 포함. 서버 변경 불필요, `app.js` 약 25줄. 분산투자 원리 학습("내 포트폴리오 IT에 70% 몰려 있다")을 직관적으로 전달.
+
+- **최소·최대 거래 단위 진행자 설정** (`app.py:1081-1099` `trade()`, `app.py:706-715` `create_room()`): LVMH(1,095,000원), ASML(1,050,000원) 등 고가 종목은 초기 자금 1,000만원 기준 10주도 사기 어려워 학생 접근성이 낮음. 방 생성 시 `max_shares_per_trade`(기본 10,000) 옵션을 추가하고 `Room` 테이블에 컬럼 저장, `trade()` 검증 로직에 상한 체크 적용. `app.py` 약 15줄, `models.py` 컬럼 1개, `app.js` 룸 생성 폼 1개 항목. 현재 `trade()` `app.py:1098`의 하한(`shares <= 0`) 체크와 대칭적.
+
+- **거래 내역 CSV 직접 다운로드 (학생용)** (`app.py:1180-1198` `get_transactions()`, `static/index.html` 거래 내역 탭): 학생이 자신의 거래 기록을 직접 내려받아 보고서 작성에 활용할 방법이 없음. `GET /api/rooms/<rid>/transactions?format=csv` 파라미터를 지원해 Python 내장 `csv` 모듈로 `RoomTransaction` 전체를 스트리밍 반환. `app.py` 약 20줄. `openpyxl` 의존성 없이 순수 표준 라이브러리만 사용. 학생이 직접 데이터를 분석하는 수업 활동(스프레드시트로 수익률 계산 등) 지원.
+
+### 제거/단순화할 것들
+
+- **`kick_member()` 게임 진행 중 강퇴 불가 → 이탈 학생이 순위표에 잔류** (`app.py:921`): `if room.status != 'waiting': return jsonify({'error': '대기 중인 방에서만 강퇴할 수 있습니다.'}), 400` 조건으로 게임 시작 후 강퇴 불가. 접속이 끊긴 학생이 순위표에 남아 "비활성 1위" 현상 발생. 해결: 조건을 삭제하거나 `waiting` → `waiting`, `active`, `paused`로 확장, 다만 게임 진행 중 강퇴 시에는 보유 주식·예금을 현금으로 청산 후 `RoomMember` 삭제. `_end_room()`의 청산 로직(`app.py:363-370`)을 단일 멤버용으로 추출해 재사용. `app.py` 약 20줄 수정.
+
+- **`gen_code()` 10회 중복 시 마지막 중복 코드 반환 가능** (`models.py:8-13`): 10회 모두 기존 코드와 충돌하면 마지막 `random.choices()` 결과를 그냥 반환해 `Room` 삽입 시 `UNIQUE` 제약 위반(`IntegrityError`) 발생. `create_room()` 호출 측(`app.py:706-715`)에서 `IntegrityError`를 잡고 있지 않아 500 오류로 이어짐. 해결: `models.py:12` 10회 루프 실패 후 `raise RuntimeError('코드 생성 실패')` 혹은 루프 횟수를 30으로 늘리기. `create_room()` 측에도 `IntegrityError` catch 추가. 2~3줄 수정.
+
+- **`_member_locks` 딕셔너리 정리 타이밍 불일치** (`app.py:135-143`, `app.py:382-384`): `_get_member_lock(rid, uid)` 가 방별·사용자별 `threading.Lock()`을 영구 딕셔너리에 축적, 방 종료 시 `_end_room()`에서 해당 방 키를 삭제(`app.py:382-384`)하지만 종료 전 예외 발생 시 락이 누적될 수 있음. Render 무료 플랜의 슬립→웨이크업 후 in-memory 딕셔너리는 초기화되므로 실제 누수는 제한적이나, 코드 의도와 실제 동작을 일치시키기 위해 `_end_room()` 내 락 정리 블록을 try/finally로 감싸는 것이 안전. `app.py:382` 블록 3줄 수정.
+
+- **`lottery_pick()` 동시 제출 레이스 조건** (`app.py:1481-1514`): `cur['picks'][str(user.id)] = nums` 할당이 `_lottery_lock` 밖에서 일어나(`app.py:1502`), 두 요청이 동시에 `eligible` 계산(`app.py:1507-1508`)과 `len(cur['picks']) >= eligible` 체크를 통과하면 `drawing` 전환이 중복 실행됨. 실제로 `cur['state']` 재확인이 `with _lottery_lock:` 안에 있어(`app.py:1510-1513`) 상태 전이 자체는 원자적이지만, `picks` dict 할당 자체가 락 외부에 있어 같은 `user_id`의 중복 제출이 두 번 처리될 수 있음. 해결: `cur['picks'][str(user.id)] = nums` 할당도 `_lottery_lock` 블록 안으로 이동. 5줄 재배치.
+
+- **`get_history()` 매 호출마다 무작위 가격 재생성 → 차트가 새로고침마다 달라짐** (`stock_service.py:303-332`): 캐시 TTL(120초, `HISTORY_CACHE_TTL`) 내에 동일 `(symbol, period)` 키 요청은 캐시를 반환하지만, 가격 업데이트 시 해당 종목 차트 캐시를 무효화(`stock_service.py:209-211`)해 다음 호출에서 새 무작위 히스토리를 생성. 학생이 차트 주기를 전환(`1d→1mo→1d`)하거나 페이지를 새로고침하면 히스토리가 달라져 추세 분석이 무의미해짐. 해결: 게임 시작 시 `_init_prices()`에서 각 종목의 초기 히스토리를 1회 생성해 `_history_cache`에 고정 저장. 이후 가격 변동 시 최신 봉(bar)만 갱신(append). `stock_service.py` 약 20줄 수정.
