@@ -5293,3 +5293,29 @@
 - **`lottery_pick()` 동시 제출 레이스 조건** (`app.py:1481-1514`): `cur['picks'][str(user.id)] = nums` 할당이 `_lottery_lock` 밖에서 일어나(`app.py:1502`), 두 요청이 동시에 `eligible` 계산(`app.py:1507-1508`)과 `len(cur['picks']) >= eligible` 체크를 통과하면 `drawing` 전환이 중복 실행됨. 실제로 `cur['state']` 재확인이 `with _lottery_lock:` 안에 있어(`app.py:1510-1513`) 상태 전이 자체는 원자적이지만, `picks` dict 할당 자체가 락 외부에 있어 같은 `user_id`의 중복 제출이 두 번 처리될 수 있음. 해결: `cur['picks'][str(user.id)] = nums` 할당도 `_lottery_lock` 블록 안으로 이동. 5줄 재배치.
 
 - **`get_history()` 매 호출마다 무작위 가격 재생성 → 차트가 새로고침마다 달라짐** (`stock_service.py:303-332`): 캐시 TTL(120초, `HISTORY_CACHE_TTL`) 내에 동일 `(symbol, period)` 키 요청은 캐시를 반환하지만, 가격 업데이트 시 해당 종목 차트 캐시를 무효화(`stock_service.py:209-211`)해 다음 호출에서 새 무작위 히스토리를 생성. 학생이 차트 주기를 전환(`1d→1mo→1d`)하거나 페이지를 새로고침하면 히스토리가 달라져 추세 분석이 무의미해짐. 해결: 게임 시작 시 `_init_prices()`에서 각 종목의 초기 히스토리를 1회 생성해 `_history_cache`에 고정 저장. 이후 가격 변동 시 최신 봉(bar)만 갱신(append). `stock_service.py` 약 20줄 수정.
+
+## 2026-09-04
+
+### 추가하면 좋을 기능
+
+- **진행자 계정 PIN 보호** (`app.py:604-618` `enter()`, `models.py:16-22`): `User` 모델에 비밀번호가 없어 동일 닉네임만 알면 누구나 진행자로 로그인 가능. `create_room()`(`app.py:676`) 호출 시 4자리 숫자 PIN을 설정하고 `User` 또는 `Room` 테이블에 bcrypt 해시로 저장, 같은 진행자 닉네임으로 재접속 시 PIN 검증 단계 추가. 학생이 "선생님 계정"을 탈취해 게임을 조작하는 상황 방지. `models.py` 컬럼 1개 + `app.py` 약 20줄 + `index.html` PIN 입력 필드.
+
+- **주가 급등·급락 인앱 알림 (보유 종목 한정)** (`static/js/app.js` 주식 폴링 루프): 학생이 보유한 종목이 직전 가격 대비 ±5% 이상 변동하면 화면 내 토스트 메시지로 즉시 표시. 서버 변경 불필요; `get_stocks()` 응답의 `change_pct` 필드와 현재 보유 `holdings`를 클라이언트에서 비교해 조건 충족 시 알림. `app.js` 약 20줄. 수업 중 학생 참여도 유지에 직접적 효과.
+
+- **뉴스 아카이브 탭 (게임 중 발생한 뉴스 전체 이력)** (`app.py:1060-1064` `get_room_news()`, `static/js/app.js` 뉴스 탭): 현재 뉴스 API는 최신 1건만 반환. 게임 중 지나간 뉴스가 사라져 학생이 "왜 이 주식이 올랐나?"를 소급해서 볼 수 없음. `StockService._news` 대신 `_news_log: list`(최대 30건 FIFO) 를 추가해 `/api/rooms/<rid>/news?history=true` 엔드포인트로 제공. `stock_service.py` 약 10줄 + `app.py` 파라미터 처리 5줄 + 클라이언트 탭 렌더 20줄. 수업 마무리 복기("어느 뉴스가 반도체를 올렸나?") 토론 지원.
+
+- **개인 거래 메모장 (localStorage)** (`static/js/app.js` 포트폴리오 탭): 학생이 "왜 이 주식을 샀는지" 메모할 곳이 없음. 거래 내역 행 옆에 인라인 `textarea`를 추가해 `localStorage`에 `{rid}_{symbol}` 키로 저장. 서버 변경·DB 변경 전혀 없음, `app.js` 약 25줄. 수업 후 "투자 일지" 과제 작성에 즉시 활용 가능.
+
+- **퀴즈 통계 요약 (진행자 대시보드)** (`app.py:1654-1660` `get_quiz_history()`, `app.py:906-912` `host_members()`): 현재 퀴즈 히스토리는 학생 개인만 볼 수 있음. `/api/rooms/<rid>/host/quiz-stats` 엔드포인트를 추가해 `_quiz_history` 전체를 집계(문제별 정답률, 학생별 시도 횟수)하고 진행자 탭에 표시. `app.py` 약 20줄. 어떤 개념이 학생들에게 어려운지 교사가 실시간 파악 가능.
+
+### 제거/단순화할 것들
+
+- **`Room.query.get_or_404(rid)` 레거시 패턴 다수 사용** (`app.py:760, 809, 823, 837, 852, ...` 등 30여 곳): SQLAlchemy 2.x에서 `Query.get()` 은 deprecated → 런타임 경고 발생. `db.get_or_404(Room, rid)` 또는 `db.session.get(Room, rid)` + 404 처리로 교체해야 Flask-SQLAlchemy 3.x 이상 호환성 확보. 정규식 치환(`Room.query.get_or_404\(` → `db.get_or_404(Room, `) 으로 일괄 처리 가능, 약 5분 작업.
+
+- **`_quiz_settings`, `_roulette_config`, `_lottery_custom_times` 인메모리 전용 저장** (`app.py:513`, `app.py:1577-1578`, `app.py:391`): Render 무료 플랜은 비활성 15분 후 컨테이너를 재시작. 게임 도중 진행자가 설정한 퀴즈 보상률·룰렛 배율·복권 예약 시각이 모두 초기화됨. `Room` 테이블에 JSON 컬럼(`settings_json TEXT`)을 1개 추가해 게임 시작 전 설정은 DB에 저장하고 시작 후 인메모리 캐시로 사용. `models.py` 1줄 + `app.py` 각 엔드포인트 write/read 로직 약 15줄.
+
+- **`RoomTransaction` 테이블 복합 인덱스 없음** (`models.py:68-79`): `GET /api/rooms/<rid>/transactions` 및 `host_member_transactions()`, `_compute_leaderboard()` 등에서 `filter_by(room_id=rid, user_id=uid)` 쿼리가 풀스캔. 30명 학생이 각 50건 거래하면 1,500행, 현재는 문제없지만 PostgreSQL 운영 시 인덱스 없으면 실행 계획이 Seq Scan으로 고정됨. `models.py:79` 아래에 `db.Index('ix_rt_room_user', 'room_id', 'user_id')` 1줄 추가로 해결.
+
+- **`export_rankings()` username 파싱 방식 불안정** (`app.py:1783-1788`): `username.split(' ', 1)` 으로 "학번 이름" 분리. 공백 없이 닉네임만 입력하면 `sid=''`, `name=전체닉네임` 이 되어 Excel 학번 컬럼이 빈칸. 현재 join 화면(`index.html:53-59`)에서 학번·이름을 별도 입력받지만 `app.js`가 이를 `"{sid} {name}"` 형태로 합쳐 단일 username으로 전송—구분자가 실제 이름의 공백과 충돌 가능. 해결: `User` 테이블에 `student_id VARCHAR(20)` 컬럼을 추가해 학번을 별도 저장하고 export 시 직접 사용. `models.py` 1줄 + `app.py` enter/export 약 10줄.
+
+- **퀴즈가 일시정지(paused) 상태에서 불가** (`app.py:1584-1586`): `room.status != 'active'` 조건으로 복권·룰렛 진행 중 일시정지 시 퀴즈 API가 400 반환. 복권 번호 입력(60초) 동안 학생들이 할 것이 없어 집중력 분산. 조건을 `room.status not in ('active', 'paused')` 로 완화하고, paused 상태 퀴즈 응모의 보상/패널티는 정상 지급하되 플래그로 구분 가능. 1줄 수정. 단, 룰렛 auto_pause 중에는 `_get_member_lock` 이 이미 거래를 직렬화하므로 퀴즈 보상 지급도 안전.
