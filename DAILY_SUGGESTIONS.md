@@ -2,6 +2,38 @@
 
 ---
 
+## 2026-09-05
+
+### 추가하면 좋을 기능
+
+- **학급 합산 포트폴리오 집계 패널** (`app.py` 신규 `GET /api/rooms/<rid>/host/class-portfolio`, `app.py:262-290` `_compute_leaderboard()`, `models.py:57-65` `RoomHolding`): 진행자가 "지금 학급 전체가 어떤 종목에 가장 많이 투자했나?"를 한눈에 파악할 수단이 없음. `RoomHolding.query.filter_by(room_id=rid).all()`을 `symbol`별로 집계해 종목명·총 보유 주수·학급 전체 평가금액·보유 학생 수를 정렬한 목록을 반환하는 엔드포인트 추가. 진행자 시장 탭에 "학급 전체 보유 현황" 패널을 추가하고 종목별 바 차트로 시각화. 서버 약 15줄 + 클라이언트 약 20줄. "학급 전체가 삼성전자에 편중됐다" → "왜 모두 같은 종목을 선택했나?" 질문으로 군집 심리(Herd Mentality) 교육 포인트 자연 발생.
+
+- **진행자 전용 프로젝터 발표 모드** (`static/js/app.js` 진행자 UI, `static/index.html` 진행자 탭): 진행자가 순위표·특정 종목·시장 히트맵 중 하나를 교실 TV/프로젝터에 전체 화면으로 띄우고 싶어도 현재 UI 레이아웃은 이 용도에 맞지 않음. "발표 모드" 토글 버튼(🖥 아이콘)을 추가해 클릭 시 `document.documentElement.requestFullscreen()`으로 전체 화면 진입 후 선택된 패널(순위·종목·섹터·히트맵)만 크게 렌더링하는 전용 레이아웃 적용. `localStorage.setItem('presenter_panel', ...)` 로 마지막 선택 유지. 서버 변경 불필요, `app.js` 약 30줄 + CSS 약 15줄. 수업 중 결과 발표 시 별도 도구 없이 교사가 스크린에 바로 띄워 학생 전체에게 공유 가능.
+
+- **학생 간 P2P 주식 양도 거래** (`app.py` 신규 `POST /api/rooms/<rid>/transfer`, `app.py:1081-1126` `trade()` 참조): 현재 모든 거래는 진행자가 조정하거나 시장가를 통해서만 이루어짐. `POST /api/rooms/<rid>/transfer {'to_uid': int, 'symbol': str, 'shares': int, 'price_per_share': int}` 엔드포인트를 추가해 같은 방 참여자 간 직접 주식 양도를 허용. 매도자의 `_get_member_lock` + 매수자의 `_get_member_lock`을 순서가 고정된 방식으로 획득(deadlock 방지: `min(uid, to_uid)` 순서)해 원자적으로 처리. `RoomTransaction`에 `action='XFER'`로 양측 기록. 서버 약 40줄. "이 종목을 친구한테 팔면 얼마 받아야 공정한가?" 가격 협상 체험을 통해 협상·정보 비대칭 개념을 교육적으로 연출 가능.
+
+- **게임 종료 후 가격 추이 리플레이** (`app.py:335-388` `_end_room()`, `stock_service.py:303-332` `get_history()`): 게임이 끝나면 `StockService`가 `cleanup_room_service()`로 즉시 삭제되어 가격 히스토리가 소실됨. `_end_room()` 실행 직전에 `svc.get_history(sym)` 로 전 종목 차트 데이터를 `_replay_data: dict = {}  # rid -> {sym: [bars]}` 딕셔너리에 보존. `GET /api/rooms/<rid>/replay?t=<percent>` 엔드포인트를 추가해 게임 진행 시점 비율(0~100%)의 가격 스냅샷을 반환. 진행자·학생 결과 화면에 타임라인 슬라이더를 추가해 "30분짜리 게임을 20초 만에 되감아보는" 리플레이 제공. 서버 약 25줄 + 클라이언트 슬라이더 약 20줄. "뉴스 발표 직후 내 종목이 어떻게 움직였나?"를 직접 확인하며 수업 복기 가능.
+
+- **가상 IPO 이벤트 연출** (`stock_service.py:127-141` `StockService.__init__()`, `app.py:1030-1044` `host_force_price()`, `app.py` 신규 `POST /api/rooms/<rid>/host/ipo`): 63개 종목은 게임 시작 시 전부 거래 가능해 새 종목이 등장하는 IPO 개념을 교육할 수 없음. `STOCKS` 딕셔너리에 `'listed': False` 플래그를 추가해 일부 종목을 초기 비상장 처리. `POST /api/rooms/<rid>/host/ipo {'symbol': str}` 호출 시 해당 종목의 `StockService._prices`에 공모가 설정 + `'listed': True` → `get_stocks()` 응답에 즉시 포함. 뉴스에 "🔔 {name} 오늘 코스피 상장! 공모가 {price}원"을 자동 발행. 서버 약 20줄, 진행자 클라이언트 탭 약 10줄. "공모주 청약이 왜 치열한가?", "상장 직후 주가가 왜 오르내리나?" 교육 시나리오 연출 가능.
+
+- **진행자 종목별 학생 관심도 지수 (조회 빈도 기반)** (`app.py:1067-1076` `get_chart()`, `app.py:1008-1028` `get_stocks()`): 현재 `get_stocks()` 는 모든 종목을 동등하게 반환하지만, 학생들이 실제로 어떤 종목에 관심을 갖는지(차트를 자주 여는지, 포트폴리오에서 비중이 높은지)를 진행자가 파악할 수단이 없음. `_stock_views: dict = {}  # rid -> {sym: int}` 딕셔너리를 추가해 `get_chart()` 진입 시마다 `_stock_views[rid][symbol] += 1` 기록. `GET /api/rooms/<rid>/host/stock-interest` 엔드포인트에서 조회 빈도 + 실제 보유자 수(`RoomHolding` 집계) 결합 "관심도 지수"를 내림차순으로 반환. 진행자 시장 탭에 "학생 관심 종목 TOP 10" 패널 약 15줄. 학생들이 가장 많이 탐색하는 종목을 파악해 "왜 이 종목에 관심을 갖나요?" 질문으로 수업 흐름 유도 가능.
+
+### 제거/단순화할 것들
+
+- **`_do_reveal()` 복권 당첨자 루프 내 N+1 DB 쿼리** (`app.py:477-483`): `for uid_str, picks in cur.get('picks', {}).items():` 루프 안에서 `m = RoomMember.query.filter_by(room_id=rid, user_id=uid).first()`를 당첨자마다 실행. 학급 30명이 모두 번호를 제출하면 최대 30회 개별 RoomMember SELECT가 발생. `_do_reveal()` 진입 직전에 `member_map = {m.user_id: m for m in RoomMember.query.filter_by(room_id=rid).all()}`로 미리 로드(`app.py:476` 이전 1줄)하고, 루프 내 `m = RoomMember.query...` → `m = member_map.get(uid)`로 교체. `_compute_leaderboard()`(`app.py:262-290`)가 이미 동일 패턴 사용. 2줄 수정으로 요청당 최대 30회 → 1회로 단축, 복권 발표 응답 지연도 개선.
+
+- **`lottery_rounds_done` `String(50)` — 수동 복권 10회 이상 시 PostgreSQL `DataError`** (`models.py:41`, `app.py:488-492`): `_CUSTOM_LOT_ROUND_BASE = 1000`으로 시작하는 수동 복권 회차 번호는 4자리이므로 쉼표 포함 항목당 최대 5자. `String(50)`은 최대 10개 항목(50÷5=10)만 저장 가능. 11번째 수동 복권 완료 시 `_do_reveal()` 내 `_room_lot.lottery_rounds_done = ','.join(...)` → PostgreSQL `DataError: value too long for type character varying(50)` → 500. 자동 복권(1~6회차, 1~2자리)은 영향 없지만 교사가 여러 번 수동 복권을 진행하면 게임 중 오류 발생. 해결: `models.py:41`의 `db.String(50)` → `db.Text`로 변경, `app.py:70-81`의 `ALTER TABLE` 패턴으로 `ALTER TABLE rooms ALTER COLUMN lottery_rounds_done TYPE TEXT`(PostgreSQL) 또는 SQLite는 무시 마이그레이션 추가. 2줄 수정.
+
+- **`host_adjust()` `_get_member_lock` 없이 `m.cash` 직접 수정 → lost-update 위험** (`app.py:953-955`): `m = RoomMember.query.filter_by(room_id=rid, user_id=target_uid).first()` 후 `m.cash = max(0, m.cash + delta)` 실행이 `_get_member_lock(rid, target_uid)` 없이 이루어짐. 진행자가 특정 학생에게 자산을 지급하는 동시에 해당 학생이 주식 매수(`trade()`, `_get_member_lock` 사용)를 완료하면, 두 스레드가 각자 스테일 `m.cash`를 읽어 하나의 변경이 덮어써지는 lost-update 발생. 진행자 지급액이 조용히 소실되는 교육 현장 혼란. 해결: `app.py:953` 이하 `m = ...` ~ `m.cash = ...` ~ `db.session.add(RoomTransaction(...))` ~ `db.session.commit()` 전체를 `with _get_member_lock(rid, target_uid): db.session.refresh(m); ...` 블록으로 감싸기. `trade()` 패턴(`app.py:1103-1124`) 그대로 적용. 약 4줄 수정.
+
+- **`host_adjust()` `RoomTransaction.note` 길이 미검증 → PostgreSQL `DataError`** (`app.py:952`, `models.py:78`): `note = d.get('note', '진행자 자산 조정')` 에 길이 제한이 없음. `RoomTransaction.note = db.Column(db.String(200))` 이므로 진행자가 200자를 초과하는 메모를 입력하면 PostgreSQL에서 `DataError: value too long` → 500. SQLite는 길이를 강제하지 않아 DB 간 동작 불일치. 해결: `app.py:952` 이후에 `note = note[:200]` 1줄 추가(슬라이스 방식으로 초과분 무음 절사)하거나, `if len(note) > 200: return jsonify({'error': '메모는 200자 이하'}), 400` 유효성 검사 추가. 1~2줄 수정. `host_member_transactions()` 응답에서 이미 `note` 필드를 직접 반환하므로 잘린 내용이 UI에 표시되지 않도록 클라이언트 `textarea maxlength="200"` 속성도 함께 추가.
+
+- **`minigame_spin()` 함수 내 중복 `import math`** (`app.py:1379`): `import math`가 `app.py:6`의 최상위에서 이미 `import os, threading, math, re, json, logging`으로 임포트되어 있음에도 `minigame_spin()` 함수 본문 안(`app.py:1379`)에 `import math`가 재차 등장. 함수 레벨 임포트는 매 호출마다 `sys.modules` 딕셔너리를 조회하므로 약간의 오버헤드가 발생하고, 최상위 임포트가 누락됐다는 잘못된 인상을 줌. `app.py:1379`의 `import math` 1줄 삭제. 동시에 `_rlt_outcomes()`(`app.py:524-539`)에서 커스텀 `weights` 리스트가 `ROULETTE_OUTCOMES`(5개)보다 짧을 때 누락된 항목이 기본 `o['weight']`를 사용하나 `total = sum(weights)`는 짧은 리스트만 합산해 `seg_end`가 360에 수렴하지 않고 회전판 세그먼트가 틀어지는 렌더링 오류도 병행 수정: `app.py:527` `total = sum(weights)` → `total = sum(weights[i] if i < len(weights) else o['weight'] for i, o in enumerate(ROULETTE_OUTCOMES)) or 1`로 교체. 2줄 수정으로 두 결함 동시 해결.
+
+- **`get_stocks()` 에서 `Room.query.get_or_404(rid)` 결과를 변수에 저장하지 않아 Room 객체가 GC 대상** (`app.py:1011`): `Room.query.get_or_404(rid)` 호출로 Room 객체를 로드하지만 반환값을 어떤 변수에도 저장하지 않음. DB 쿼리 1회가 순수히 유효성 확인용으로 낭비됨. 학생 30명 × 3초 폴링 × `get_stocks()` = 분당 600회 불필요한 Room SELECT. 또한 Room이 실제로 존재하지 않는 경우(이미 종료된 rid를 직접 호출)와 StockService가 아직 없는 경우를 구분하지 않아 `get_room_service(rid)`가 새 StockService를 생성하는 부작용도 있음. 해결: `app.py:1011` → `if not db.session.get(Room, rid): abort(404)` 로 교체. `abort`는 `flask`에서 임포트 필요(`from flask import ..., abort`). 1줄 교체로 불필요한 객체 생성 제거.
+
+---
+
 ## 2026-09-03
 
 ### 추가하면 좋을 기능
