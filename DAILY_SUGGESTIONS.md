@@ -5341,3 +5341,32 @@
 
 - **`get_room()` 내 stale 방 자동 종료(`_end_room(stale)`)가 응답 경로에서 동기적으로 실행** (`app.py:757-806` `get_room()`, `app.py:680-695` stale 방 탐지 로직): `get_room()` 진입 시 `room.end_time`이 지났으면 `_end_room(room)` → `RoomHolding` 청산 + `Deposit` 이자 정산 + `db.session.commit()` 을 응답 반환 전에 동기적으로 수행. 30명 학생 + 50개 보유 종목 규모에서 `_end_room()` 실행 시간이 200ms~1s에 달하면 해당 학생의 폴링 응답이 그만큼 지연되고, 다른 학생들은 타임아웃에 걸릴 수 있음. `_end_room(room)` 호출을 `threading.Thread(target=_end_room, args=(room,), daemon=True).start()` 로 비동기 실행하고 현재 `get_room()`은 즉시 `{'status': 'ended', ...}`를 반환하면 응답 지연 해소. 단, 비동기 처리 시 DB 세션 관리를 위해 `with app.app_context():`를 스레드 내부에서 사용해야 함. 약 5줄 변경.
 
+
+---
+
+## 2026-09-05
+
+### 추가하면 좋을 기능
+
+- **게임 시작 후 강퇴 기능 추가** (`app.py:920`): `kick_member()`가 `room.status == 'waiting'`일 때만 허용. 수업 중 실수로 입장하거나 이탈한 학생을 게임 중에도 정리할 방법이 없음. `status='active'` 상태에서도 강퇴 허용 + 보유 주식을 현재가로 현금화 후 `RoomMember` 삭제 처리. 진행자 "참여자 관리" 탭에서 강퇴 버튼을 게임 중에도 활성화. 수업 현장의 실제 요구를 반영한 고영향 기능.
+
+- **게임 종료 직전 포트폴리오 스냅샷 저장** (`app.py:362-370` `_end_room()`): `_end_room()` 시 `RoomHolding`이 모두 삭제되어 종료 후 학생이 "내가 무엇을 보유했었는지" 알 수 없음. `_end_room()` 내 주식 청산 루프(`app.py:364`) 직전에 각 멤버의 보유 현황을 JSON으로 직렬화해 `Room` 모델의 새 컬럼 `final_snapshot` (JSON Text)에 저장. `results_published=True` 이후 참여자가 "/api/rooms/<rid>/final-portfolio" 로 조회 가능하게 추가. 수업 후 "왜 내 순위가 이렇게 됐는지" 토론 근거 제공.
+
+- **종목별 실시간 거래량 표시** (`app.py:1008-1028` `get_stocks()`, `models.py:68-79` `RoomTransaction`): 현재 종목 목록 응답에 가격·등락률만 있음. `GET /api/rooms/<rid>/stocks` 응답에 `trade_volume` 필드 추가 — `RoomTransaction.query.filter_by(room_id=rid, symbol=sym, action='BUY').count()` + SELL 합산. 결과를 `_news_cache`와 동일한 2초 TTL로 캐싱해 DB 부하 최소화. 학생 UI 종목 카드에 "🔥 거래량 12건" 뱃지로 표시. "왜 이 종목이 인기인가" 토론 유도 — 수업 참여도 직결 기능.
+
+- **학번·이름을 별도 필드로 입력받기** (`app.py:604-618` `enter()`, `app.py:1784-1788` `export_rankings()`): 현재 닉네임 단일 필드를 "학번 이름" 형식으로 입력받아 Excel 출력 시 `split(' ', 1)`로 파싱. 학생이 공백 없이 입력하면 학번이 공백이 되어 Excel이 깨짐. 입장 폼에 `student_id` + `name` 두 필드를 분리하고, `User.username = f"{sid} {name}"` 방식으로 기존 DB 스키마를 유지하면서 파싱 신뢰도 100% 확보. `static/index.html` 입력 UI + `app.py:enter()` 검증 로직 수정. Excel 출력 품질에 직결되는 우선순위 높은 개선.
+
+- **퀴즈 설정 DB 저장** (`app.py:1578` `_quiz_settings: dict`, `app.py:1748-1763` `quiz_settings()`): 진행자가 퀴즈 보상/패널티 비율 설정 후 서버 재시작(Render free tier는 15분 비활성 시 슬립) 시 초기화. `Room` 모델에 `quiz_reward_pct FLOAT DEFAULT 1.0`, `quiz_penalty_pct FLOAT DEFAULT 0.5` 컬럼 추가 후 마이그레이션(`app.py:71-82` ALTER TABLE 패턴 활용). `_quiz_settings` 인메모리 dict 제거하고 `room.quiz_reward_pct`로 직접 참조. 3줄 모델 변경 + `app.py:1620-1621` 참조 경로 수정으로 완결.
+
+### 제거/단순화할 것들
+
+- **`_ending_soon` 집합 제거** (`app.py:144`, `app.py:860-870`): `_ending_soon = set()`은 "1분 카운트다운 활성" 여부를 인메모리로 관리. 서버 재시작 시 상태를 잃어 진행자가 "종료" 버튼을 눌렀음에도 카운트다운이 없어짐. `room.end_time`이 이미 60초 단축됐으므로 `remaining < 60`으로 동일 판단 가능. `_ending_soon` 집합 전체(`room_dict` 반환값 포함)를 제거하고 `ending_soon: remaining < 60 and room.status == 'active'` 계산식으로 대체. 인메모리 상태 1개 제거, 재시작 안정성 향상.
+
+- **룰렛 60초 하드 타임아웃 → 게임 종료 대신 룰렛 스킵으로 변경** (`app.py:796-801`): 학생이 룰렛 화면을 열고 실수로 닫지 않으면 60초 후 게임 전체가 강제 종료됨. 수업 중 발생 시 치명적 UX 사고. `_end_room(room)` 호출을 `room.rlt_triggered = False; room.status = 'active'; room.paused_at = None`으로 대체해 룰렛만 스킵하고 게임 재개. 또는 타임아웃을 120초로 늘림. 현재 코드 3줄 수정으로 수업 사고 예방.
+
+- **진행자 전용 Quiz 히스토리 API 미구현 정리** (`app.py:1654-1660` `get_quiz_history()`): `/api/rooms/<rid>/quiz/history`는 본인 히스토리만 반환하고 진행자도 자신의 것만 볼 수 있음(진행자는 퀴즈 비참여). 진행자가 "어느 학생이 퀴즈를 많이 맞혔는가" 집계를 볼 수 없어 교육적 피드백 부재. 사용되지 않는 엔드포인트를 완전히 제거하거나, 진행자용 `/api/rooms/<rid>/host/quiz-stats` 엔드포인트로 대체해 방 전체 퀴즈 정답률 집계 제공 — 기존 `_quiz_history` dict 재활용.
+
+- **`_room_cache` TTL 캐시와 `member_count` 실시간 조회 불일치** (`app.py:92-105`, `app.py:571`): `_get_room_cached()`가 1.5초 TTL로 `room_dict` 결과를 캐싱하지만, `room_dict()` 내부의 `RoomMember.query.filter_by(room_id=room.id).count()`(`app.py:571`)는 캐시와 무관하게 매번 DB 조회. 캐시의 이점이 반감됨. 해결책: `member_count`도 캐시에 포함하거나(`room_dict` 호출 전 미리 계산), 아니면 로비 폴링 주기를 5초로 늘리고 캐시를 제거해 코드 단순화.
+
+- **`app.py` 내 `import math` 중복** (`app.py:6`, `app.py:1379`): 파일 최상단(`app.py:6`)에서 이미 `import math`를 했지만 `minigame_spin()` 함수 내부(`app.py:1379`)에서 한 번 더 `import math`. 함수 안 import 제거. 1줄 정리.
+
