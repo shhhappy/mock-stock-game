@@ -5402,3 +5402,31 @@
 
 - **`app.py` 내 `import math` 중복** (`app.py:6`, `app.py:1379`): 파일 최상단(`app.py:6`)에서 이미 `import math`를 했지만 `minigame_spin()` 함수 내부(`app.py:1379`)에서 한 번 더 `import math`. 함수 안 import 제거. 1줄 정리.
 
+
+---
+
+## 2026-09-06
+
+### 추가하면 좋을 기능
+
+- **진행자 화면에서 특정 학생 포트폴리오 실시간 조회** (`app.py:962-984` `host_member_transactions()`): 진행자가 거래 내역 페이지만 볼 수 있고, 현재 보유 주식 포트폴리오(종목·평균단가·평가손익)를 직접 확인할 방법이 없음. `/api/rooms/<rid>/host/members/<uid>/portfolio` 엔드포인트를 추가해 `get_portfolio()` 로직을 재사용하되 진행자가 `uid` 파라미터로 임의 학생을 조회하도록 허용. 수업 중 "이 학생이 왜 1위인가" 바로 확인 가능 — 수업 토론 진행에 직결되는 고영향 기능.
+
+- **시장 이벤트 발동 이력 기록 및 조회** (`app.py:1663-1678` `host_market_event()`): 진행자가 섹터 이벤트를 발동하면 뉴스 아이템으로만 표시되고 `RoomTransaction`에 아무 기록이 남지 않음. 수업 후 "언제, 어느 섹터에서 이벤트가 발동됐는가"를 확인할 수 없어 수업 복기 불가. `host_market_event()` 내부에서 `RoomTransaction(action='EVT', symbol=sector, amount=pct, note=...)` 형식으로 한 건 삽입하는 3줄 추가만으로 해결. Excel 내보내기 시트에도 이벤트 탭 추가 가능.
+
+- **학번 중복 방지 — 방 단위 중복 입장 경고** (`app.py:717-731` `join_room()`, `app.py:604-618` `enter()`): `User.query.filter_by(username=u).first()` 로 동일 닉네임 입력 시 기존 User를 그대로 재사용(`app.py:611`). 두 학생이 같은 닉네임을 입력하면 동일 `user_id`를 공유하게 되어 한 명의 거래가 다른 명의 포트폴리오에 반영됨. `join_room()` 에서 방 합류 시 `username` 중복 여부 검사 후 `{'error': '이미 같은 이름의 참여자가 있습니다.'}`를 반환하는 조건 1개 추가로 예방 가능. 최우선 데이터 정합성 이슈.
+
+- **복권 번호 선택 시간·추첨 시간 진행자 설정 가능** (`app.py:394-395` `LOTTO_PICK_SECS = 60`, `LOTTO_DRAW_SECS = 45`): 수업 시간이 짧거나 긴 경우 복권 번호 입력 60초가 수업 흐름을 방해하거나 너무 촉박할 수 있음. 룰렛 설정(`/host/roulette-config`)과 동일한 패턴으로 `/api/rooms/<rid>/host/lottery-settings` 엔드포인트를 추가해 `pick_seconds`(10~120)·`draw_seconds`(10~90) 설정. `_quiz_settings` 딕셔너리처럼 인메모리로 관리하면 스키마 변경 없이 구현 가능. 약 15줄 추가.
+
+- **게임 종료 후 학생별 최종 요약 엔드포인트** (`app.py:1735-1745` `host_publish_results()`, `app.py:1166-1175` `get_rankings()`): `results_published=True` 후 학생이 "내 최종 순위·수익률·주요 거래 종목"을 한눈에 볼 수 있어야 하나 현재 전체 순위표(`/rankings`) 외에 개인 요약 API가 없음. `/api/rooms/<rid>/my-result` 엔드포인트 추가 — 본인 순위·수익금액·총 거래 횟수·최다 거래 종목을 반환. `results_published=False`면 403 반환. 수업 종료 후 학생 자기 평가 활동 지원.
+
+### 제거/단순화할 것들
+
+- **차트 데이터(`get_history()`)가 게임 내 실제 가격과 무관함 — 교육적 오해 유발** (`stock_service.py:303-332` `get_history()`): 차트 바를 "현재가에서 역방향 랜덤 워크"로 생성해 학생이 차트를 분석해도 게임 내 가격 변화와 무관한 데이터를 보게 됨. 학생이 "과거 추이를 보고 매매"하는 행동이 교육 목적상 올바르지만 실제론 의미 없는 랜덤 데이터. 최소한 차트 응답에 `simulated: true` 플래그 추가 + 프론트엔드에서 "※ 시뮬레이션 데이터" 안내 표시. 근본 해결은 `StockService`에 `_price_log: list` 속성을 추가해 `get_price()` 호출 시 타임스탬프·가격을 기록하고 `get_history()`에서 해당 로그를 반환(최근 30개 기준). `stock_service.py` 약 15줄 변경.
+
+- **`get_prev_close()`가 게임 시작 시점 가격으로 고정 — 등락률 표시 기준 혼동** (`stock_service.py:143-149` `_init_prices()`, `stock_service.py:300-301` `get_prev_close()`): `_prev[sym]`이 게임 시작 시 초기 가격으로 설정된 뒤 갱신되지 않음. 가격이 40% 오른 뒤에도 `change_pct`가 "+40.0%"로 계속 표시돼 학생이 "아직도 40% 오른 상태"로 잘못 인식. 실제 주식에서 "전일 종가 대비"이듯, `_maybe_generate_news()` 내에서 뉴스 주기(TTL)마다 `self._prev[sym] = current_price`로 기준가를 갱신하면 최근 주기 대비 등락률이 표시됨. `stock_service.py:184` 부근에 `self._prev[sym] = price` 1줄 추가, `_init_prices()`와 `get_price()` 흐름 변경 없이 적용 가능.
+
+- **`_member_locks` 딕셔너리가 방 종료 후 `rid` 키 기준 정리 시 경쟁 조건 존재** (`app.py:382-384` `_end_room()`): `_end_room()` 에서 `with _member_locks_meta: for k in [k for k in _member_locks if k[0] == room.id]: del _member_locks[k]`로 정리하지만, 이 루프 실행 중 `_get_member_lock(rid, uid)` 를 동시에 호출하는 다른 스레드가 새 락을 생성할 수 있음(리스트 컴프리헨션으로 키 스냅샷 후 삭제하는 사이). `_member_locks_meta` 락을 잡은 채로 두 작업(스냅샷 + 삭제)을 원자적으로 처리하고 있으나, 새 락 생성(`_get_member_lock`) 역시 같은 `_member_locks_meta`를 사용하므로 실제 경쟁은 없음 — 코드 분석 결과 안전하나, 주석 누락으로 유지보수 시 혼동 유발. `_end_room()` 해당 블록에 `# _member_locks_meta를 잡은 채로 삭제 — _get_member_lock도 같은 메타락을 사용하므로 경쟁 없음` 주석 1줄 추가 권장.
+
+- **`host_adjust()` 진행자 자산 조정 시 현금만 변경 가능 — 주식 직접 부여 불가** (`app.py:940-960` `host_adjust()`): 진행자가 현금만 `delta` 단위로 조정할 수 있어 "이 학생에게 삼성전자 10주를 직접 지급"하는 시나리오를 구현할 수 없음. 현재 API는 교육 시나리오(예: "뉴스 보상으로 특정 주식 지급")에 한계. `delta_type: 'cash' | 'stock'` 파라미터 + `symbol`, `shares` 필드를 추가하거나, 단순화하면 현금 지급만 유지하되 UI에서 "해당 현금으로 지금 바로 매수"하도록 안내 메시지 추가.
+
+- **`host_send_news()` 호출 후 `_invalidate_room_cache(rid)` 불필요** (`app.py:1047-1058` `host_send_news()`): 뉴스 데이터는 `_news_cache` 에 별도로 관리되어 `_invalidate_news_cache(rid)`로 올바르게 무효화됨(line 1057). 그러나 뉴스 발행이 `room_dict`에 영향을 주지 않으므로 `_invalidate_room_cache(rid)` 호출이 없음 — 이는 올바른 동작이나, `host_force_price()`(`app.py:1030-1044`)도 `_invalidate_room_cache`를 호출하지 않아 가격이 바뀐 뒤 1.5초 TTL 동안 캐시된 `room_dict`가 반환될 수 있음. 실제로 `room_dict`에 가격이 포함되지 않으므로 영향 없음 — 이를 명시한 주석 추가 권장(캐시 무효화 불필요 이유 문서화).
