@@ -2,6 +2,38 @@
 
 ---
 
+## 2026-09-07
+
+### 추가하면 좋을 기능
+
+- **종목명·섹터 실시간 검색 바** (`static/js/app.js` 주식 탭 렌더 함수, `static/index.html` 주식 탭): 63개 종목을 스크롤 없이 찾으려면 현재 섹터 드롭다운만 있어 특정 종목을 찾는 데 시간이 걸림. 주식 탭 상단 섹터 필터 옆에 `<input type="text" id="stockSearch" placeholder="종목명 검색…">` 하나를 추가하고, 입력값이 바뀔 때마다 `app.js` 렌더 루프에서 `info.name.includes(q) || info.sector.includes(q)`로 필터링. 서버 변경 불필요, `app.js` 약 10줄 + `index.html` 1줄. 실제 MTS(모바일 트레이딩 시스템) UX와 같아 학생이 63개 종목 목록에서 원하는 기업을 즉시 찾는 현실감 있는 검색 경험 제공.
+
+- **전체 보유 종목 일괄 매도 (패닉 셀 버튼)** (`app.py` 신규 `POST /api/rooms/<rid>/sell-all`, `app.py:1081-1126` `trade()` 참조): 게임 종료 임박 시 학생이 여러 종목을 하나씩 매도해야 하는 번거로움이 있음. `POST /api/rooms/<rid>/sell-all` 엔드포인트를 추가해 `RoomHolding.query.filter_by(room_id=rid, user_id=uid).all()` 을 순회하고, `with _get_member_lock(rid, uid):` 블록 내에서 `db.session.refresh(m)` 후 각 보유 종목을 현재가로 전량 매도 처리(`trade()` 내부 SELL 로직 재활용). 서버 약 25줄, 포트폴리오 탭에 "전체 매도" 버튼 1개. "종료 5분 전 패닉 셀을 해야 할까, 버텨야 할까?" 의사결정 교육 포인트 생성 및 현실적인 공황 매도 시나리오 체험 가능.
+
+- **진행자 매매 일시 동결 기능** (`app.py` 신규 `POST /api/rooms/<rid>/host/freeze-trading`, `app.py:1081-1088` `trade()` 참조): 설명이나 발표 시간에 학생들이 계속 거래해 수업 흐름이 끊기는 문제가 있음. `_trading_frozen: set = set()` 전역 집합을 추가하고, `POST /api/rooms/<rid>/host/freeze-trading {'frozen': bool}` 엔드포인트에서 `rid`를 집합에 추가/제거. `trade()` 핸들러 시작 부분(`app.py:1085` 근처)에 `if rid in _trading_frozen: return jsonify({'error': '진행자가 거래를 일시 중지했습니다.'}), 403` 추가. `room_dict()` 응답에 `'trading_frozen': rid in _trading_frozen` 포함해 클라이언트가 매수/매도 버튼을 비활성화. `_end_room()`에서 `_trading_frozen.discard(rid)` 정리. 서버 약 12줄, 클라이언트 버튼 비활성화 약 5줄. 설명 시간·개념 정리 시간에 완벽한 집중 환경 조성 가능.
+
+- **뉴스 발생 이력 타임라인 패널** (`stock_service.py` 뉴스 히스토리 누적 저장, `app.py` 신규 `GET /api/rooms/<rid>/news/history`): 현재 `get_news()` 는 마지막 1건만 반환해, 이전에 어떤 뉴스가 있었는지 돌아볼 수 없음. `StockService`에 `_news_history: list = []` (최대 50건 cap) 필드를 추가하고 `trigger_news()` 호출마다 `{'text': ..., 'symbol': ..., 'ts': time.time()}` 를 append. `GET /api/rooms/<rid>/news/history` 신규 엔드포인트에서 KST 시각 + 뉴스 텍스트 목록 반환. 주식 탭 하단에 "뉴스 히스토리" 스크롤 목록 패널을 추가하고 최신순으로 표시. 서버 약 15줄 + 클라이언트 패널 약 15줄. "어떤 뉴스 이후에 주가가 올랐나?"를 역추적하며 뉴스-주가 인과관계를 직접 데이터로 확인하는 핵심 교육 기능.
+
+- **퀴즈 오답 복습 노트 (개인 화면)** (`app.py:1654-1660` `get_quiz_history()`, `static/js/app.js` 퀴즈 탭): 현재 퀴즈 탭에 "내 퀴즈 기록" 섹션이 없어 틀린 문제를 다시 확인할 방법이 없음. `get_quiz_history()` 응답에서 `correct=false`인 항목만 필터링해 퀴즈 탭 하단에 "오답 목록" 섹션으로 표시 — 문제·해설·틀린 시각을 카드 형태로 나열. 서버 변경 불필요 (`get_quiz_history()` 이미 `explanation` 포함), `app.js` 약 15줄. 게임 종료 후 "내가 틀린 개념은 무엇인가?" 자기진단 및 수업 복기 자료로 즉시 활용 가능하며, `results_published=True` 이전에도 개인 기록이므로 항상 열람 가능.
+
+- **학생 자산 목표 설정 및 달성률 진행바** (`static/js/app.js` 포트폴리오 탭): 학생이 막연히 "많이 벌면 좋겠다"가 아닌 구체적 목표를 설정하면 능동적 전략 수립이 유도됨. 포트폴리오 탭 상단에 목표 금액 입력란(`<input type="number">`)을 추가하고, 입력 즉시 `localStorage.setItem('goal_' + rid, amount)` 저장. 포트폴리오 폴링 응답의 `total_value`와 비교해 `(total_value / goal * 100).toFixed(1)%` 달성률을 CSS `width` 애니메이션 진행바로 표시. 목표 초과 시 🎯 이모지와 초록 배경으로 강조. 서버 변경 불필요, `app.js` 약 20줄. 자발적 목표 설정 → 달성 여부 추적 → 전략 수정의 자기조절학습 사이클 실현.
+
+### 제거/단순화할 것들
+
+- **`trade()` 매수 금액 부동소수점 오차 누적 → 현금 잔액에 소수점 오염** (`app.py:1100-1124`): `price = get_room_service(rid).get_price(symbol)` 는 `float` 이고 `amount = price * shares` 도 `float`. `member.cash -= amount` (매수) 또는 `member.cash += amount` (매도)를 반복하면 `9999997.0000000001` 같은 부동소수점 오차가 누적됨. 포트폴리오·랭킹 화면에서 `cash` 가 소수점으로 표시되거나 `_compute_leaderboard()` 의 `round(total, 0)` 후 정수값과 현금 표시가 불일치해 학생 혼란 발생. `app.py:1101` `amount = price * shares` → `amount = round(price * shares, 0)` 1줄 수정으로 모든 BUY/SELL/RLT/QUIZ 거래의 정수 단위 정합성 보장. `round(..., 0)`은 float을 반환하므로 DB 스키마 변경 없이 적용 가능. `_liquidate_shortfall()` (`app.py:309`) 의 `actual = price * shares_sold` 도 동일하게 `round(...)` 처리 필요.
+
+- **`models.py:gen_code()` 10회 충돌 후 11번째 코드를 중복 검증 없이 반환** (`models.py:8-13`): `for _ in range(10):` 루프에서 최대 10번 코드를 생성해 중복 체크 후 반환하지만, 10번 전부 충돌하면 루프 종료 후 `return ''.join(random.choices(..., k=k))`로 **중복 체크 없이** 11번째 코드를 반환. 이 코드가 기존 `active` 방 코드와 일치하면 `db.session.add(room) / db.session.commit()` 에서 `IntegrityError` (UNIQUE 제약 위반) 가 발생하지만 `create_room()` (`app.py:706-715`) 에서 `IntegrityError` 를 catch하지 않아 500 반환. 현실적으로 발생하기 매우 어렵지만, 해결: `models.py:12` `return ''.join(...)` → `for _ in range(100): code = ...; if not Room.query.filter_by(code=code).first(): return code` 로 루프 횟수만 확장하거나, `create_room()` 의 `db.session.commit()` 를 try/except IntegrityError로 감싸고 `return jsonify({'error': '방 코드 생성 실패, 다시 시도하세요.'}), 500`. 2~3줄 수정.
+
+- **`_send_push_to_room()` background thread에서 DB 세션을 `remove()` 없이 사용 → 연결 누수** (`app.py:151-185`): `_push_scheduler_loop()` (`app.py:220-227`)의 `with app.app_context():` 블록 내 `_push_scheduler_tick()` → `_send_push_to_room()` 경로에서 `db.session`을 사용하지만 스코프 종료 시 Flask-SQLAlchemy의 `teardown_appcontext` 훅이 background thread에서는 자동 실행되지 않음. `db.session.remove()`가 호출되지 않으면 SQLAlchemy scoped session이 thread-local에 살아 있어 다음 tick에서 이전 세션의 stale 캐시를 사용하거나, 연결 풀에 커넥션이 반환되지 않아 `pool_size`(40) 한도 도달 시 모든 요청이 `TimeoutError`로 실패하는 장애 유발 가능. 해결: `_push_scheduler_loop()` 내 `except Exception` 블록 앞에 `finally: db.session.remove()` 추가하거나, tick 함수 말미에 명시적으로 `db.session.remove()` 호출. 2줄 추가.
+
+- **`room_dict()` → `_next_lottery_time()` → `_ensure_lot_state()` 경로가 `_lottery_lock` 없이 `_lots` 딕셔너리 수정** (`app.py:549-561` `room_dict()`, `app.py:440-462` `_next_lottery_time()`, `app.py:397-403` `_ensure_lot_state()`): `room_dict()` 는 `_next_lottery_time(room, now)` 를 호출하고, 이 함수는 내부에서 `_ensure_lot_state(room)` 를 호출해 `_lots[rid]` 딕셔너리에 초기 상태를 삽입할 수 있음. `_lots` 수정 전체는 `_lottery_lock` 을 획득해야 안전하지만 이 경로는 lock 없이 실행됨. `get_room()` 폴링 스레드 30개가 동시에 `room_dict()` → `_ensure_lot_state()` 를 호출하면, `_lots.setdefault(rid, ...)` 가 CPython GIL 덕분에 대부분 안전하지만, `lottery_start()` 나 `_auto_start_lottery_if_due()` 가 `with _lottery_lock:` 내부에서 `lot['current']` 를 설정하는 도중 `_ensure_lot_state()` 가 `_lots[rid]` 를 덮어쓰면 `current` 필드가 소실될 수 있음. 해결: `_ensure_lot_state()` 내부 `if rid not in _lots:` 분기를 `with _lottery_lock:` 블록으로 감싸기. 3줄 수정.
+
+- **`lottery_pick()` `cur['picks']` 쓰기가 `_lottery_lock` 밖에서 실행 — 동시 요청 시 picks 불완전 집계** (`app.py:1502`, `app.py:1509-1513`): `cur['picks'][str(user.id)] = nums` (line 1502)는 `_lottery_lock` 없이 실행되지만, 곧이어 `len(cur['picks']) >= eligible` 비교 후 `drawing` 상태로 전이하는 코드(lines 1510-1513)는 `with _lottery_lock:` 내부에서 실행됨. 두 요청이 동시에 line 1502를 실행해 각자 picks를 쓴 후, 두 번째 요청이 `_lottery_lock` 진입 전 `len(cur['picks'])`를 읽으면 picks가 아직 반영되지 않은 값을 읽어 `eligible` 충족을 놓치고 picking 단계가 예정보다 길게 유지될 수 있음. 해결: `app.py:1500` `cur['picks'][str(user.id)] = nums` 를 lines 1509의 `with _lottery_lock:` 블록 내로 이동해 picks 쓰기 + 상태 전이 체크를 원자적으로 처리. 3줄 재배치.
+
+- **`export_rankings()` 한글 파일명 Content-Disposition 인코딩 미처리 → 일부 브라우저 깨진 파일명** (`app.py:1833`): `download_name=f"{room.name}_결과.xlsx"` 에서 `room.name` 이 한글/특수문자를 포함하면 Flask/Werkzeug가 `Content-Disposition: attachment; filename="..."` 헤더에 UTF-8 문자를 그대로 삽입. RFC 6266 및 RFC 5987에 따르면 ASCII 외 문자는 `filename*=UTF-8''%EC%82%AC%EB%9E%80%20%EB%B0%A9_결과.xlsx` 형식으로 인코딩해야 하며, 미처리 시 Internet Explorer 계열 브라우저 및 일부 다운로드 관리자에서 파일명이 깨짐. 해결: `app.py:1832` 직전에 `from urllib.parse import quote; safe_name = quote(filename, safe='')` 후 `send_file(..., download_name=filename, headers={'Content-Disposition': f"attachment; filename*=UTF-8''{safe_name}"})` 로 명시적 인코딩 헤더 설정. 또는 Werkzeug 2.1+ 는 `as_attachment=True` + `download_name`을 올바르게 인코딩하므로 Flask 버전 확인 후 구버전이면 업그레이드. 3줄 수정.
+
+---
+
 ## 2026-09-05
 
 ### 추가하면 좋을 기능
