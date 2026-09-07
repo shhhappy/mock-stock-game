@@ -5459,3 +5459,27 @@
 
 - **`room_dict()` 내 `.count()` 인라인 쿼리가 캐시 적중에도 실행됨** (`app.py:571` `RoomMember.query.filter_by(room_id=room.id).count()`): `_get_room_cached()` 함수는 1.5초 TTL 캐시를 사용하지만(`app.py:92-105`), `room_dict()` 호출 자체가 캐시 미스일 때만 일어나더라도 `room_dict()` 내 `member_count` 계산을 위한 COUNT 쿼리는 항상 실행됨. 방 입장 직후나 폴링 주기 첫 번째 요청마다 추가 DB 라운드트립이 발생. `RoomMember` 쿼리 결과를 `_compute_leaderboard()`처럼 미리 불러온 목록의 길이로 대체하거나, `member_count`를 `rooms` 테이블에 비정규화해 캐싱하는 방안 검토. 단기 수정: `len(RoomMember.query.filter_by(room_id=room.id).all())`로 변경하면 어차피 전체 조회가 필요한 코드 경로에서 쿼리가 중복되지 않음(단, COUNT와 실제 목록이 동시에 필요한 경우에만 이득).
 
+
+---
+
+## 2026-09-07
+
+### 추가하면 좋을 기능
+
+- **공매도(Short Selling) 시뮬레이션** (`app.py:1081-1126` `trade()`, `models.py:57-65` `RoomHolding`): 현재 `RoomHolding.shares`는 항상 0 이상으로 주식을 빌려 먼저 팔고 나중에 되사는 공매도가 불가능. `RoomHolding.shares`를 음수 허용(`action='SHORT'`, `action='COVER'`)으로 확장하거나 별도 `RoomShortPosition` 테이블을 추가해 하락장에서도 수익을 낼 수 있는 전략을 구현. `trade()` 내 `action not in ('BUY','SELL')` 체크(`app.py:1098`)에 'SHORT'/'COVER' 추가 + 담보금(총자산 120%) 검증 로직 약 20줄. 진행자 설정에서 공매도 허용 여부 토글 추가. "하락장에서 어떻게 돈을 버나?", "공매도가 시장에 미치는 영향" 교육 토론 소재로 직접 활용 가능.
+
+- **학생 개인 결과 다운로드(이미지 공유)** (`app.py:1735-1846` 엑셀 다운로드는 진행자 전용): 현재 `GET /api/rooms/<rid>/host/results.xlsx`는 진행자만 접근 가능하고 학생은 자신의 최종 결과를 보존할 수단이 없음. `GET /api/rooms/<rid>/my-result` 엔드포인트를 추가해 게임 종료 후(`room.status == 'ended'`, `room.results_published == True`) 자신의 최종 순위·수익률·거래 내역 요약을 JSON으로 반환. 클라이언트에서 이 데이터를 `<canvas>` + CSS print 스타일로 렌더링해 "결과 이미지 저장" 버튼 제공. 서버 약 15줄 + 클라이언트 약 20줄. 학생이 "내가 이 게임에서 X등, 수익률 +Y%" 카드를 수업 포트폴리오나 SNS에 공유 → 수업 결과의 외부 피드백 루프 형성.
+
+- **뉴스 발행 후 가격 반응 추적 패널 (진행자용)** (`app.py:1047-1058` `host_send_news()`, `stock_service.py:6-34` 뉴스 템플릿): 진행자가 뉴스를 발행한 뒤 어떤 종목 가격이 실제로 얼마나 움직였는지 비교할 수단이 없음. `host_send_news()` 호출 시 종목·방향·발행 전 가격을 `_news_log: dict = {}  # rid -> [{'ts', 'symbol', 'direction', 'price_before'}]` 에 기록하고 60초 후 `threading.Timer`로 `price_after`를 채움. `GET /api/rooms/<rid>/host/news-impact` 엔드포인트에서 이 로그를 반환. 진행자 UI에 "뉴스 발행 후 실제 가격 변화" 테이블 표시. 서버 약 25줄. "뉴스가 주가에 반영되는 속도", "효율적 시장 가설" 개념을 실측 데이터로 설명하는 수업 포인트 제공.
+
+- **게임 일시정지 중 진행자 공지 메시지 브로드캐스트** (`app.py:823-850` `pause_room()` / `resume_room()`): 복권·룰렛·진행자 수동 일시정지 중에 진행자가 참여자 화면에 메시지를 띄울 방법이 없어 직접 말을 해야 함. `POST /api/rooms/<rid>/host/announce {'message': str}` 엔드포인트를 추가해 `_announce: dict = {}  # rid -> {'message': str, 'expires': float}` 에 저장(60초 TTL). `GET /api/rooms/<rid>` 응답(`room_dict()`, `app.py:541-580`)에 `'announcement'` 필드를 포함시켜 클라이언트가 기존 폴링으로 자동 수신. 서버 약 10줄 + 클라이언트 배너 렌더링 약 8줄. 원격 수업이나 이어폰을 낀 학생에게 텍스트로 안내 전달 가능.
+
+### 제거/단순화할 것들
+
+- **인메모리 전용 상태(`_rlt_active`, `_quiz_settings`, `_roulette_config`, `_lottery_custom_times`)가 Render 슬립 후 소실** (`app.py:127-133`, `app.py:513-515`, `app.py:1577-1579`): Render 무료 플랜은 15분 비활성 후 컨테이너를 종료함. 재시작 시 `lottery_rounds_done`은 DB에서 복구(`app.py:398-404`)되지만 `_quiz_settings`(퀴즈 보상률), `_roulette_config`(룰렛 배수), `_lottery_custom_times`(진행자 지정 복권 시각)은 순수 메모리라 재시작 시 초기화됨. 수업 중 Render가 슬립→웨이크업하면 진행자가 설정한 룰렛 배수·퀴즈 보상이 기본값으로 리셋되는 혼란 발생. 해결: `Room` 모델에 `config_json = db.Column(db.Text, default='{}')` 컬럼 추가(`models.py`), 이 딕셔너리에 룰렛·퀴즈 설정을 직렬화해 저장. 모델 변경 1행 + 마이그레이션 1행 + 핸들러 수정 약 20줄.
+
+- **`_auto_start_lottery_if_due()` 내부 `RoomMember.query.count()` 매 폴링마다 실행** (`app.py:733-755`): `_auto_start_lottery_if_due(room)`은 `get_room()` 폴링(`app.py:757-806`)마다 호출되며 내부에서 `RoomMember.query.filter_by(room_id=room.id).count()`(`app.py:743`)를 매번 실행함. 학생 30명 × 3초 폴링 = 분당 600회 COUNT 쿼리. 복권 회차 트리거 조건이 충족되지 않은 경우에도 DB 조회 발생. 해결: `app.py:735` 이전에 `round_due = _lot_round_due(room, remaining, total_s); if not round_due: return` 조기 반환을 추가해 member count 조회 자체를 건너뜀. `_lot_round_due()`의 결과를 `_auto_start_lottery_if_due()`의 인자로 전달하도록 시그니처 변경도 고려. 3줄 수정으로 분당 수백 회 불필요한 COUNT 제거.
+
+- **`_do_reveal()` 복권 당첨금 지급 시 `_get_member_lock` 미사용 — 동시 거래와 충돌 가능** (`app.py:464-484` `_do_reveal()`): 복권 당첨금을 지급하는 `_do_reveal()` 내부에서 `m.cash += prize`를 직접 수행하면서 `_get_member_lock(rid, uid)`를 획득하지 않음. 복권 추첨과 동시에 학생이 매수/매도 또는 룰렛 스핀을 완료하는 타이밍이 겹치면 두 스레드가 `member.cash`를 동시에 읽고 쓰는 lost-update가 발생할 수 있음. 각 `uid`에 대해 `with _get_member_lock(rid, uid):` 블록으로 감싸면 해결(기존 `trade()`, `submit_quiz()` 등과 동일 패턴). `_do_reveal()` 내 prize 지급 루프 약 6줄 수정.
+
+- **`get_room()` 내 룰렛 트리거 조건 검사 시 참여자당 COUNT 쿼리 N번 발생** (`app.py:774-779`): `has_spins = any(RoomTransaction.query.filter_by(room_id=rid, user_id=m.user_id, action='RLT').count() < 3 for m in non_host)` 는 학생 30명이면 30번의 `COUNT(*)` 쿼리가 `GET /api/rooms/<rid>` 폴링마다 실행됨. `db.session.execute(select(RoomTransaction.user_id, func.count()).filter_by(room_id=rid, action='RLT').group_by(RoomTransaction.user_id))` 단일 쿼리로 `{uid: spin_count}` 매핑을 만들면 쿼리 1번으로 축소. 인원이 많을수록 DB 부하가 선형 증가하는 구조.
