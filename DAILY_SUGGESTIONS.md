@@ -2,6 +2,38 @@
 
 ---
 
+## 2026-09-08
+
+### 추가하면 좋을 기능
+
+- **게임 중 진행자의 학생 강퇴/비활성화 기능** (`app.py:914-925` `kick_member()`): `kick_member()`는 `room.status == 'waiting'` 조건(`app.py:920`)으로 대기실에서만 강퇴가 가능해, 게임 시작 후 이탈·비협조 학생을 처리할 방법이 없음. `if room.status == 'waiting'` 조건을 제거하거나, 게임 진행 중에는 강퇴 대신 `RoomMember`에 `is_frozen: Boolean` 컬럼을 추가해 해당 학생의 `trade()`, `create_deposit()` 등 자산 변경 API를 차단하는 "일시 비활성화" 엔드포인트(`POST /api/rooms/<rid>/host/members/<uid>/freeze`)를 별도 추가. `trade()` 진입부(`app.py:1083`)에 `if member.is_frozen: return jsonify({'error': '진행자에 의해 거래가 제한된 계정입니다.'}), 403` 1줄 삽입. 서버 약 20줄 + 진행자 멤버 목록 UI 버튼 약 5줄. 수업 진행 불참·무단 조작 학생을 게임 중에도 즉시 관리할 수 있어 교실 운영 실질적 개선.
+
+- **섹터별 등락 히트맵 시각화** (`app.py:1008-1028` `get_stocks()`, `static/js/app.js` 주식 탭): 현재 주식 탭에는 섹터 드롭다운 필터만 있어, 어느 섹터가 전반적으로 오르고 내리는지 한눈에 파악하기 어려움. `get_stocks()` 응답 데이터로 이미 `sector`·`prev_close`·`price`가 모두 내려오므로 서버 변경 불필요. 주식 탭 상단에 CSS Grid 기반 히트맵 패널을 추가해 각 섹터의 평균 등락률을 `background: hsl(120, 80%, ...)` (상승) 또는 `hsl(0, 80%, ...)` (하락) 색상으로 표시. 섹터 칸 클릭 시 해당 섹터로 자동 필터링. `app.js` 약 25줄 + CSS 약 10줄. "IT 섹터가 오늘 왜 빨갛지?" 토론을 자연 유도하는 시각 자료로, 섹터 분산 투자 개념을 직관적으로 학습 가능.
+
+- **학생 자산 추이 꺾은선 차트 (포트폴리오 탭)** (`static/js/app.js:18` `S.assetHistory`, `static/js/app.js:1587-1600` `loadPortfolio()`): `S.assetHistory` 배열에 폴링마다 `total_value`가 이미 누적(`loadPortfolio()` 호출 시마다 push)되는 구조이지만, 현재 포트폴리오 탭에 이 데이터를 시각화하는 차트가 없어 사용되지 않는 상태. Chart.js는 이미 로드돼 있으므로 포트폴리오 탭 하단에 `<canvas id="asset-history-chart">` 하나를 추가하고, `loadPortfolio()` 후미에 `S.assetHistory.push({ts: Date.now(), v: data.total_value})` + 최대 120개 cap 뒤 차트 업데이트. `app.js` 약 25줄 + `index.html` 1줄. 학생 자신의 자산 곡선을 보며 "언제 잘못된 매수를 했나?"를 스스로 분석하는 자기 성찰 교육 포인트.
+
+- **게임 종료 전 다단계 시간 경보 UI** (`static/js/app.js:718-721` `showEndingSoonBanner()`, `app.py:568-570` `room_dict()`): 현재 1분 이내만 "곧 종료" 배너가 표시되고, 그 이전에는 타이머 숫자만 있어 마감 압박을 미리 느끼기 어려움. `room_dict()`에 이미 `remaining_seconds`가 내려오므로 클라이언트에서 `startPolling()` 콜백(`app.js:695-728`)에 `if (r.remaining_seconds <= 300 && r.remaining_seconds > 60) showWarningBanner('⚠️ 5분 남았습니다!');`를 추가하고 5분·3분·1분 경보를 각각 `toast()` + 배너 색상 전환(노랑→주황→빨강)으로 단계 연출. `app.js` 약 20줄. 학생들이 "5분 남았다 → 지금 팔까 버틸까?" 긴박한 의사결정을 단계적으로 체험 가능.
+
+- **진행자용 학생 거래 내역 열람 패널** (`app.py:1178-1198` `get_transactions()`, `app.py` 신규 `GET /api/rooms/<rid>/host/members/<uid>/transactions`): 현재 진행자는 순위표와 자산 규모만 볼 수 있고, 특정 학생이 어떤 종목을 언제 거래했는지 확인할 방법이 없음. `get_transactions()`의 `user_id` 고정 조건 부분을 진행자 전용 uid 파라미터로 추출해 신규 엔드포인트 추가. 진행자 멤버 목록에서 학생 이름 클릭 시 모달로 최근 20건 거래 내역 표시. 서버 약 15줄 + 클라이언트 모달 약 15줄. "1등 학생이 어떤 전략으로 수익을 냈나?" 수업 중 실시간 분석 및 발표 자료로 활용 가능.
+
+- **퀴즈 카테고리 태그 추가 및 진행자 필터 설정** (`education_data.py` QUIZ_QUESTIONS, `app.py:1748-1763` `quiz_settings()`): `QUIZ_QUESTIONS`의 각 문제 딕셔너리에 `'category': '금리/채권'` 같은 카테고리 필드가 없어, 진행자가 수업 주제에 맞는 퀴즈 유형을 선택할 수 없음. `education_data.py`의 각 문항에 `'cat': str` 필드를 추가하고, `quiz_settings()` POST에 `allowed_cats: list` 파라미터를 수용해 `_quiz_settings[rid]['allowed_cats']`에 저장. `get_quiz(rid)` 핸들러(`app.py:1575-1601`)에서 허용 카테고리 필터링 후 `random.choice()` 적용. 진행자 퀴즈 설정 탭에 카테고리 체크박스 UI 추가. 서버 약 10줄 + 클라이언트 설정 UI 약 15줄. 수업 단원별("금리 단원이면 금리·채권 퀴즈만") 맞춤형 퀴즈 진행으로 교육 연계성 강화.
+
+### 제거/단순화할 것들
+
+- **`_push_scheduler_loop()` 모든 예외를 `pass`로 삼킴 — 오류 완전 소실** (`app.py:226-227`): `except Exception: pass`는 스케줄러가 죽지 않도록 보호하는 의도이지만, DB 연결 오류·`WebPushException` 계열 예외 등 모든 에러 스택 트레이스가 Render 로그에 전혀 남지 않아 장애 진단이 불가능. 해결: `app.py:227` `pass` → `app.logger.exception('[push-scheduler] tick error')` 로 교체(1줄). `app.logger.exception()`은 자동으로 현재 예외의 스택 트레이스를 INFO 이상 레벨로 출력. 스케줄러 루프는 `except Exception`이 여전히 있어 종료되지 않으므로 부작용 없음. 1줄 수정으로 알림 장애 원인을 로그에서 즉시 식별 가능.
+
+- **`stock_service.py:get_history()` 최신 봉의 종가가 현재 실시간 가격과 불일치** (`stock_service.py:310-328`): `price = float(current)` 에서 시작해 역방향으로 30개 봉을 생성하는데, 루프 안에서 `c = max(1.0, o * (1 + random.gauss(...)))` 후 `price = c`로 누적하므로 루프 완료 후 `bars[-1]['close']`는 30번 랜덤 변동한 값 — 실제 `get_price()` 반환값 `current`와 무관한 값이 됨. 학생이 차트를 보면 가장 최근 종가가 현재가 표시와 다르게 보이는 시각적 불일치 발생. 해결: `app.py:330` `with self._lock:` 블록 직전에 `if bars: bars[-1]['close'] = round(current)` 1줄 추가. 마지막 봉만 현재가로 고정해 차트 우측 끝이 항상 현재 시세와 일치하도록 보정. 히스토리 캐시(`_history_cache`)는 가격 변동 시 무효화되므로 고정값이 구식 상태로 남는 문제 없음.
+
+- **`get_room_news()`, `get_chart()`, `get_rankings()`, `get_transactions()` 에서 `Room.query.get_or_404(rid)` 반환값 미사용 — 불필요한 객체 생성 4곳** (`app.py:1063`, `app.py:1070`, `app.py:1170`, `app.py:1183`): 이미 `get_stocks()`(`app.py:1011`)의 동일 패턴이 2026-09-05 항목에서 지적됐으나, 같은 파일의 4개 핸들러가 동일 패턴으로 남아 있음. 각 핸들러에서 `Room.query.get_or_404(rid)` → `if not db.session.get(Room, rid): abort(404)` 로 교체하거나, 최소한 결과를 `room = ...`에 저장해 이후 핸들러 내에서 재활용. `abort`는 `from flask import ..., abort` 추가 필요. 학생 30명 × 폴링 4가지 엔드포인트 = 분당 약 2,400회의 SQLAlchemy `Query` 객체 + 결과 `Room` 인스턴스를 GC에 맡기는 불필요한 작업 제거.
+
+- **`_end_room()` 복권 진행 중 강제 종료 시 `picking`/`drawing` 상태 정리 없음 → 상금 미지급** (`app.py:335-388`, `app.py:373` `_lots.pop()`): 진행자가 복권 `picking` 또는 `drawing` 진행 도중 게임을 종료하거나 룰렛 하드 타임아웃(`app.py:797-800`)이 발생하면 `_end_room()` 이 호출되어 `_lots.pop(room.id, None)`으로 복권 상태가 사라짐. 번호를 이미 제출한 학생들이 있음에도 결과 없이 상금이 지급되지 않고 게임이 끝남. 해결: `app.py:373` `_lots.pop()` 호출 직전에 `lot = _lots.get(room.id, {}); cur = lot.get('current'); if cur and cur.get('state') in ('picking', 'drawing') and cur.get('picks'): _do_reveal(room.id, cur)` 블록을 삽입. `_do_reveal()` 이 이미 상금 지급 + DB commit을 담당하므로 약 3줄 추가만으로 강제 종료 시에도 복권 당첨 결과 정상 지급 가능.
+
+- **`minigame_spin()` 함수 내 `import math` 중복 — 이미 지적됐으나 `shortfall` DB flush 없이 `m.cash` 차감 후 spin 결과 적용** (`app.py:1387-1399`): `shortfall > 0` 이면 `_liquidate_shortfall()`이 `holding.shares -= shares_sold` 및 `m.cash += actual` 을 실행하고 `db.session.add(RoomTransaction(...))`을 호출하지만 `db.session.flush()`나 `db.session.commit()`이 없음. 이후 `m.cash = m.cash - bet + winnings`(`app.py:1395`)에서 `m.cash`는 `db.session.refresh()` 없이 in-memory 값을 사용하므로 청산 후 현금이 반영된 `m.cash`로 계산되지 않을 위험. 구체적으로: `_liquidate_shortfall()`이 `member.cash += actual`(청산 수익 적립)을 수행하지만 DB에 flush되지 않은 상태이고, 직후 `m.cash = m.cash - bet + winnings`는 청산 전 `m.cash`를 기반으로 계산해 현금이 과소 계상될 수 있음. 해결: `app.py:1390` `_liquidate_shortfall(...)` 호출 직후에 `db.session.flush()` 또는 `db.session.refresh(m)` 1줄 추가. 청산 후 올바른 `m.cash`로 룰렛 결과를 적용 가능.
+
+- **`create_deposit()` 예금 `amount` 정수 반올림 없음 → 이자 계산 부동소수점 오차** (`app.py:1239-1260`): `amount = float(...)` 후 1원 단위 반올림 없이 그대로 DB에 저장. `deposit_interest = round(d.amount * d.rate / 100 * ratio, 0)`에서 `d.amount = 999999.9999999999`이면 `round()`가 올바른 정수로 처리되지만, `expected_interest = round(amount * rate / 100 * ratio, 0)` 반환값과 실제 `d.amount` 기반 계산 사이에 서브 원 단위 차이가 생겨 포트폴리오 총자산 표시에 소수점 오염이 누적됨(`m.cash += price * h.shares` 유사 문제). 이미 2026-09-07에 `trade()` float 오차가 지적됐으나, 예금 경로는 별도 수정이 필요. 해결: `app.py:1239` `amount = float(...)` → `amount = round(float(...), 0)` 로 교체(1줄). 정수 단위 예금액이 DB에 저장되어 이자·원금 반환 계산 일관성 확보.
+
+---
+
 ## 2026-09-07
 
 ### 추가하면 좋을 기능
