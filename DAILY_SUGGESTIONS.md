@@ -5515,3 +5515,31 @@
 - **`_do_reveal()` 복권 당첨금 지급 시 `_get_member_lock` 미사용 — 동시 거래와 충돌 가능** (`app.py:464-484` `_do_reveal()`): 복권 당첨금을 지급하는 `_do_reveal()` 내부에서 `m.cash += prize`를 직접 수행하면서 `_get_member_lock(rid, uid)`를 획득하지 않음. 복권 추첨과 동시에 학생이 매수/매도 또는 룰렛 스핀을 완료하는 타이밍이 겹치면 두 스레드가 `member.cash`를 동시에 읽고 쓰는 lost-update가 발생할 수 있음. 각 `uid`에 대해 `with _get_member_lock(rid, uid):` 블록으로 감싸면 해결(기존 `trade()`, `submit_quiz()` 등과 동일 패턴). `_do_reveal()` 내 prize 지급 루프 약 6줄 수정.
 
 - **`get_room()` 내 룰렛 트리거 조건 검사 시 참여자당 COUNT 쿼리 N번 발생** (`app.py:774-779`): `has_spins = any(RoomTransaction.query.filter_by(room_id=rid, user_id=m.user_id, action='RLT').count() < 3 for m in non_host)` 는 학생 30명이면 30번의 `COUNT(*)` 쿼리가 `GET /api/rooms/<rid>` 폴링마다 실행됨. `db.session.execute(select(RoomTransaction.user_id, func.count()).filter_by(room_id=rid, action='RLT').group_by(RoomTransaction.user_id))` 단일 쿼리로 `{uid: spin_count}` 매핑을 만들면 쿼리 1번으로 축소. 인원이 많을수록 DB 부하가 선형 증가하는 구조.
+
+---
+
+## 2026-09-08
+
+### 추가하면 좋을 기능
+
+- **진행자 실시간 거래 피드 패널** (`app.py` 신규 `GET /api/rooms/<rid>/host/recent-trades`, `app.py:962-984` `host_member_transactions()` 참조): 진행자 화면 순위 탭에는 총자산 순위만 보이고 "지금 누가 무엇을 매수/매도하는지"를 실시간으로 볼 수 없음. `RoomTransaction.query.filter_by(room_id=rid).order_by(RoomTransaction.timestamp.desc()).limit(20)` 쿼리로 방 전체 최신 거래 20건을 반환하는 엔드포인트를 추가하고, 진행자 탭 하단에 "최근 거래" 섹션(닉네임·종목·BUY/SELL·수량·금액·시각)을 3초 폴링으로 표시. 서버 약 12줄, 클라이언트 약 20줄. 수업 중 "지금 삼성전자에 몰리고 있다"를 진행자가 포착해 토론 포인트로 활용 가능.
+
+- **참여자 화면 순위 실시간 변동 알림** (`static/js/app.js` 랭킹 폴링 콜백): 현재 랭킹 탭에서 순위가 바뀌어도 시각적 피드백이 없어 학생이 경쟁 상황을 체감하기 어려움. 폴링 응답의 `is_me` 항목에서 자신의 `rank`를 이전 폴링 값(`S._lastMyRank`)과 비교해, ±2 이상 변동 시 `toast('🎉 순위 상승! 현재 3위', 'success')` 또는 `toast('⚠️ 순위 하락! 현재 8위', 'warning')` 토스트를 띄움. `app.js` 약 10줄, 서버 변경 불필요. 경쟁 긴장감을 조성해 수업 집중도 제고.
+
+- **게임 종료 후 개인 성과 요약 카드** (`app.py:1768-1836` export 로직 참조, `static/index.html` 결과 화면): 게임 종료 후 참여자 화면은 순위표만 보여줌. 개인 맞춤 요약 — 총 거래 횟수, 최고 수익 종목(BUY→SELL 순실현), 최다 거래 섹터, 최종 수익률을 산출해 카드 형태로 제공. `GET /api/rooms/<rid>/summary` 신규 엔드포인트에서 `RoomTransaction.query.filter_by(room_id=rid, user_id=uid)` 집계로 계산. 서버 약 25줄, 클라이언트 카드 UI 약 20줄. 게임 후 "나는 어떤 투자자였나?" 자기 평가 자료로 활용 가능하며 수업 마무리 토론 촉진.
+
+- **진행자 특정 학생 포트폴리오 실시간 조회** (`app.py:963-984` 기존 `host_member_transactions()` 참조, 신규 `GET /api/rooms/<rid>/host/members/<uid>/portfolio`): 진행자가 학생의 거래 내역은 볼 수 있지만 현재 보유 종목·현금·총자산을 실시간으로 볼 수 없음. 기존 `get_portfolio()` (`app.py:1131-1162`) 로직을 재사용해 `host_id` 인증 후 `uid` 기준으로 포트폴리오를 반환하는 진행자 전용 엔드포인트 추가. 서버 약 10줄 (로직 재사용). 특정 학생이 이상 행동(예: 한 종목 올인)을 하는지 파악해 개별 코칭 가능.
+
+- **복권 당첨 결과를 참여자 화면에 팝업 자동 표시** (`static/js/app.js` 복권 폴링 콜백, `static/index.html` 복권 모달): 복권 결과(`state === 'revealed'`)를 보려면 학생이 직접 복권 탭을 열어야 함. 게임 화면 폴링에서 `lottery_active: true` → `lottery_active: false` 전환이 감지될 때 복권 결과를 자동으로 조회(`GET /api/rooms/<rid>/lottery`)해 결과 모달을 띄우면, 수업 중 화면을 안 보던 학생도 결과를 확인할 수 있음. `app.js` 약 15줄, 서버 변경 불필요.
+
+### 제거/단순화할 것들
+
+- **`get_stocks()` 에서 Room 객체를 조회하고 버림** (`app.py:1008-1011`): `Room.query.get_or_404(rid)` 로 Room을 로드하지만 반환한 객체를 전혀 사용하지 않음. 방 존재 유효성만 확인하려면 `db.session.execute(select(Room.id).filter_by(id=rid))` 또는 `Room.query.filter_by(id=rid).count()` 로 더 가볍게 처리할 수 있음. 현재는 Room 전체 행을 SELECT해 ORM 객체를 생성하는 불필요한 오버헤드 발생. 1줄 수정.
+
+- **Excel export에서 이름·학번 파싱이 공백 구분에만 의존** (`app.py:1784-1785`): `parts = e['username'].split(' ', 1)` 는 username이 "학번 이름" 형식이라고 가정하지만 학생이 이름에 공백을 포함하거나 학번 없이 이름만 입력하면 `sid`·`name` 분리가 잘못됨. 예: 학번 `""`, 이름 `"홍 길동"` → sid=`"홍"`, name=`"길동"`. 간단한 해결: 학번을 별도 DB 필드로 분리하거나, 입력 단계(`static/index.html:53-59`)에서 `host-student-id` · `host-name` 두 필드로 이미 분리하고 있으므로, username 조합 형식을 탭(`\t`) 구분자 또는 고정 형식(`"$sid|$name"`)으로 바꿔 파싱 모호성 제거. `index.html` 1줄 + `app.js` doAuth 1줄 + `app.py:1784` 1줄.
+
+- **`withdraw_deposit()` 에서 `db.session.refresh(m)` 없이 `m.cash` 직접 수정** (`app.py:1275-1278`): `_get_member_lock(rid, user.id)` 로 lock을 획득한 뒤 `m = RoomMember.query.filter_by(...)` 로 멤버를 새로 조회하지 않고, lock 획득 이전에 얻어진 `m` 객체를 그대로 사용해 `m.cash += dep.amount` 를 적용함. 동일 패턴의 `trade()` 는 `db.session.refresh(member)` 를 lock 내부에서 명시적으로 호출해 stale read를 방지(`app.py:1104`). `withdraw_deposit()`도 lock 내부 첫 줄에 `db.session.refresh(m)` 를 추가해 일관성 확보. 1줄 추가.
+
+- **`_lottery_custom_times` 가 날짜 없이 "오늘 KST HH:MM"으로만 파싱** (`app.py:1719-1726`): `target_kst = now_kst.replace(hour=hh, minute=mm, second=0, microsecond=0)` 은 진행자가 설정하는 시각을 항상 "오늘(KST 기준)"로 고정함. 게임이 자정을 넘겨 진행되면, 진행자가 "00:30"을 입력했을 때 과거 시각(현재가 01:00이면 이미 지난 00:30)이 저장되어 복권이 즉시 혹은 전혀 트리거되지 않는 버그 발생. 해결: 파싱된 `target_kst`가 `now_kst`보다 이전이면 다음날로 +1일 처리 — `if target_kst <= now_kst: target_kst += timedelta(days=1)`. `app.py:1726` 이전 1줄 추가.
+
+- **`confirmCancelHostRoom()` 에서 lobby-count 텍스트를 DOM에서 파싱** (`static/js/app.js:129`): `document.getElementById('lobby-count')?.textContent || '0'` 로 참여자 수를 DOM에서 읽고 있음. 이 값은 표시 목적의 문자열이며, 폴링이 아직 완료되지 않았거나 DOM이 갱신되기 전이면 항상 `'0'`으로 오동작. 이미 `S.room.member_count` 가 최신 폴링 응답에 포함되어 있으므로(`app.py:572` `room_dict()`), `S.room?.member_count || 0` 을 사용하는 것이 더 신뢰할 수 있음. `app.js:129` 1줄 수정.
