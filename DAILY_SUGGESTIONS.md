@@ -5605,3 +5605,33 @@
 - **폴링 API 분산 → 단일 `/state` 엔드포인트로 통합** (`static/js/app.js:8` `pollInterval`, `newsInterval`): 클라이언트가 room 상태, stocks, news, portfolio, rankings 등을 별도 타이머로 각각 폴링함. 2초마다 여러 요청이 동시에 나가는 구조는 Render 무료 티어(sleep 문제)와 SQLite 동시 쓰기 한계에 취약. `/api/rooms/<rid>/state?include=stocks,news,portfolio` 형태의 통합 엔드포인트 하나로 묶으면 요청 수가 줄고 응답 캐시(1.5초 TTL 이미 존재, `app.py:86-87`)도 한곳에서 관리 가능.
 
 - **`_push_notified` 5000개 초과 시 전체 clear → 타임스탬프 기반 TTL 정리로 교체** (`app.py:217-218`): 현재 `if len(_push_notified) > 5000: _push_notified.clear()`는 모든 알림 중복 방지 기록을 한꺼번에 지워, clear 직후 10초 내에 같은 이벤트가 재발송될 수 있음. 키 구조가 이미 `(type, room_id, iso_timestamp)`이므로, 스케줄러 틱마다 `datetime.utcnow() - 2시간` 이전 타임스탬프를 가진 키만 제거하는 방식으로 교체하면 안전. `app.py:216-218` 약 3줄 수정.
+
+## 2026-09-09 (daily-analysis)
+
+### 추가하면 좋을 기능
+
+- **섹터별 학생 투자 현황 집계 파이차트 (진행자용)** (`app.py:1167-1175` `get_rankings()` 참조, 신규 `GET /api/rooms/<rid>/host/sector-stats`): 진행자가 "어떤 섹터에 학생들의 돈이 몰리고 있나"를 실시간으로 볼 방법이 없음. `RoomHolding.query.filter_by(room_id=rid).all()`을 현재가 기준으로 집계해 섹터별 총 보유 주식 시가(`{sector: total_value}`)를 반환하는 엔드포인트를 추가하고, 호스트 랭킹 탭 하단에 작은 파이차트로 시각화(Chart.js 기존 import 재활용). 서버 약 12줄, 클라이언트 약 15줄. "현재 반도체 섹터에 전체 자산의 40%가 집중"을 즉각 포착해 토론 포인트로 활용 가능.
+
+- **서킷브레이커 시뮬레이션** (`stock_service.py:151-161` `_next_price()`, `app.py:1017-1028` `get_stocks()`): 가격 변동폭이 `vol * 3` 이상이거나 base 대비 변동이 ±30% 초과 시 해당 종목을 종목별 freeze 상태로 전환하고 `get_stocks()` 응답에 `circuit_breaker: true` 플래그를 포함. 프론트엔드에서 해당 종목 카드에 "⛔ 서킷브레이커" 배지 표시 및 거래 비활성화 처리. `StockService`에 `_frozen_symbols: set` 속성 추가, `_next_price()` 약 5줄 수정. 실제 금융 시장 제도를 직접 체험하는 교육 효과.
+
+- **퀴즈 문항별 정답률 대시보드 (진행자용)** (`app.py:1649-1651` `_quiz_history` 저장 로직, 신규 `GET /api/rooms/<rid>/host/quiz-stats`): `_quiz_history[(rid, uid)]`에 각 문항별 정답/오답이 기록되지만 집계 API가 없어 교사가 어떤 개념이 취약한지 알 수 없음. 전체 유저의 `_quiz_history`를 `question` 기준으로 집계해 `[{question, total, correct_count, correct_pct, explanation}, ...]`를 반환하는 엔드포인트 추가. 서버 약 10줄, 클라이언트 진행자 탭 확장 약 15줄. "PER 관련 문제 정답률 28% — 오늘 수업에서 복습 필요" 즉각 피드백 가능.
+
+- **학생 목표 수익률 설정 및 달성 프로그레스바** (`static/js/app.js:19` `S.assetHistory`, `static/index.html` 포트폴리오 탭): 학생이 목표 수익률(예: +10%)을 `localStorage`에 저장해두면, 포트폴리오 탭 상단에 현재 수익률/목표 수익률 달성도를 프로그레스바로 표시(`<progress value="72" max="100">`). 목표 달성 시 `toast('🎉 목표 수익률 달성!', 'success')` 알림. 서버 변경 불필요. `app.js` 약 15줄, `style.css` 약 5줄. 자기주도 학습 동기 부여 및 투자 목표 설정 습관 교육.
+
+- **게임 종료 후 진행자 상세 결과 재열람** (`app.py:906-912` `host_members()`, `app.py:963-984` `host_member_transactions()`): 현재 `ended` 상태 방에서 진행자가 개별 학생 거래 내역(`host_member_transactions()`)과 랭킹(`host_members()`)을 조회하면 정상 작동하지만, `get_portfolio()`(`app.py:1131`)는 `Room.query.get_or_404(rid)` 이후 별도 status 체크가 없어서 작동하는 반면, 진행자용 상세 포트폴리오 조회가 없음. 신규 `GET /api/rooms/<rid>/host/members/<uid>/portfolio` 엔드포인트를 추가해(기존 `get_portfolio()` 로직 재활용) 종료 후에도 개별 학생 포트폴리오를 열람 가능하게 함. 서버 약 10줄, 클라이언트 학생별 팝업 확장. 다음날 수업에서 결과를 돌아보는 복습 자료 활용.
+
+- **단일 종목 집중 투자 경고 (분산투자 가이드)** (`static/js/app.js` 포트폴리오 폴링 콜백, `get_portfolio()` 응답 `holdings` 배열): 단일 종목 보유 시가가 총자산의 50% 이상이면 포트폴리오 탭에서 "⚠️ {종목명}에 자산의 {pct}%가 집중 — 분산투자를 고려하세요" 경고 박스를 1회 표시(`S.concentrationWarnShown` 플래그로 중복 방지). 서버 변경 불필요. `app.js` 포트폴리오 렌더링 함수에 약 8줄 추가. 투자 분산 개념을 실습 중 자연스럽게 체험하는 교육 효과.
+
+### 제거/단순화할 것들
+
+- **`minigame_spin()`에서 `_get_member_lock` 없이 `m.cash` 직접 수정** (`app.py:1393-1399`): `m.cash = m.cash - bet + winnings`를 `_get_member_lock(rid, user.id)` 획득 없이 실행함. 동시에 동일 유저가 매수(`trade()`) 요청을 보내면 두 스레드가 같은 `member.cash`를 동시에 읽고 쓰는 lost-update 발생 가능. `trade()`, `submit_quiz()`, `create_deposit()` 모두 lock + refresh 패턴을 사용하지만 룰렛만 예외. `with _get_member_lock(rid, user.id): db.session.refresh(m)` 블록으로 감싸면 해결. 4줄 추가.
+
+- **`host_adjust()`에서 `_get_member_lock` 없이 `m.cash` 수정** (`app.py:955`): `m.cash = max(0, m.cash + delta)`를 lock 없이 수행. 진행자 자산 조정과 학생 거래가 동시에 발생하면 race condition 가능. `trade()` 패턴과 동일하게 `with _get_member_lock(rid, target_uid):` 블록과 `db.session.refresh(m)` 추가. 3줄 추가로 일관성 확보.
+
+- **`lottery_pick()`에서 `cur['picks']` 딕셔너리를 락 없이 수정** (`app.py:1502`): `cur['picks'][str(user.id)] = nums`를 `_lottery_lock` 없이 실행함. 두 명의 학생이 동시에 번호를 제출하면 Python dict를 동시에 수정하는 race condition 발생(CPython GIL이 완전히 보호하지 않음). 하단에 `_lottery_lock`을 획득하는 블록(`app.py:1510-1513`)이 있지만 딕셔너리 쓰기 자체는 락 밖. `cur['picks'][str(user.id)] = nums` 줄을 `_lottery_lock` 블록 안으로 이동. 2줄 재배치.
+
+- **`_liquidate_shortfall()`이 `h.shares=0` 레코드를 DB에서 삭제하지 않아 누적** (`app.py:305-306`): `h.shares = 0; h.avg_price = 0`으로 값만 초기화하고 `db.session.delete(h)`를 호출하지 않음. 일반 SELL(`app.py:1121`)에서는 `if holding.shares == 0: db.session.delete(holding)`을 수행하는 것과 불일치. 룰렛/퀴즈 패널티로 강제 청산된 종목은 shares=0인 `RoomHolding` 행이 게임 종료 시까지 DB에 계속 쌓임. `get_portfolio()`에서 `if h.shares <= 0: continue`로 필터하지만 쿼리 자체에는 불필요한 행이 포함됨. `app.py:305` 직후 `db.session.delete(h); continue` 추가, `app.py:306` `h.avg_price = 0` 제거. 2줄 수정.
+
+- **`get_history()`가 캐시 만료마다 랜덤 OHLC를 새로 생성해 차트 불연속** (`stock_service.py:313-332`): 120초 TTL(`HISTORY_CACHE_TTL = 120`) 만료 후 `get_history()`를 재호출하면 `random.gauss()` 기반으로 완전히 다른 OHLC 시퀀스가 생성됨. 같은 학생이 2분 후 종목 차트를 다시 열면 직전과 전혀 다른 과거 가격 히스토리를 보게 됨. `random.seed(hash(symbol) ^ (int(time.time() / 7200)))` 처럼 2시간 단위 고정 시드를 사용하거나, 첫 생성 데이터를 TTL 없이 `_history_cache`에 영구 보관(종목 가격 강제 변경 시에만 무효화 — 이미 `app.py:1041-1042` `force_price()` 호출 시 키 삭제 로직 존재)하면 일관성 확보. `stock_service.py:313` 1줄 추가.
+
+- **`Room.query.get_or_404(rid)` 레거시 SQLAlchemy Query API가 40+ 곳에서 사용** (`app.py:760, 811, 825, 836, 854, 875, 908, 914, 927, 940, ...`): SQLAlchemy 2.x에서 `Session.query(Model).get()` 패턴은 deprecated됨. 일부는 이미 `db.session.get(Room, rid)` 신식 패턴(`app.py:154, 264, 489, ...`)을 사용하지만 대다수 엔드포인트는 레거시 `Room.query.get_or_404(rid)`를 그대로 사용해 혼재. Flask-SQLAlchemy 3.x의 `db.get_or_404(Room, rid)` 또는 `db.session.get(Room, rid) or abort(404)`로 일괄 교체 시 deprecation warning 제거 및 코드 일관성 확보. `sed` 기반 일괄 치환 가능.
