@@ -5575,3 +5575,33 @@
 - **`_lottery_custom_times` 가 날짜 없이 "오늘 KST HH:MM"으로만 파싱** (`app.py:1719-1726`): `target_kst = now_kst.replace(hour=hh, minute=mm, second=0, microsecond=0)` 은 진행자가 설정하는 시각을 항상 "오늘(KST 기준)"로 고정함. 게임이 자정을 넘겨 진행되면, 진행자가 "00:30"을 입력했을 때 과거 시각(현재가 01:00이면 이미 지난 00:30)이 저장되어 복권이 즉시 혹은 전혀 트리거되지 않는 버그 발생. 해결: 파싱된 `target_kst`가 `now_kst`보다 이전이면 다음날로 +1일 처리 — `if target_kst <= now_kst: target_kst += timedelta(days=1)`. `app.py:1726` 이전 1줄 추가.
 
 - **`confirmCancelHostRoom()` 에서 lobby-count 텍스트를 DOM에서 파싱** (`static/js/app.js:129`): `document.getElementById('lobby-count')?.textContent || '0'` 로 참여자 수를 DOM에서 읽고 있음. 이 값은 표시 목적의 문자열이며, 폴링이 아직 완료되지 않았거나 DOM이 갱신되기 전이면 항상 `'0'`으로 오동작. 이미 `S.room.member_count` 가 최신 폴링 응답에 포함되어 있으므로(`app.py:572` `room_dict()`), `S.room?.member_count || 0` 을 사용하는 것이 더 신뢰할 수 있음. `app.js:129` 1줄 수정.
+
+## 2026-09-09
+
+### 추가하면 좋을 기능
+
+- **URL에 방 코드 포함한 직접 입장 링크** (`static/index.html:27`, `static/js/app.js:76-93`): 현재 참가자는 항상 랜딩 화면에서 코드를 수동으로 입력해야 함. `?code=XXXX` 쿼리 파라미터를 파싱해 방 코드 입력 필드를 자동으로 채우면, 진행자가 QR 코드에 `https://<host>?code=ROOM코드` URL을 심어 배포할 수 있음. 스캔 즉시 코드가 자동 입력되어 수업 시작 대기 시간 단축. 변경 범위: `app.js` 초기화 부분(~5줄), `index.html` 변경 없음.
+
+- **참가자 강퇴를 게임 진행 중에도 허용** (`app.py:920`): `kick_member()`가 `room.status != 'waiting'`이면 400 반환. 게임 시작 후 실수로 참가한 학생이나 이탈한 학생을 정리할 수 없음. 진행 중 강퇴 시에는 보유 주식을 현금 청산(`_liquidate_shortfall` 패턴 참고)하고 `RoomMember` 레코드를 삭제하는 방식으로 확장 가능. `app.py:920` 분기 조건 수정 + 청산 로직 추가(~10줄).
+
+- **퀴즈 문제를 진행자가 직접 입력** (`app.py:1582-1652`, `education_data.py`): 퀴즈 문제가 `education_data.py`에 하드코딩되어 있어 수업 내용에 맞는 맞춤 문제를 낼 수 없음. `_quiz_settings[rid]`에 `custom_questions` 리스트를 저장하는 API와 호스트 설정 탭 UI를 추가하면 됨. 문제가 설정되어 있으면 `QUIZ_QUESTIONS` 대신 해당 목록에서 출제. `app.py:1596-1598`의 문제 선택 로직 수정(~20줄) + 프론트엔드 진행자 설정 탭 확장.
+
+- **자산 히스토리 서버 저장 (포트폴리오 차트 지속성)** (`static/js/app.js:19`, `S.assetHistory`): 현재 자산 추이 차트 데이터는 클라이언트 메모리(`S.assetHistory`)에만 저장되어 페이지 새로고침 시 초기화됨. `/api/rooms/<rid>/portfolio`를 폴링할 때 총자산을 서버에 주기적으로 기록(별도 `RoomAssetSnapshot` 모델 또는 Redis)하면 학생이 재접속 후에도 연속적인 자산 변화 그래프를 볼 수 있음. 교육적 피드백 효과 향상.
+
+- **게임 종료 후 공개 결과 페이지** (`app.py:577` `results_published`, `app.py:1735-1745`): `results_published` 플래그와 `host_publish_results` API가 이미 존재하나, 인증 없이 접근 가능한 공개 URL이 없음. `/results/<room_id>` 경로를 추가해 `results_published=True`인 방의 순위표를 로그인 없이 볼 수 있게 하면 학교 SNS·게시판 공유가 쉬워짐. `app.py`에 라우트 1개 추가, 프론트엔드 정적 결과 화면 추가.
+
+- **진행자 공지 메시지 브로드캐스트** (`app.py:1047-1058` `host_send_news` 참고): 현재 진행자가 참가자 전체에게 임의의 텍스트 메시지를 보낼 방법이 없음. 기존 뉴스 팝업 UI를 재활용해 진행자가 입력한 공지 문구를 뉴스 헤드라인 형식으로 브로드캐스트하는 기능을 추가하면 교사-학생 간 수업 내 소통이 가능. `host_send_news` 엔드포인트에 `custom_text` 파라미터 추가(~5줄 백엔드, 프론트엔드 입력 필드 추가).
+
+### 제거/단순화할 것들
+
+- **`_end_room()` 내 8개 전역 딕셔너리 개별 정리 → 단일 방 상태 객체로 통합** (`app.py:373-384`): `_lots`, `_rlt_active`, `_quiz_settings`, `_roulette_config`, `_lottery_custom_times`, `_quiz_state`, `_quiz_history`, `_member_locks`를 각각 따로 정리함. 이 중 하나라도 누락 시 메모리 누수 발생. 이들을 `_room_state: dict[int, dict]` 하나로 묶으면 정리 코드가 `_room_state.pop(room.id, None)` 한 줄로 단순화되고 향후 상태 추가 시 누락 위험도 줄어듬.
+
+- **`force_price` 가격 범위가 `_next_price` 범위와 불일치** (`stock_service.py:161` vs `stock_service.py:247`): `_next_price()`는 `base * 0.6 ~ base * 1.4` 범위를 유지하는 반면, `force_price()`는 `base * 0.3 ~ base * 3.0`까지 허용. 진행자가 극단적 조작 후 자연 가격 변동이 재개되면 TTL 만료 시 가격이 허용 범위 밖에서 안으로 강제 조정되며 비자연스러운 가격 급변 발생. `force_price()`의 clamp 범위를 `base * 0.5 ~ base * 2.0` 정도로 통일하거나, 조작 후 몇 틱간 바이어스를 강하게 걸어 완화 처리 필요. `stock_service.py:247` 1줄 수정.
+
+- **Export 시 username 공백 분리로 이름에 공백 있으면 파싱 오류** (`app.py:1784-1786`): `parts = e['username'].split(' ', 1)`로 학번과 이름을 분리하는데, "홍 길동" 같은 이름은 정상 처리되지만 "김 영 희" 같은 3음절 이름 앞에 학번 없이 입력하면 파싱이 엉킴. 참가 시 학번/이름 데이터를 각각 별도 필드(`User` 모델에 `student_id`, `display_name` 컬럼 추가)로 저장하거나, 단기적으로 구분자를 공백 대신 `\t`나 `|`로 변경해 안전하게 파싱 가능. `models.py:19`, `app.py:608`, `app.js:doAuth` 함께 수정.
+
+- **`member_total_value()` 내 `preloaded_deps` 루프에서 이중 status 필터** (`app.py:256-259`): `preloaded_deps`를 받아 루프 안에서 `if d.status == 'active':`를 재확인하는데, `_compute_leaderboard()`(`app.py:273-274`)에서 `Deposit.query.filter_by(room_id=rid).all()`로 모든 상태의 예금을 넘겨줌. 따라서 DB 필터(`.filter_by(status='active')`)를 `_compute_leaderboard()`쪽에서 적용하고, `member_total_value()`의 내부 조건문을 제거하면 코드 의도가 명확해짐. `app.py:274` 1줄 수정, `app.py:257-258` 조건 제거.
+
+- **폴링 API 분산 → 단일 `/state` 엔드포인트로 통합** (`static/js/app.js:8` `pollInterval`, `newsInterval`): 클라이언트가 room 상태, stocks, news, portfolio, rankings 등을 별도 타이머로 각각 폴링함. 2초마다 여러 요청이 동시에 나가는 구조는 Render 무료 티어(sleep 문제)와 SQLite 동시 쓰기 한계에 취약. `/api/rooms/<rid>/state?include=stocks,news,portfolio` 형태의 통합 엔드포인트 하나로 묶으면 요청 수가 줄고 응답 캐시(1.5초 TTL 이미 존재, `app.py:86-87`)도 한곳에서 관리 가능.
+
+- **`_push_notified` 5000개 초과 시 전체 clear → 타임스탬프 기반 TTL 정리로 교체** (`app.py:217-218`): 현재 `if len(_push_notified) > 5000: _push_notified.clear()`는 모든 알림 중복 방지 기록을 한꺼번에 지워, clear 직후 10초 내에 같은 이벤트가 재발송될 수 있음. 키 구조가 이미 `(type, room_id, iso_timestamp)`이므로, 스케줄러 틱마다 `datetime.utcnow() - 2시간` 이전 타임스탬프를 가진 키만 제거하는 방식으로 교체하면 안전. `app.py:216-218` 약 3줄 수정.
