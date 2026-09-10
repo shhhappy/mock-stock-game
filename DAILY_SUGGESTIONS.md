@@ -5635,3 +5635,29 @@
 - **`get_history()`가 캐시 만료마다 랜덤 OHLC를 새로 생성해 차트 불연속** (`stock_service.py:313-332`): 120초 TTL(`HISTORY_CACHE_TTL = 120`) 만료 후 `get_history()`를 재호출하면 `random.gauss()` 기반으로 완전히 다른 OHLC 시퀀스가 생성됨. 같은 학생이 2분 후 종목 차트를 다시 열면 직전과 전혀 다른 과거 가격 히스토리를 보게 됨. `random.seed(hash(symbol) ^ (int(time.time() / 7200)))` 처럼 2시간 단위 고정 시드를 사용하거나, 첫 생성 데이터를 TTL 없이 `_history_cache`에 영구 보관(종목 가격 강제 변경 시에만 무효화 — 이미 `app.py:1041-1042` `force_price()` 호출 시 키 삭제 로직 존재)하면 일관성 확보. `stock_service.py:313` 1줄 추가.
 
 - **`Room.query.get_or_404(rid)` 레거시 SQLAlchemy Query API가 40+ 곳에서 사용** (`app.py:760, 811, 825, 836, 854, 875, 908, 914, 927, 940, ...`): SQLAlchemy 2.x에서 `Session.query(Model).get()` 패턴은 deprecated됨. 일부는 이미 `db.session.get(Room, rid)` 신식 패턴(`app.py:154, 264, 489, ...`)을 사용하지만 대다수 엔드포인트는 레거시 `Room.query.get_or_404(rid)`를 그대로 사용해 혼재. Flask-SQLAlchemy 3.x의 `db.get_or_404(Room, rid)` 또는 `db.session.get(Room, rid) or abort(404)`로 일괄 교체 시 deprecation warning 제거 및 코드 일관성 확보. `sed` 기반 일괄 치환 가능.
+
+## 2026-09-10
+
+### 추가하면 좋을 기능
+
+- **Excel export에 학생별 거래 내역 시트 추가** (`app.py:1768-1836` `export_rankings()`): 현재 엑셀 파일은 '최종 순위' 시트 하나만 포함하며 개별 거래 내역이 없음. `RoomTransaction.query.filter_by(room_id=rid, user_id=uid).order_by(...)` 로 각 학생의 매수·매도·복권·퀴즈 내역을 조회해 학생별 시트(`{이름}_거래`)를 추가하면 교사가 "이 학생은 왜 손실이 났나"를 빠르게 파악 가능. `app.py:1830` 앞에 시트 생성 루프 약 25줄 추가. openpyxl 이미 사용 중이므로 의존성 추가 불필요.
+
+- **참가자 최대 인원 제한 설정** (`app.py:717-731` `join_room()`, `models.py:25-42` `Room`): 방 생성 시 최대 인원(`max_members`)을 지정할 수 있는 옵션이 없어 학급 규모와 무관하게 무제한 참가가 가능함. `Room` 모델에 `max_members = db.Column(db.Integer, nullable=True)` 추가, `join_room()` 에서 `if room.max_members and RoomMember.query.filter_by(room_id=room.id).count() >= room.max_members: return 400` 체크 삽입. `static/index.html` 방 생성 폼에 선택적 입력 필드 추가. 서버 약 5줄 + 마이그레이션 1줄(`ALTER TABLE rooms ADD COLUMN max_members INTEGER`).
+
+- **참가자 마지막 접속 시각 표시** (`models.py:47-54` `RoomMember`, `app.py:906-912` `host_members()`): 진행자가 어떤 학생이 실제로 게임에 접속 중인지 확인할 방법이 없음. `RoomMember`에 `last_seen_at = db.Column(db.DateTime, nullable=True)` 컬럼 추가 후, `get_room()` (`app.py:757`) 폴링 시 해당 유저의 `last_seen_at`을 `datetime.utcnow()`로 갱신. `host_members()` 응답에 `last_seen_seconds_ago` 포함 — 60초 이상이면 진행자 화면에서 "⚠️ 미접속" 배지 표시. 서버 약 8줄 + 마이그레이션 1줄.
+
+- **`username` 중복으로 인한 학생 계정 충돌 방지** (`app.py:604-618` `enter()`): `User.query.filter_by(username=u).first()`가 기존 동명 유저를 그대로 반환하므로, 다른 학생이 같은 닉네임을 입력하면 타인의 계정으로 게임에 접속함. 방 입장 시(`join_room()`) 이미 같은 방에 해당 username이 있으면 입장 거부하거나, `enter()` 단계에서 "같은 이름의 사용자가 이미 존재합니다. 구별을 위해 이름 뒤에 학번을 추가하세요"와 같은 안내를 반환하는 것이 현실적. `app.py:611-615` 분기 추가 약 5줄.
+
+- **복권 진행 중 서버 재시작 시 방 자동 복구** (`app.py:757-806` `get_room()`, `app.py:390` `_lots` 전역 dict): `_lots`는 in-memory이므로 서버 재시작 시 복권 진행 중(`state: 'picking'`/`'drawing'`) 상태가 사라짐. 이후 해당 방은 `status='paused'`이면서 `_lots[rid]`가 없는 orphan 상태가 됨. `get_room()` 내에서 `room.status == 'paused'`이고 `rlt_triggered=False`이며 `_lots.get(rid, {}).get('current')` 가 `None`인 경우 `_end_room(room)`으로 자동 복구하는 안전장치 추가. `app.py:766-770` 직후 약 6줄 삽입.
+
+### 제거/단순화할 것들
+
+- **`RoomMember.cash` / `Deposit.amount`가 `Float` 타입으로 부동소수점 오류 누적** (`models.py:52`, `models.py:98`): 가격 계산이 `price * shares` 같은 실수 곱셈의 연속이므로 장기 게임이나 거래가 많으면 `0.00000001`원 수준의 오차가 누적될 수 있음. 현재 `round(..., 0)` 호출로 대부분 완화되지만 `member.cash += amount` (app.py:1119) 등 round 없이 누적되는 경로가 있음. `db.Column(db.Numeric(precision=20, scale=2))`로 타입 변경하면 DB 수준에서 오차가 제거됨. `models.py` 2줄 수정 + 마이그레이션 필요.
+
+- **룰렛 타임아웃 60초가 하드코딩** (`app.py:797`): `if (now_dt - room.paused_at).total_seconds() >= 60:` 의 60초 값이 코드에 박혀있어 게임 상황에 따라 조정 불가. 상수 `RLT_TIMEOUT_SECS = 60`을 파일 상단에 분리하거나(1줄 추가, 사용처 교체), 진행자가 룰렛 설정(`host_roulette_config`) 시 타임아웃도 함께 전달하도록 확장. 최소한 상수 분리만으로도 유지보수성 향상.
+
+- **`gen_code()`에서 10회 반복 중 매번 DB 쿼리** (`models.py:8-13`): `for _ in range(10): if not Room.query.filter_by(code=code).first()` 패턴은 최악의 경우 10회 SELECT를 날림. 사용 중인 코드 목록을 `Room.query.with_entities(Room.code).filter(Room.code != None).all()` 한 번에 가져와 set으로 비교하는 방식으로 N+1 제거 가능. 방 코드 공간(26+10)^6 = 약 20억이므로 충돌 확률이 매우 낮아 루프 자체가 불필요하지만, 유지한다면 쿼리 횟수는 줄여야 함. `models.py:8-13` 약 3줄 수정.
+
+- **`_CUSTOM_LOT_ROUND_BASE = 1000`과 수동 시작 회차(99~) 간 충돌 가능성** (`app.py:392`, `app.py:1426-1431`): 수동 복권 시작은 99부터 시작해 `while round_n in done: round_n += 1`로 증가하며, 자동 고정 시각 복권은 1000부터 시작. 수동 복권을 900회 이상 실행하면(이론적으로만) 충돌 발생. 실제 수업에서는 불가능하지만, 자동 회차 기반 번호(`_CUSTOM_LOT_ROUND_BASE`) 주석에 이 충돌 경계(`>= 999`에서 수동이 침범)를 명시하거나, 수동 시작 번호를 별도 음수(-1, -2, ...)로 구분하면 개념적으로 더 명확.
+
+- **`get_chart()`에서 `period='1d'` 요청 시 n_bars=30이지만 interval='5m'** (`app.py:1072-1076`, `stock_service.py:314`): `pm = {'1d':('1d','5m'),...}` 매핑으로 yfinance period/interval을 지정하지만 `get_history()` 내부는 yfinance를 사용하지 않고 `n_bars = {'1d': 30, '5d': 5, '1mo': 30, ...}` 매핑(`stock_service.py:314`)으로 랜덤 OHLC를 생성함. 결과적으로 1d 요청이어도 항상 30개 막대가 반환되어 간격(5m) 정보와 맞지 않음. `get_history()` 인자 `interval`을 받아 n_bars를 `{'5m': 78, '30m': 16, '1d': 30, '1wk': 52}` 등으로 결정하도록 수정, `app.py:1076`에서 `interval=yi` 전달. `stock_service.py:303-314` 약 3줄 수정으로 차트의 시간 축이 실제 기간 표시와 일치.
