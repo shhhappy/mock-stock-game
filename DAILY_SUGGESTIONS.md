@@ -5661,3 +5661,31 @@
 - **`_CUSTOM_LOT_ROUND_BASE = 1000`과 수동 시작 회차(99~) 간 충돌 가능성** (`app.py:392`, `app.py:1426-1431`): 수동 복권 시작은 99부터 시작해 `while round_n in done: round_n += 1`로 증가하며, 자동 고정 시각 복권은 1000부터 시작. 수동 복권을 900회 이상 실행하면(이론적으로만) 충돌 발생. 실제 수업에서는 불가능하지만, 자동 회차 기반 번호(`_CUSTOM_LOT_ROUND_BASE`) 주석에 이 충돌 경계(`>= 999`에서 수동이 침범)를 명시하거나, 수동 시작 번호를 별도 음수(-1, -2, ...)로 구분하면 개념적으로 더 명확.
 
 - **`get_chart()`에서 `period='1d'` 요청 시 n_bars=30이지만 interval='5m'** (`app.py:1072-1076`, `stock_service.py:314`): `pm = {'1d':('1d','5m'),...}` 매핑으로 yfinance period/interval을 지정하지만 `get_history()` 내부는 yfinance를 사용하지 않고 `n_bars = {'1d': 30, '5d': 5, '1mo': 30, ...}` 매핑(`stock_service.py:314`)으로 랜덤 OHLC를 생성함. 결과적으로 1d 요청이어도 항상 30개 막대가 반환되어 간격(5m) 정보와 맞지 않음. `get_history()` 인자 `interval`을 받아 n_bars를 `{'5m': 78, '30m': 16, '1d': 30, '1wk': 52}` 등으로 결정하도록 수정, `app.py:1076`에서 `interval=yi` 전달. `stock_service.py:303-314` 약 3줄 수정으로 차트의 시간 축이 실제 기간 표시와 일치.
+
+## 2026-09-10 (daily-analysis-2)
+
+### 추가하면 좋을 기능
+
+- **진행자 커스텀 뉴스 직접 입력** (`app.py:1047-1058` `host_send_news()`, `static/js/app.js:1274-1277` `doSendNews()`): 현재 진행자가 "뉴스 발송" 버튼을 누르면 `svc.trigger_news(show_hint)`가 **무작위** 뉴스를 생성하고 발송. 진행자가 수업 주제(예: "금리 인상", "반도체 수출 쇼크")에 맞춰 직접 헤드라인을 입력하고 대상 섹터와 방향(상승/하락)을 지정할 수 없음. `/api/rooms/<rid>/host/send-news` 요청 body에 `headline`, `sector`, `direction` 필드를 추가 수용하고, `StockService._news`에 직접 주입하는 경로를 추가(약 10줄). 실제 경제 이슈를 수업과 연결하는 고영향 교육 기능.
+
+- **복권 결과 화면에서 참여자 이름 표시** (`app.py:1463-1478` `get_lottery()`, `static/js/app.js:2504-2519` `_showLotteryResult()`): 진행자 복권 결과 모달(`modal-lottery-result`)의 결과 테이블은 uid(숫자)를 딕셔너리 키로 사용하고 참여자 이름을 전혀 표시하지 않음. 진행자가 "누가 당첨됐는지" 즉시 확인 불가 — 수업 현장에서 우승자를 호명해야 하는 상황에 큰 불편. `get_lottery()`가 `revealed` 상태 응답 시 `uid_map: {uid: username}` 필드를 추가(약 5줄), 프론트에서 이름을 표시하도록 수정.
+
+- **전체 퀴즈 정답률 집계 통계** (`app.py:1577-1579` `_quiz_history`, `_quiz_state`): `_quiz_history[rid, uid]`에 학생별 정답/오답 이력이 인메모리로 쌓이지만 진행자가 집계를 볼 수 없음. `/api/rooms/<rid>/host/quiz-stats` 엔드포인트를 추가해 문항별 정답률·전체 참여 횟수를 집계하면, "가장 많이 틀린 개념 TOP 3"를 수업 중 즉시 재설명하는 근거로 활용 가능. `_quiz_history` 딕셔너리를 순회해 집계하는 약 20줄 추가로 구현.
+
+- **종목별 거래량 순위 집계 (진행자용)** (`app.py:1006-1028` `get_stocks()`, `app.py:873-912`): 진행자 화면에서 "어떤 종목을 학생들이 가장 많이 샀는가"를 알 수 없음. `RoomTransaction.query.filter_by(room_id=rid).with_entities(...)` 집계로 종목별 총 거래량·순매수를 반환하는 `/api/rooms/<rid>/host/trade-stats` 엔드포인트(약 15줄)를 추가하면 "TSLA 집중 현상", "반도체 패닉셀" 등을 데이터로 확인해 수업 토론 소재로 사용 가능.
+
+- **게임 종료 직후 자동 결과 발표 옵션** (`app.py:1735-1745` `host_publish_results()`, `app.py:335-387` `_end_room()`): 현재 게임 종료 후 진행자가 별도로 "결과 발표하기"를 눌러야 학생 화면이 전환됨. 방 생성 시 `auto_publish: bool` 설정을 추가하면 `_end_room()` 내에서 자동으로 `room.results_published = True`를 설정해 진행자 부재 또는 빠른 수업 흐름에 대응 가능. `models.py`에 컬럼 1줄 + `_end_room()` 내 조건 3줄 + 방 생성 파라미터 수용으로 구현.
+
+- **학생 관심종목(Watchlist) 서버 저장** (`static/js/app.js:17` `watchlist`, `static/js/app.js:1413-1415` `toggleWatchlist()`): 현재 관심종목은 `localStorage`에만 저장되어 다른 기기/브라우저에서 사라짐. 수업 중 학생이 태블릿 → 스마트폰으로 전환하면 별표가 모두 사라짐. `RoomMember` 모델에 `watchlist VARCHAR(200)` 컬럼 추가, 별표 토글 시 `/api/rooms/<rid>/watchlist` PATCH 요청으로 서버 저장. 별표 1개를 누를 때마다 요청이 가므로 debounce 500ms 적용 권장.
+
+### 제거/단순화할 것들
+
+- **`static/js/app.js:1027-1029` - `escHtml()` 따옴표 미처리로 HTML 속성 Injection 취약점**: `escHtml`은 `&`, `<`, `>`만 이스케이프하고 `"`, `'`는 처리하지 않음. `data-name="${escHtml(m.username)}"` (line 279, 501) 패턴에서 닉네임에 `"`가 포함되면 속성이 조기에 닫히고 임의 이벤트 핸들러가 삽입될 수 있음. 진입점은 `enter()` (`app.py:608`): 2~30자면 따옴표 포함 허용. 수정: `s.replace(/"/g,'&quot;').replace(/'/g,'&#39;')` 2줄 추가.
+
+- **`app.py:774-778` - 룰렛 자동 트리거 시 참여자 수만큼 N+1 COUNT 쿼리**: `has_spins = any(RoomTransaction.query.filter_by(room_id=rid, user_id=m.user_id, action='RLT').count() < 3 for m in non_host)` — 30명 참여 시 `GET /api/rooms/<rid>` 1회에 30개의 COUNT 쿼리 발생. 잔여 시간 ≤5초 구간에서 10초 폴링이 반복되므로 최대 90+회. 수정: `db.session.query(RoomTransaction.user_id, func.count()).filter_by(room_id=rid, action='RLT').group_by(RoomTransaction.user_id).all()` 한 번의 GROUP BY 쿼리로 교체.
+
+- **`app.py:1418` - `lottery_start` 상금에 무한대(Infinity) 허용 → 시스템 파괴**: `prize = float(d.get('prize', 0))` 뒤에 `if prize <= 0` 만 체크하고 `math.isfinite(prize)` 누락. 진행자가 `{"prize": 1e999}` 전송 시 `_do_reveal()` 내 `m.cash += prize`로 무한대 현금 주입 → `total_value = inf` → 모든 순위 계산 파괴. 동일 문제가 `host_adjust` (line 949, `delta`)에도 존재. 수정: 양 곳에 `if not math.isfinite(prize)` 가드 추가.
+
+- **`models.py:41` - `lottery_rounds_done VARCHAR(50)` 오버플로우 위험**: 자동 회차(최대 6개) + 수동 회차(99부터 무제한) + 고정시각 회차(1000부터 최대 10개)를 콤마로 구분한 문자열. 수동 복권을 10회 이상 실행하면 "1,2,3,4,5,6,99,...,108,1000,...,1009" ≈ 65자 이상으로 PostgreSQL 오류 발생, SQLite는 조용히 잘라내어 이미 완료된 회차를 재실행시키는 데이터 손상. `VARCHAR(50)` → `db.Column(db.Text)` 로 1줄 변경 + 마이그레이션.
+
+- **`app.py:760` 외 20+ 곳 - `Room.query.get_or_404(rid)` 레거시 SQLAlchemy Query API 전반 사용**: SQLAlchemy 2.0에서 Query 인터페이스가 deprecated. `get_or_404` 패턴이 `app.py` 전체에 25개소 이상 분산. `db.session.get(Room, rid) or abort(404)` 혹은 Flask-SQLAlchemy 3.x의 `db.get_or_404(Room, rid)`로 일괄 교체 필요. 현재는 경고 없이 동작하나 SQLAlchemy 2.x 마이너 업그레이드 시 DeprecationWarning → 향후 버전에서 제거. `sed` 또는 코드 치환으로 일괄 교체 가능.
