@@ -2,6 +2,40 @@
 
 ---
 
+## 2026-09-11
+
+### 추가하면 좋을 기능
+
+- **진행자 즉시 공지 배너 (주식 뉴스 무관 텍스트 알림)** (`app.py` 신규 `POST /api/rooms/<rid>/host/announce`, `app.py:549-580` `room_dict()`): 현재 진행자가 학생들에게 즉각적인 공지를 보낼 수단은 `host_send_news()`로 종목 연계 뉴스를 만드는 것뿐이라, "잠시 멈추고 화면을 보세요"처럼 주식과 무관한 공지를 자연스럽게 전달할 방법이 없음. `_announcements: dict = {}  # rid -> {'text': str, 'ts': float}` 전역 dict를 추가하고, `POST /api/rooms/<rid>/host/announce {'text': str}` 엔드포인트에서 1~80자 검증 후 저장. `room_dict()` 응답에 `'announcement': _announcements.get(rid)` 필드를 추가해 3초 폴링 주기에 자동 전파. 클라이언트는 `announcement.text`가 있으면 화면 상단에 노란 배너로 표시하고 `announcement.ts`가 갱신되면 토스트 알림. `_end_room()`에서 `_announcements.pop(rid, None)` 정리. 서버 약 10줄 + `room_dict()` 1줄 + 클라이언트 배너 약 10줄. "수업 설명 시간 — 거래를 잠시 멈추세요" 같은 운영 메시지를 즉각 전달해 교실 집중도 향상.
+
+- **복권 번호 자동 선택 버튼 ("행운 번호 자동 채우기")** (`static/js/app.js` 복권 번호 입력 UI): 복권 `picking` 단계에서 학생이 1~45 중 6개를 직접 클릭해야 하는데, 번호 선택에 시간을 너무 쏟거나 전략 없이 임의로 고르다 `pick_dl` 마감을 놓치는 경우가 있음. 복권 번호 입력 영역에 "🎲 자동 선택" 버튼 1개를 추가해 클릭 시 `Array.from({length:45},(_,i)=>i+1).sort(()=>Math.random()-.5).slice(0,6).sort((a,b)=>a-b)`로 6개를 자동 채움. 서버 변경 불필요, `app.js` 약 5줄. 실제 로또 자동 선택 UX와 동일해 "랜덤 선택 vs 전략적 선택 중 어느 것이 유리한가?" 교육 토론을 자연 유발.
+
+- **방 입장 QR 코드 즉석 생성 (교사 프로젝터 화면용)** (`static/js/app.js` 대기실 진행자 UI, `static/index.html`): 교사가 QR 코드를 학생에게 공유하려면 별도 QR 생성 사이트를 열어야 함. 진행자 대기실 화면의 방 코드 표시 영역 아래에 "QR 표시" 버튼을 추가하고, CDN의 `qrcode.js` (또는 순수 JS Canvas 기반 구현) 로드 없이도 `<img src="https://api.qrserver.com/v1/create-qr-code/?data=ROOM_CODE&size=200x200">` 1줄로 QR 이미지를 표시 가능. 클릭 시 교실 TV/프로젝터에 맞는 전체 화면 모달로 QR + 방 코드 텍스트를 크게 표시. 서버 변경 불필요, `app.js` 약 8줄 + CSS 모달 약 5줄. 교사가 스마트폰으로 찍어 반 전체에 배포할 수 있는 입장 QR을 별도 도구 없이 즉시 생성.
+
+- **시장 전체 변동성 배율 실시간 조정 기능** (`stock_service.py:127-161` `StockService._next_price()`, `app.py` 신규 `POST /api/rooms/<rid>/host/volatility`): 현재 종목별 `vol` 값이 고정되어 교사가 "이번에는 폭풍장으로 해볼까?" 시나리오를 구성하려면 `host_force_price()` + `host_market_event()`를 조합해야 함. `StockService`에 `_vol_multiplier: float = 1.0` 속성을 추가하고, `_next_price()` 내 `vol = STOCKS[sym]['vol']` → `vol = STOCKS[sym]['vol'] * self._vol_multiplier`로 1줄 수정. `set_vol_multiplier(v)` 메서드(0.2~5.0 범위 clamp) 추가. `POST /api/rooms/<rid>/host/volatility {'multiplier': float}` 엔드포인트에서 적용. 서버 약 12줄. 진행자 시장 탭에 "변동성 배율" 슬라이더(0.2x~5x) 추가. "안정장 vs 폭풍장에서 어떤 전략이 효과적인가?" 교육 실험을 버튼 하나로 전환 가능.
+
+- **게임 시작 전 카운트다운 동기화 ("3, 2, 1 시작!")** (`app.py:808-835` `start_room()`, `app.py:549-580` `room_dict()`): 진행자가 "시작" 버튼을 누르면 학생들이 제각기 다른 폴링 주기에 `active` 상태를 받아 게임 시작 시점이 학생마다 최대 3초씩 다름. `start_room()`에서 즉시 `active`로 전환하는 대신 `room.status = 'countdown'` (신규 상태) + `room.countdown_until = datetime.utcnow() + timedelta(seconds=5)`를 설정하고 `db.session.commit()`. `get_room()` 폴링에서 `countdown_until` 초과 시 `active`로 전환. `room_dict()`에 `'countdown_seconds': max(0, int((room.countdown_until - now).total_seconds()))` 포함. 클라이언트는 카운트다운 수 표시 후 0이 되면 게임 시작 연출. 서버 약 15줄 + 클라이언트 카운트다운 연출 약 10줄. 반 전체가 동시에 "3, 2, 1, 시작!" 화면을 보며 통일된 출발 경험 제공.
+
+- **학생 성취 뱃지 시스템 (조건별 자동 부여)** (`static/js/app.js` 포트폴리오/퀴즈 탭, `localStorage`): 학생들이 게임 내 특정 행동(첫 수익, 분산 투자, 연속 정답 등)을 달성했을 때 뱃지를 부여해 동기 부여 및 다양한 전략 시도를 유도. 서버 변경 없이 클라이언트에서 폴링 데이터 기반으로 조건 판단: "🎯 첫 수익자" (`total_gain_pct > 0`), "🌐 분산 투자자" (보유 섹터 3개 이상), "🧠 퀴즈 마스터" (정답 연속 3회 이상), "🏦 예금왕" (예금 잔액 500만 이상), "⚡ 트레이더" (거래 10회 이상). 달성 즉시 토스트 + 포트폴리오 탭 상단에 뱃지 아이콘 표시. `localStorage.setItem('badges_' + rid, JSON.stringify(badges))` 저장. `app.js` 약 35줄. 게임 종료 후 "나는 어떤 투자자인가?" 자기 인식 교육 포인트 생성.
+
+- **게임 종료 후 개인 투자 성과 분석 리포트** (`app.py:1131-1162` `get_portfolio()`, `app.py:1178-1198` `get_transactions()`, `app.py:1654-1660` `get_quiz_history()`): 게임이 끝나고 `results_published=True`가 되면 학생 화면에 "수익률 랭킹"만 보이고, 개인의 투자 패턴(어떤 종목을 얼마나 자주 거래했는지, 퀴즈 정확률, 섹터 다양성)을 요약한 리포트가 없음. 기존 `get_portfolio()`, `get_transactions()`, `get_quiz_history()` 응답을 클라이언트에서 조합해 "최고 수익 종목", "최대 손실 종목", "총 거래 횟수", "섹터 다양성 점수(보유 섹터 수)", "퀴즈 정답률"을 카드 형태로 렌더링. 서버 변경 불필요. `app.js` 약 40줄. 게임 종료 후 "나는 어떤 투자자였나?" 자기 분석 활동으로 수업 디브리핑 심화.
+
+### 제거/단순화할 것들
+
+- **`get_room()` 동시 호출 시 `_end_room()` 중복 실행 위험 — DB 상태 재설정 및 StockService 이중 cleanup** (`app.py:762-764`, `app.py:796-800`, `app.py:335-388`): 학생 30명이 동시에 폴링하면 각 스레드가 thread-local SQLAlchemy 세션으로 `room`을 독립 로드해, `end_time` 초과(`app.py:762`)·`rlt_triggered` 60초 타임아웃(`app.py:797`) 조건을 모두 동시에 충족할 수 있음. 여러 스레드가 동시에 `_end_room(room)`을 호출하면 두 번째 이후 실행에서 `room.lottery_rounds_done = ''`·`room.code = None` 재설정, `cleanup_room_service()` 중복 호출, 이미 `DELETE`된 `RoomHolding` 행 재삭제 시도로 `StaleDataError` 발생 위험. 해결: `_end_room()` 함수 시작부에 `db.session.refresh(room); if room.status == 'ended': return` (2줄) 가드 추가, 또는 `get_room()` 내 `_end_room()` 진입 전 `if room.status in ('ended',): return jsonify(room_dict(room, cur_user().id))` 로 재진입 방지. `_end_room()` 안에 이미 `db.session.commit()`이 있으므로 첫 번째 실행 후 다른 스레드가 refresh하면 'ended' 감지 가능. 2줄 추가로 중복 실행 완전 차단.
+
+- **`create_room()` `duration_minutes`·`starting_cash`·`deposit_rate` 변환 try/except 없음 → ValueError 500** (`app.py:708-710`): `int(d.get('duration_minutes', 30))`, `float(d.get('starting_cash', 10_000_000))`, `float(d.get('deposit_rate', 3.0))` 세 줄에 try/except가 없음. `{"duration_minutes": "한 시간"}` 같은 잘못된 값 전송 시 ValueError → 500. `host_adjust()` (`app.py:949`) 는 `try: delta = float(...) except (TypeError, ValueError): return jsonify({'error': '금액 오류'}), 400` 패턴을 올바르게 사용. 해결: `app.py:707` 이전에 `try: dur = max(1, min(600, int(d.get('duration_minutes', 30)))); cash = max(100000, float(d.get('starting_cash', 10_000_000))); dep_rate = max(0, min(50, float(d.get('deposit_rate', 3.0)))) except (TypeError, ValueError): return jsonify({'error': '숫자 형식 오류'}), 400` 블록으로 대체. `lottery_start()` (`app.py:1418`) `prize = float(d.get('prize', 0))`, `host_force_price()` (`app.py:1038`) `pct = float(d.get('pct', 0))` 도 동일 수정 필요. 각 1~2줄, 총 4줄 추가.
+
+- **`get_history()` 에서 period='5d' 시 `n_bars=5` — 5개 봉만 생성해 차트가 거의 빈 상태** (`stock_service.py:314`): `n_bars = {'1d': 30, '5d': 5, '1mo': 30, '3mo': 90}.get(period, 30)` — period='5d'(get_chart에서 '1w' 주간 차트로 매핑)일 때 봉이 5개뿐이어서 학생이 "1주일" 차트를 선택하면 가격 점 5개만 표시되는 사실상 의미 없는 시각화가 됨. 동일한 `n_bars` 딕셔너리에서 '1y' 기간도 미정의라 기본값 30개 봉이 생성되는 일관성 없는 동작. 해결: `stock_service.py:314` 딕셔너리를 `{'1d': 48, '5d': 30, '1mo': 30, '3mo': 90, '1y': 52}` 로 수정(5d=30봉이면 30분 단위 15시간 분량으로 한 주 흐름 시각화에 적합, 1y=52봉은 주봉 1년치에 해당). 동시에 `'1y'` interval을 `'1wk'`로 GET 파라미터를 받지만 `n_bars`에 없어 기본 30이 사용되는 버그도 함께 해결. 1줄 수정.
+
+- **`_push_notified` 전체 clear 시 중복 알림 재발송** (`app.py:216-218`): `if len(_push_notified) > 5000: _push_notified.clear()` — 집합이 5000을 초과하면 모든 발송 이력이 지워져, 직후 tick에서 아직 유효한 알림 키가 `key not in _push_notified` 조건을 다시 충족해 룰렛/복권 1분 전 알림이 재발송됨. 학생이 같은 알림을 두 번 받는 UX 혼란. 실제 방 100개 × 회차 10개 × 룰렛/복권 2종 = 2000건이 최대 수준이므로 5000 한도 자체도 비현실적으로 크다. 해결: `_push_notified`를 `set` → `dict: {key: float(timestamp)}` 로 변환하고, 스케줄러 tick 시작부에서 `cutoff = time.time() - 7200; _push_notified = {k: v for k, v in _push_notified.items() if v > cutoff}` 방식으로 2시간 이상 지난 항목만 제거. 한도 초과 전체 삭제 대신 점진적 만료 처리. 약 5줄 수정.
+
+- **`lobby_members()` 에서 `user_id` 노출 — 방 내 모든 학생이 다른 학생의 DB ID 열람 가능** (`app.py:927-938`): `GET /api/rooms/<rid>/host/lobby-members` 응답에 `{'user_id': m.user_id, 'username': ...}` 형태로 `user_id`(정수 PK)가 포함됨. 권한 검사(`app.py:932`)가 진행자 뿐 아니라 방 참여자도 허용(`not RoomMember.query.filter_by(...).first()` 조건)하므로, 모든 학생이 다른 학생의 `user_id`를 수집 가능. 이 ID를 사용해 `GET /api/rooms/<rid>/transactions`(자신의 ID만 조회됨)를 바꿔치기하거나, 향후 구현되는 API에서 타인의 ID를 위조해 사용하는 부정행위 공격면이 열려 있음. 해결: `app.py:932`의 멤버 허용 조건 제거(`if room.host_id != user.id: return jsonify({'error': '권한 없음'}), 403`)하거나, `user_id`를 응답에서 제거하고 `username`만 반환. 1줄 수정.
+
+- **`_end_room()` 보유 주식 청산 시 `m.cash += price * h.shares` float 오차 누적 — 최종 현금에 소수점 오염** (`app.py:369`): 게임 종료 시 `m.cash += price * h.shares` 를 보유 종목 수만큼 반복 실행. `price`는 `svc.get_price()` 반환 `float`, `h.shares`는 `int`. 보유 종목 10개를 청산하면 `m.cash += price_1 * s_1 + ... + price_10 * s_10`의 float 누적 오차가 `9999998.0000000007` 같은 값으로 DB에 저장됨. 게임 종료 후 순위표 및 Excel 내보내기에서 소수점 단위가 표시되어 "1위 총자산: 12,345,678.000001원" 같은 혼란 발생. 해결: `app.py:369` `m.cash += price * h.shares` → `m.cash += round(price * h.shares, 0)` 로 교체(1줄). 이미 `trade()`에서 지적된 동일 패턴이지만 `_end_room()` 경로는 별도 수정 필요. `m.cash += d.amount + interest` (`app.py:361`)도 `round(d.amount + interest, 0)` 처리 필요.
+
+---
+
 ## 2026-09-08
 
 ### 추가하면 좋을 기능
