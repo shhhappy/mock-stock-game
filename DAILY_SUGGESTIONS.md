@@ -5689,3 +5689,29 @@
 - **`models.py:41` - `lottery_rounds_done VARCHAR(50)` 오버플로우 위험**: 자동 회차(최대 6개) + 수동 회차(99부터 무제한) + 고정시각 회차(1000부터 최대 10개)를 콤마로 구분한 문자열. 수동 복권을 10회 이상 실행하면 "1,2,3,4,5,6,99,...,108,1000,...,1009" ≈ 65자 이상으로 PostgreSQL 오류 발생, SQLite는 조용히 잘라내어 이미 완료된 회차를 재실행시키는 데이터 손상. `VARCHAR(50)` → `db.Column(db.Text)` 로 1줄 변경 + 마이그레이션.
 
 - **`app.py:760` 외 20+ 곳 - `Room.query.get_or_404(rid)` 레거시 SQLAlchemy Query API 전반 사용**: SQLAlchemy 2.0에서 Query 인터페이스가 deprecated. `get_or_404` 패턴이 `app.py` 전체에 25개소 이상 분산. `db.session.get(Room, rid) or abort(404)` 혹은 Flask-SQLAlchemy 3.x의 `db.get_or_404(Room, rid)`로 일괄 교체 필요. 현재는 경고 없이 동작하나 SQLAlchemy 2.x 마이너 업그레이드 시 DeprecationWarning → 향후 버전에서 제거. `sed` 또는 코드 치환으로 일괄 교체 가능.
+
+## 2026-09-11
+
+### 추가하면 좋을 기능
+
+- **진행자 설정(룰렛 확률·퀴즈 보상·복권 시각) 서버 재시작 후 유실 방지** (`app.py:1513` `_roulette_config`, `app.py:1577` `_quiz_settings`, `app.py:391` `_lottery_custom_times`): 세 딕셔너리 모두 in-memory이므로 Render 무료 티어의 자동 재시작(주기적 Sleep → Wake)이 발생하면 진행자가 방 시작 전 공들여 설정한 값들이 사라짐. `Room` 모델에 `extra_config = db.Column(db.Text, nullable=True)` 1개를 추가(JSON 문자열)하고 각 설정 POST 시 `json.dumps({'rlt': ..., 'quiz': ..., 'lot_times': ...})`를 저장; `get_room()` 복구 경로(`app.py:791-793`)에서 로드. `models.py` 1줄 + `app.py` 설정 저장/복구 약 15줄. Render 자동 재시작이 잦은 환경에서 수업 직전 설정 소실로 인한 혼란을 완전히 제거.
+
+- **참가자 화면에 "내 순위 변동" 알림 배지** (`static/js/app.js:19` `S.assetHistory`, `app.py:1165-1175` `get_rankings()`): 폴링마다 순위가 조용히 바뀌어도 학생은 직접 순위 탭을 열기 전까지 모름. `get_rankings()` 응답에 포함된 `is_me` 항목의 `rank`를 이전 폴링과 비교해, 순위가 오르면 토스트("🎉 순위 상승! 현재 N위"), 내리면 경고 토스트("📉 순위 하락! 현재 N위")를 표시. `app.js` 약 12줄 추가. 실시간 피드백이 거래 참여를 유도하는 수업 몰입 개선.
+
+- **빠른 거래 바로가기: 종목 검색 단축키** (`static/js/app.js` `loadStocks()`, `static/index.html` 주식 탭): 종목이 60개 이상(`stock_service.py:36-119`)이므로 스크롤로 원하는 종목을 찾기 힘듦. 주식 탭 상단 섹터 필터 옆에 `<input id="stock-search" placeholder="종목명 검색...">` 추가 및 `loadStocks()` 내 렌더 루프에서 `info.name.includes(query)` 필터 적용. `index.html` 1줄 + `app.js` 약 8줄. 30명이 동시에 "삼성전자" 찾아 스크롤하는 혼란 제거.
+
+- **게임 종료 후 "수업 리뷰" 요약 슬라이드 뷰** (`app.py:1768-1836` `export_rankings()`, `app.py:1735-1745` `host_publish_results()`): 결과 발표 화면은 순위표만 있고, "어떤 섹터가 가장 올랐나", "가장 많이 거래된 종목 TOP 5" 같은 집계 정보가 없음. 게임 종료 후 `/api/rooms/<rid>/host/trade-stats` (기존 제안과 연계)를 호출해 진행자 결과 탭에 "섹터별 평균 수익률", "가장 많이 거래된 종목 TOP 5" 등을 카드 형태로 표시. 서버 약 20줄 + 프론트 약 30줄. 교사가 별도 자료 없이 수업 마무리 토론을 즉시 진행 가능.
+
+- **모바일에서 룰렛 모달 스핀 UX 개선** (`static/js/app.js:2200-2280` 룰렛 스핀 관련, `static/css/style.css`): 현재 룰렛 베팅 금액 입력은 텍스트 `<input type="number">`인데, 모바일에서 숫자 키패드 등장 후 모달이 밀려 캔버스가 화면 밖으로 나가는 경우 발생. 베팅 입력을 "25% / 50% / 75% / 전액" 버튼 4개로 교체(현재 `total_assets` 기준 %)하면 모바일 키패드 문제를 근본 해결하면서 입력 속도도 빨라짐. `index.html` 약 10줄 + `app.js` 약 8줄 수정.
+
+### 제거/단순화할 것들
+
+- **`app.py:762-764` - `get_room()` 자동 종료가 룰렛·복권 트리거와 같은 요청에서 모두 실행되어 예측 불가한 상태 전이**: `get_room()` 단일 GET 핸들러가 (1) 자동 종료, (2) 룰렛 5초 트리거 자동일시정지, (3) 룰렛 60초 타임아웃 강제종료, (4) 복권 자동 시작까지 4개의 상태 변경을 차례로 수행. 참여자 30명 × 3초 폴링 = 10 req/s에서 모두 실행되어 race condition이 발생 가능하고 디버깅이 어려움. 상태 전이를 `APScheduler` 또는 별도 백그라운드 스레드로 옮기고 `get_room()`은 순수 read-only로 단순화하면 안정성과 가독성 동시 향상. 단기 조치: 트리거 조건마다 `threading.Lock`으로 보호 최소화 (이미 `_rlt_lock` 등 있지만 `get_room()` 자체는 락 없음).
+
+- **`app.py:1782-1785` - Excel export 학번 파싱이 공백 기준 `split(' ', 1)` 하드코딩**: 학생 닉네임 규칙이 "학번 이름" 형태(`parts = e['username'].split(' ', 1)`)로 가정돼있어, 이름에 공백이 없거나 학번을 먼저 입력하지 않으면 학번 열이 비어 교사가 성적 입력 시 수동으로 재작업. 방 생성 화면에서 `host-student-id`와 `host-name` 두 필드를 이미 분리 수집(`index.html:53-60`)하므로 `username` 포맷 자체를 `{SID}|{NAME}` 구분자 변경 또는 `User` 모델에 `student_id`·`display_name` 컬럼 분리. 장기적으로 파싱 로직 제거 및 열 매핑 안정화.
+
+- **`app.py:83-105` - Room 캐시 TTL 1.5초인데 `is_host` 필드만 캐시 제외하는 로직이 복잡**: `_get_room_cached()`가 `is_host`를 캐시에서 빼고 나중에 uid 비교로 주입하는 이중 로직(line 99, 103). 단순화 방법: `is_host`는 항상 호출 시점에서 `uid == room.host_id` 계산이므로 캐시된 `base` dict에 포함하지 않고 반환 직전에만 삽입하는 현재 구조는 맞지만, `d = dict(entry['data']); d['is_host'] = uid == room.host_id` 패턴이 매 요청마다 dict shallow copy를 생성. `base` dict를 불변으로 유지하고 `{**base, 'is_host': ...}` 단일 표현식으로 교체해 의도 명확화.
+
+- **`stock_service.py:303-332` - `get_history()` 가 period/interval 파라미터를 받아도 `n_bars`는 period만 참조 (`app.py:1072`와 불일치)**: `pm = {'1d':('1d','5m'), '1w':('5d','30m'), ...}` 매핑이 `app.py:1072`에 있고, `StockService.get_history(symbol, period='1mo', interval='1d')`는 `interval` 인수를 받지만 실제로는 무시하고 `n_bars`를 period로만 결정. `interval` 파라미터를 제거하거나(불필요), `n_bars`를 interval 기반으로 올바르게 계산. 인터페이스와 구현 불일치로 인한 혼란 제거.
+
+- **`models.py:8-13` `gen_code()` — 앱 컨텍스트 없이 호출 시 RuntimeError 잠재적 위험**: `Room.code` 컬럼의 `default=gen_code`는 row 생성 시마다 DB 쿼리(`Room.query.filter_by(code=code)`)를 수행하므로 Flask 앱 컨텍스트 밖에서 테스트 또는 migration 실행 시 RuntimeError 발생 가능. `gen_code()`를 `secrets.token_urlsafe(4).upper()[:6]` 기반 순수 함수로 대체하고 충돌 체크는 `create_room()` (`app.py:699-704`) 레이어에만 위임하면 모델이 DB에 독립적이 되어 테스트 용이성 향상.
