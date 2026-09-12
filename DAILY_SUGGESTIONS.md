@@ -5749,3 +5749,32 @@
 - **`stock_service.py:303-332` - `get_history()` 가 period/interval 파라미터를 받아도 `n_bars`는 period만 참조 (`app.py:1072`와 불일치)**: `pm = {'1d':('1d','5m'), '1w':('5d','30m'), ...}` 매핑이 `app.py:1072`에 있고, `StockService.get_history(symbol, period='1mo', interval='1d')`는 `interval` 인수를 받지만 실제로는 무시하고 `n_bars`를 period로만 결정. `interval` 파라미터를 제거하거나(불필요), `n_bars`를 interval 기반으로 올바르게 계산. 인터페이스와 구현 불일치로 인한 혼란 제거.
 
 - **`models.py:8-13` `gen_code()` — 앱 컨텍스트 없이 호출 시 RuntimeError 잠재적 위험**: `Room.code` 컬럼의 `default=gen_code`는 row 생성 시마다 DB 쿼리(`Room.query.filter_by(code=code)`)를 수행하므로 Flask 앱 컨텍스트 밖에서 테스트 또는 migration 실행 시 RuntimeError 발생 가능. `gen_code()`를 `secrets.token_urlsafe(4).upper()[:6]` 기반 순수 함수로 대체하고 충돌 체크는 `create_room()` (`app.py:699-704`) 레이어에만 위임하면 모델이 DB에 독립적이 되어 테스트 용이성 향상.
+
+---
+
+## 2026-09-12
+
+### 추가하면 좋을 기능
+
+- **참가자 "관심 종목" 가격 변동 알림 토스트** (`static/js/app.js:17` `S.watchlist`, `app.js loadStocks()` 내 렌더 루프): 관심 종목(`watchlist`) 기능은 이미 `localStorage`에 저장되어 있으나, 가격이 일정 비율 이상 변할 때 자동으로 토스트를 띄우는 로직이 없음. `loadStocks()` 실행 시 직전 가격(별도 `Map` 유지)과 비교해 ±3% 이상 변동된 관심 종목에 `toast('📊 삼성전자 +3.1% 급등!', 'up')` 형태로 알림. `app.js` 약 12줄 추가. 학생들이 다른 탭을 보는 동안에도 보유 종목 흐름을 파악할 수 있어 수업 집중도 향상.
+
+- **진행자 대시보드에 "전체 거래 현황" 실시간 피드** (`app.py:1166-1175` `get_rankings()`, `app.py:963-984` `host_member_transactions()`): 진행자는 현재 순위표와 개별 거래 내역을 볼 수 있지만, 방 전체에서 방금 발생한 거래들(BUY/SELL)을 한눈에 보는 뷰가 없음. `/api/rooms/<rid>/host/feed` 엔드포인트를 신설해 최근 20건의 전체 거래를 반환하고, 진행자 탭에 "활동 피드" 탭 추가. `app.py` 약 15줄 + `index.html`/`app.js` 약 25줄. 선생님이 학생 활동을 실시간으로 파악해 수업 진행 ("지금 다들 삼성전자 사고 있네요") 가능.
+
+- **방 재시작(리셋) 기능** (`app.py:335-387` `_end_room()`, `app.py:676-715` `create_room()`): 수업 두 번째 블록 또는 재시작이 필요할 때 기존 방을 종료하고 새 방을 만들어야 하며, 학생들도 다시 코드를 입력해야 함. 진행자 설정 탭에 "방 리셋" 버튼을 추가해 `_end_room()` 후 같은 `code`로 `Room` 재생성 + 기존 `RoomMember`에 `cash = starting_cash` 재할당. 코드를 고정 코드(`room_kwargs`) 방식으로 유지하면 QR 재배포 없이 재사용 가능. `app.py` 약 30줄 + `app.js` 약 15줄.
+
+- **주식 차트에 "뉴스 발생 시점" 수직선 오버레이** (`app.py:1067-1076` `get_chart()`, `stock_service.py:163-180` `_generate_news()`): 현재 차트는 OHLCV 캔들만 표시하고 뉴스가 언제 발생했는지 시각적으로 알 수 없음. `StockService`에 `_news_events` 리스트를 추가해 뉴스 발생 타임스탬프를 기록하고, `/get_chart` 응답에 포함시켜 Chart.js `annotations` 플러그인(또는 수직 점선 SVG 오버레이)으로 표시. `stock_service.py` 약 10줄 + `app.py` 약 5줄 + `app.js` 약 20줄. 학생들이 "뉴스가 나오면 주가가 움직인다"는 인과를 시각적으로 학습.
+
+- **퀴즈 틀렸을 때 "다른 학생도 틀렸어요" 집계 표시** (`app.py:1603-1652` `submit_quiz()`): 현재 퀴즈 오답 시 해설만 보여주고 동료와의 비교가 없음. `_quiz_state`에 문제별 정답/오답 카운터를 집계하고, `submit_quiz()` 응답에 `correct_rate` 필드 추가 후 프론트에서 "이 문제 정답률 38% — 많이들 어려워해요" 표시. `app.py` 약 15줄 + `app.js` 약 8줄. 오답에 대한 창피함을 줄이고 학습 동기 유지.
+
+### 제거/단순화할 것들
+
+- **`app.py:757-806` `get_room()` — 단일 GET 핸들러에 4개 상태 전이가 집중**: 폴링 요청 1건에서 (1) `end_time` 초과 자동 종료, (2) 룰렛 5초 트리거 + 일시정지, (3) 룰렛 60초 타임아웃 강제 종료, (4) 복권 자동 시작이 순차 실행됨. 참가자 30명이 3초마다 폴링하면 초당 10번 상태 변경 시도가 발생하고, `_rlt_lock`/`_lottery_lock` 없이 `get_room()` 자체는 무락(lock-free)이라 중복 트리거 가능성 존재. 각 전이를 `threading.Timer` 또는 백그라운드 루프로 옮기고 `get_room()`은 순수 조회만 하도록 분리해야 함. 단기 조치: 최소한 룰렛 트리거(`line 771-789`)를 `with _rlt_lock:`으로 감쌀 것.
+
+- **`app.py:83-105` — `_get_room_cached()`의 불필요한 `dict()` shallow copy**: `d = dict(entry['data'])` (line 98)에서 캐시 hit 시마다 전체 dict를 복사함. `is_host`만 추가로 붙이는 목적이라면 `{**entry['data'], 'is_host': uid == room.host_id}` 한 줄로 교체하면 intent가 명확해지고 코드 2줄 감소.
+
+- **`stock_service.py:303` `get_history()` — `interval` 파라미터 수신 후 무시**: 함수 시그니처 `get_history(self, symbol, period='1mo', interval='1d')`에서 `interval`을 받지만 내부에서 `n_bars = {'1d': 30, '5d': 5, '1mo': 30, '3mo': 90}.get(period, 30)` (line 314)로 period만 사용. `app.py:1075`에서 호출 시 `period=yp, interval=yi` 두 인수를 모두 전달하여 인터페이스-구현 불일치 발생. `interval` 파라미터를 삭제하거나 실제로 `n_bars` 계산에 반영할 것.
+
+- **`app.py:727-731` `join_room()` — 호스트가 자신의 방에 참가자로 `join`할 수 없도록 하는 가드 없음**: `room.host_id != user.id` 조건(line 725)으로 진행자를 `RoomMember`에 추가하지 않지만, 진행자가 `join_room()` API를 직접 호출하면 조용히 통과해 `room_dict()` 반환. 예외 처리 없이 pass-through되므로 `if room.host_id == user.id: return jsonify({'ok': True, 'room': room_dict(room, user.id)})` 로 명시적 early-return 추가해 의도 명확화.
+
+- **`app.py:1244` `create_deposit()` — `lock_type` 외의 필드를 `request.json`에서 두 번 읽음**: `lock_type = (request.json or {}).get('lock_type', 'free')` (line 1242)와 `amount = float((request.json or {}).get('amount', 0))` (line 1239)에서 `request.json`을 두 번 호출. `request.json`은 Flask에서 한 번 파싱 후 캐싱되므로 기능적 문제는 없으나, 코드 상단에서 `d = request.json or {}`으로 한 번만 읽어 `d.get('amount')`, `d.get('lock_type')` 형태로 일관성 유지. 가독성 개선.
+
