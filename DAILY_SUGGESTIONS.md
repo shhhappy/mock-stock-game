@@ -2,6 +2,38 @@
 
 ---
 
+## 2026-09-12
+
+### 추가하면 좋을 기능
+
+- **진행자용 퀴즈 라이브 O/X 집계 패널** (`app.py` `_quiz_state` 구조 활용, 신규 `GET /api/rooms/<rid>/host/quiz-stats`): 현재 학생들이 퀴즈에 답해도 진행자는 "몇 명이 O, 몇 명이 X를 골랐는지" 전혀 알 수 없어 즉각적인 오개념 진단 기회를 놓침. `submit_quiz()` (`app.py:1637`)에서 답변 제출 시 `_quiz_agg = {}  # rid -> {qid: {'o': int, 'x': int, 'answered_qid': int}}` 집계 딕셔너리에 카운트를 업데이트(개인 응답은 비공개, 집계만). `GET /api/rooms/<rid>/host/quiz-stats` 에서 현재 문제 id·O 수·X 수·총 응답 수를 반환. 진행자 호스트 탭에 "현재 퀴즈 O: 12명 / X: 8명" 분포 바 실시간 표시(3초 폴링 재활용). 서버 약 15줄 + 클라이언트 분포 바 약 10줄. "반의 절반이 틀렸습니다 — 이 개념을 다시 짚겠습니다" 즉각 토론 포인트 생성.
+
+- **학생 1회 거래 한도 설정 (진행자 설정 탭)** (`app.py:1085-1126` `trade()`, `app.py` 신규 `_trade_limits` 딕셔너리, `POST /api/rooms/<rid>/host/trade-limits`): 현재 학생이 보유 현금 전부를 1번에 몰빵 투자할 수 있어 "전체 매수" 전략이 지배적. 진행자가 "1회 최대 거래 금액 500만 원" 또는 "1회 최대 수량 10주"를 설정하는 기능 추가. `_trade_limits = {}  # rid -> {'max_amount': float|None, 'max_shares': int|None}` 전역 딕셔너리 추가. `trade()` (`app.py:1095`) 수량 검증 직후에 `lim = _trade_limits.get(rid, {}); if lim.get('max_amount') and amount > lim['max_amount']: return jsonify({'error': f'1회 최대 거래 금액은 {lim["max_amount"]:,.0f}원입니다.'}), 400` 삽입. 서버 약 15줄 + 클라이언트 진행자 설정 UI 약 10줄. 분산 매수·단계적 투자 전략을 강제 유도해 "왜 한꺼번에 사면 안 되나요?" 교육 토론 자연 유발.
+
+- **복권 라운드 결과 히스토리 패널** (`app.py:487-507` `_do_reveal()`, 신규 `GET /api/rooms/<rid>/lottery/history`): 복권 라운드가 끝나면 `lot['current']`가 다음 라운드에 덮어씌워져 이전 라운드 당첨 번호·상금 결과를 학생과 진행자 모두 다시 볼 수 없음. `_do_reveal()` 내 `cur['state'] = 'revealed'` 설정 직후에 `_lots[rid].setdefault('history', []).append({'round': cur['round'], 'winning': cur['winning'], 'results': cur['results'], 'prize': cur['prize']}); _lots[rid]['history'] = _lots[rid]['history'][-10:]` 2줄 추가(최대 10회 cap). `GET /api/rooms/<rid>/lottery/history` 엔드포인트에서 반환. 복권 탭 하단에 "지난 회차" 접이식 패널. 서버 약 10줄 + 클라이언트 약 10줄. "1회차 당첨번호가 31이었는데 2회차에도 나올까?" 실제 확률 교육 토론 자료로 활용.
+
+- **교육 탭 금융 용어 플래시카드 기능** (`education_data.py` GLOSSARY, `static/js/app.js` 교육 탭, `localStorage`): 교육 탭의 용어집이 스크롤 리스트 형태라 수동 탐색만 가능하고 학습 게임화가 없음. 교육 탭 상단에 "오늘의 플래시카드" 섹션 추가: 카드 앞면에 용어명, 클릭하면 CSS 3D 플립 애니메이션으로 뒤집혀 정의 표시. "다음" 버튼으로 랜덤 다음 용어 이동. `localStorage.getItem('fc_seen_' + room_id)`로 이미 본 용어를 추적해 덜 본 용어 우선 노출. `app.js` 약 30줄 + CSS 플립 약 10줄, 서버 변경 불필요. 게임 대기 시간·휴식 시간에 자연스럽게 금융 용어를 학습하는 능동적 학습 경험 제공.
+
+- **진행자 대시보드 자산 분포 통계 카드** (`static/js/app.js` 진행자 탭, `GET /api/rooms/<rid>/host/members` 응답 활용): 진행자 순위표가 텍스트 리스트만 있어 전체 방의 자산 분포(평균·중앙값·상위 25% 기준선)를 한눈에 파악하기 어려움. `GET /api/rooms/<rid>/host/members` 응답에 이미 `gain_pct`가 포함되므로 서버 변경 없이 클라이언트에서 평균·중앙값·최댓값·최솟값을 계산해 순위표 위에 미니 통계 카드 4개로 표시. 추가로 `gain_pct > 0`인 학생 수 / 전체 학생 수 비율을 "수익권 57%" 형태로 강조. `app.js` 약 20줄. 교사가 "반 평균 수익률이 -2%입니다 → 지금 무엇을 잘못했나요?" 즉각 수업 피드백 가능.
+
+- **게임 시작 후 신규 참여 잠금 토글 (늦은 참여 방지)** (`app.py:738-750` `join_room()`, `app.py` 신규 `_join_locked` 집합): 게임이 이미 시작된 방에 학생이 뒤늦게 참여하면 초기 자산으로 합류해 불공정 재시작이 가능하고(닉네임 변경 후 재접속 포함), 진행자가 이를 막을 수단이 없음. `_join_locked: set = set()  # rid` 전역 집합 추가. `POST /api/rooms/<rid>/host/lock-join {'locked': bool}` 엔드포인트에서 집합에 rid 추가/제거. `join_room()` 에 `if rid in _join_locked and room.status != 'waiting': return jsonify({'error': '참여가 잠겨있습니다. 진행자에게 문의하세요.'}), 403` 추가. `room_dict()` 응답에 `'join_locked': rid in _join_locked` 포함. `_end_room()`에서 `_join_locked.discard(room.id)` 정리. 서버 약 12줄 + 클라이언트 진행자 토글 5줄. 게임 시작 후 닉네임 변경 재참여로 인한 불공정 리셋 완전 차단.
+
+### 제거/단순화할 것들
+
+- **`host_adjust()` `_get_member_lock` 없이 `m.cash` 수정 — 동시 거래 시 현금 lost-update 위험** (`app.py:951-956`): `host_adjust()`에서 `m = RoomMember.query.filter_by(...).first()` 후 `m.cash = max(0, m.cash + delta)`를 `_get_member_lock(rid, target_uid)` 없이 실행해 커밋. `trade()`, `create_deposit()`, `submit_quiz()` 는 모두 `with _get_member_lock(rid, user.id): db.session.refresh(m)` 패턴을 사용하지만 `host_adjust()`는 예외. 학생 매도(A 스레드: `m.cash` 읽기 → 5,000,000원)와 진행자 조정(B 스레드: `m.cash` 읽기 → 5,000,000원, `+1,000,000` 커밋 → 6,000,000)이 겹치고 A 스레드가 나중에 `m.cash = 5,550,000`으로 커밋하면 진행자 조정이 사라지는 lost-update 발생. 해결: `app.py:952` `m = RoomMember...` 이후에 `with _get_member_lock(rid, target_uid): db.session.refresh(m); m.cash = max(0, m.cash + delta); db.session.add(...)` 로 래핑. 3줄 수정으로 `trade()`와 동일한 안전성 확보.
+
+- **`host_force_price()` `pct = float(d.get('pct', 0))` try/except 없음 → 비정상 입력 시 500** (`app.py:1040`): `d.get('pct', 0)`이 `"큰폭"` 같은 문자열이면 `float()` → `ValueError` → 처리되지 않은 예외 → 500. 동일 파일의 `host_market_event()` (`app.py:1715`)는 `try: pct = float(...) except: return jsonify({'error': '잘못된 변동률'}), 400`으로 올바르게 처리하는 것과 불일치. `lottery_skip()` (`app.py:1535`) `int(d.get('round', 1))`도 동일 패턴. 해결: `app.py:1040` `pct = float(...)` → `try: pct = float(d.get('pct', 0)) \n except (TypeError, ValueError): return jsonify({'error': '숫자를 입력하세요.'}), 400` 으로 교체(2줄). `lottery_skip()` 동일 처리. 총 4줄 수정.
+
+- **`get_lottery()` 방 참여자 검증 없음 — 인증된 모든 사용자가 타 방 복권 상태 열람 가능** (`app.py:1463-1526`): `get_lottery()`는 `@login_required` 이지만 `RoomMember` 소속 여부를 검증하지 않음. `user = cur_user()` 직후 바로 `lot = _lots.get(rid, {})` 를 반환해, 다른 방에 참여 중인 학생이 직접 URL을 호출해 타 방의 복권 진행 상태·제출 인원 수 등을 열람 가능. `all_results`는 호스트 ID 검사로 보호되지만 `state`, `prize`, `picks` 수, `round` 등은 노출됨. 해결: `get_lottery()` 함수 초반에 `room = db.session.get(Room, rid) or abort(404); is_host = room.host_id == cur_user().id; if not is_host and not RoomMember.query.filter_by(room_id=rid, user_id=cur_user().id).first(): return jsonify({'error': '참여자가 아닙니다.'}), 403` 약 4줄 추가. `get_stocks()`, `get_room_news()`, `get_chart()` 에도 동일한 멤버십 체크 부재 — 같이 수정 권장.
+
+- **`cur_user()` None 반환 시 다수 엔드포인트에서 AttributeError → 500** (`app.py:237`, `trade()` `app.py:1085` 등 다수): `cur_user()`는 `db.session.get(User, session['user_id'])`를 반환하며 유저가 DB에 없으면 `None` 반환. `@login_required`는 세션에 `user_id` 키가 있는지만 체크하고 실제 DB 존재 여부는 확인 안 함. `trade()` (`app.py:1085`) `user = cur_user(); member = RoomMember.query.filter_by(... user_id=user.id)` — `user`가 `None`이면 `NoneType has no attribute 'id'` → AttributeError → 500. SQLite DB 파일 교체 또는 수동 삭제 후 세션 쿠키가 남아있는 상황에서 재현 가능. 해결: `login_required` 데코레이터(`app.py:231-235`) 내부에 `user_id = session.get('user_id'); if not user_id or not db.session.get(User, user_id): session.pop('user_id', None); return jsonify({'error': '세션이 만료됐습니다.'}), 401` 추가(4줄). `cur_user()` None 체크 코드가 모든 엔드포인트에서 불필요해짐.
+
+- **`get_rankings()` 캐시 없이 매 폴링마다 `_compute_leaderboard()` 전체 실행 — 학생 30명 × 3초 = 분당 600회 중복 DB 쿼리** (`app.py:1170-1175`, `app.py:270-298`): `_compute_leaderboard(rid)`는 `RoomMember`·`User`·`RoomHolding`·`Deposit` 4개 테이블 풀스캔 + 보유 종목수 × `get_price()` 호출. `room_dict()`에는 1.5초 TTL 캐시(`_room_cache`)가 있으나 랭킹 엔드포인트는 무캐시. 학생 30명이 3초마다 폴링하면 초당 10회 × 4 쿼리 = 초당 40 DB 쿼리 발생. 해결: `_rankings_cache: dict = {}; _rankings_cache_lock = threading.Lock()` 추가, `get_rankings()` 최상단에 `with _rankings_cache_lock: entry = _rankings_cache.get(rid); if entry and time.time() - entry['ts'] < 1.5: board = list(entry['data'])` 로 캐시 hit. `trade()`, `host_adjust()`, `submit_quiz()`, `_end_room()` 등 자산 변경 후 `_invalidate_room_cache(rid)` 옆에 `_invalidate_rankings_cache(rid)` 추가. 약 20줄로 DB 부하 90%+ 감소.
+
+- **`minigame_spin()` 내 `import math` 중복 — `app.py:6`에 이미 있음에도 함수 내부에 재선언** (`app.py:1387`): `app.py` 최상단 `import os, threading, math, ...` (`app.py:6`)에서 `math`가 이미 임포트되어 모든 스코프에서 사용 가능함에도 `minigame_spin()` 함수 본문 내에 `import math`가 별도로 삽입됨. Python 인터프리터가 매 호출마다 `sys.modules` 조회를 거치는 미세 오버헤드 외에, 읽는 사람이 "이 함수만 `math`를 쓰는 이유가 있나?" 오독 유발. 2026-09-08 항목에서 이미 `import math` 중복이 언급됐으나 실제로 삭제되지 않은 상태. 해결: `app.py:1387` `import math` 1줄 삭제.
+
+---
+
 ## 2026-09-11
 
 ### 추가하면 좋을 기능
