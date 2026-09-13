@@ -5810,3 +5810,28 @@
 
 - **`app.py:1244` `create_deposit()` — `lock_type` 외의 필드를 `request.json`에서 두 번 읽음**: `lock_type = (request.json or {}).get('lock_type', 'free')` (line 1242)와 `amount = float((request.json or {}).get('amount', 0))` (line 1239)에서 `request.json`을 두 번 호출. `request.json`은 Flask에서 한 번 파싱 후 캐싱되므로 기능적 문제는 없으나, 코드 상단에서 `d = request.json or {}`으로 한 번만 읽어 `d.get('amount')`, `d.get('lock_type')` 형태로 일관성 유지. 가독성 개선.
 
+
+---
+
+## 2026-09-13
+
+### 추가하면 좋을 기능
+
+- **거래 내역 실시간 피드 (참가자 화면)** (`app.py:1180-1198` `get_transactions()`, `static/js/app.js`): 현재 거래 내역은 페이지네이션된 REST 폴링으로만 볼 수 있어, 매수·매도 직후 방금 한 거래를 확인하려면 탭을 수동 새로고침해야 함. `trade()` 응답(`app.py:1125`)에 가장 최근 거래 1건(`last_tx: {name, action, shares, price, amount, timestamp}`)을 함께 반환하고, JS에서 성공 응답 수신 시 포트폴리오 탭 상단에 인라인 토스트로 표시. 서버 2줄 추가 + 클라이언트 약 8줄. "방금 얼마에 몇 주 샀는지" 즉시 피드백으로 거래 실수를 줄이고 교육 집중도 향상.
+
+- **진행자 일시정지 중 공지 메시지 브로드캐스트** (`app.py:823-833` `pause_room()`, 신규 `GET /api/rooms/<rid>/notice`): 진행자가 게임을 일시정지해도 학생들은 그 이유를 알 수 없어 "왜 멈췄나요?"라는 질문이 반복됨. `pause_room()` 요청 바디에 선택적 `notice` 필드를 추가해 `_room_notice: dict = {}  # rid -> str` 전역 딕셔너리에 저장. `GET /api/rooms/<rid>/notice`(캐시 불필요, 1초 폴링)로 참가자가 읽어 화면 상단에 배너 표시. 재개 시 자동 삭제. 서버 약 10줄 + 클라이언트 약 10줄. "퀴즈 설명 중입니다", "잠시 자료 설명" 등 안내로 수업 흐름 개선.
+
+- **종목별 학생 전체 매수·매도 집계 히트맵 (진행자용)** (`app.py:1170-1175` `get_rankings()`, `static/js/app.js`): 진행자가 어떤 종목이 학생들에게 인기 있는지 즉시 파악할 수 없음. `GET /api/rooms/<rid>/host/stock-activity`(신규, 권한 제한)에서 `RoomHolding` 테이블(`models.py:57-65`)을 집계해 종목별 보유 인원·총 보유주수를 반환. 진행자 랭킹 탭 아래 섹터별 색상 히트맵으로 표시(가장 많이 보유한 종목=빨강). 서버 약 10줄 + 클라이언트 약 15줄. "삼성전자를 가장 많이 들고 있네요 — 이유가 뭔가요?" 수업 토론 유발 도구.
+
+- **게임 종료 후 "나의 거래 요약" 다운로드** (`app.py:335-387` `_end_room()`, `models.py:68-79`): 게임 종료 후 진행자는 Excel 전체를 내려받을 수 있지만, 학생 개인은 자신의 거래 내역을 기록으로 남길 방법이 없음. 게임 종료 후(`room.status == 'ended'`) `GET /api/rooms/<rid>/transactions`에서 페이지 제한 없이 전체를 반환하는 플래그(`?all=1`) 추가 후, 클라이언트에서 CSV 변환(`Blob`) 다운로드 버튼 표시. 서버 5줄 + 클라이언트 약 15줄. 학생이 "내가 언제 어떤 실수를 했나" 복기하는 성찰 자료로 활용.
+
+### 제거/단순화할 것들
+
+- **룰렛 60초 하드 타임아웃 로직 중복 처리** (`app.py:796-801` `get_room()`): 룰렛 대기 중 60초 타임아웃이 발생하면 `_end_room()` → `return` 후 `_rlt_active.pop(rid, None)` 호출이 `_end_room()` 내부(384줄)와 `get_room()` 내 인라인(800줄) 두 곳에서 이중으로 실행될 수 있음. `_end_room()` 함수 자체가 이미 `_rlt_active.pop(room.id, None)`(375줄)을 포함하므로 801줄의 `_rlt_active.pop(rid, None)` 호출은 제거해도 무방. 코드 1줄 제거, 혼동 방지.
+
+- **`find_active_room()` 중복 쿼리 최적화** (`app.py:582-588`): `enter()`, `get_me()` 양쪽에서 매 요청마다 `find_active_room()` 가 Room + RoomMember 두 번 쿼리를 실행함. 세션 쿠키에 `active_room_id` 를 캐시하고 `/api/rooms/<rid>` 호출 시 상태 변경 후 갱신하는 방식으로 최초 진입 성능 개선 가능(특히 SQLite 환경에서 효과적). 또는 `JOIN` 단일 쿼리로 통합해 DB 왕복 1회로 줄이기.
+
+- **예금 이자 UI 혼선 — `expected_interest` vs `max_interest` 표시 정리** (`app.py:1212-1228` `get_deposits()`): `expected_interest`(경과 시간 비례 예상치)와 `max_interest`(만기 최대치)가 응답에 모두 포함되나, 클라이언트가 상황에 따라 어느 것을 표시할지 명확한 가이드라인이 없어 UI에서 두 값 중 어느 것을 메인으로 보여줄지 혼란 유발. `status == 'active'`일 때는 `expected_interest`만, `status == 'matured'`일 때는 `interest_earned`만 노출하도록 응답 필드 조건부 정리 — `max_interest`는 예금 가입 확인 메시지(`create_deposit` 1258줄)에서만 사용하고 목록 조회에서는 제거.
+
+- **`_quiz_settings` / `_quiz_state` / `_quiz_history` 전역 딕셔너리 — 방 종료 정리 누락 가능성** (`app.py:375-381` `_end_room()`): 룸이 종료되면 `_quiz_state`, `_quiz_history` 항목을 키 순회로 삭제하나, `_quiz_settings` 딕셔너리(`_quiz_settings.pop(room.id, None)`) 정리가 같은 블록에 이미 있어 문제없음(375줄). 그러나 구조가 `rid`와 `(rid, uid)` 혼합 키라 향후 코드 수정 시 누락 위험이 높음 — 이 세 딕셔너리를 하나의 `_quiz = {}  # rid -> {settings, state, history}` 중첩 딕셔너리로 통합하고 `_quiz.pop(rid, None)` 한 줄로 정리하도록 리팩터링.
+
