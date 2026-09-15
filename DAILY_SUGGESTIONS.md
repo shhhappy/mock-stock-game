@@ -5927,3 +5927,31 @@
 - **`get_room()` 내 룰렛 하드 타임아웃 60초가 복권 자동 일시정지 상태와 충돌 가능** (`app.py:796-801`): `if room.rlt_triggered and room.status == 'paused' and room.paused_at: if (now_dt - room.paused_at).total_seconds() >= 60: _end_room(room)` — 이 체크는 `rlt_triggered=True`일 때만 실행되지만, 복권 자동 일시정지(`auto_paused=True` in `_lots`) 상태에서 `room.rlt_triggered`가 False인 경우는 해당 없음. 그러나 복권 진행 중(`lottery_active=True`) 방을 `get_room()`이 60초 이상 폴링하지 않다가 재접속하면, 이 타임아웃은 동작 안 해 방이 영구 `paused` 상태로 남을 수 있음. 복권 자동 일시정지에도 동일한 타임아웃 가드 추가: `lot_cur = (_lots.get(rid) or {}).get('current') or {}; if lot_cur.get('auto_paused') and room.status == 'paused' and room.paused_at: if (now_dt - room.paused_at).total_seconds() >= (LOTTO_PICK_SECS + LOTTO_DRAW_SECS + 30): _end_room(room)` (약 3줄).
 
 - **Excel 내보내기 username 분리 로직이 이름 안의 공백에 취약** (`app.py:1784-1788`): `parts = e['username'].split(' ', 1)` 로 첫 번째 공백 기준 학번/이름 분리. `doAuth()` (`static/js/app.js:76-79`)에서 `const u = \`${sid} ${name}\`` 으로 연결하므로 구조 자체는 맞으나, 입력 폼(`index.html:53-59`)이 학번·이름 각각 `maxlength` 제한만 있고 내부 공백을 허용 — 학번에 공백 입력 시 `split(' ', 1)` 결과가 엉키고 Excel 학번 컬럼이 오염됨. 해결: `app.py:1784` 직전에 `sid = parts[0].strip(); name = parts[1].strip() if len(parts) > 1 else ''` 로 공백 제거 + `index.html:53` 학번 입력 필드에 `pattern="[^\s]+"` 또는 `oninput="this.value=this.value.replace(/\s/g,'')"` 추가로 프론트에서 선제 차단.
+
+---
+
+## 2026-09-15
+
+### 추가하면 좋을 기능
+
+- **게임 시작 시 전체화면 카운트다운 알림 (참여자용)** (`static/js/app.js` `enterParticipantLobby()` 폴링 루프, `static/index.html` 대기실 화면): 현재 참여자는 대기실에서 아무 시각적 신호 없이 갑자기 게임 화면으로 전환됨. 폴링이 `status: 'active'`를 감지했을 때 1~3초 "게임 시작!" 전체화면 오버레이(`position:fixed; z-index:9999`)를 표시한 뒤 `enterParticipantGame()`으로 넘어가면, 스마트폰을 내려놓고 있던 학생도 즉각 주목을 끌 수 있음. `app.js` 약 8줄 + `index.html` 오버레이 div 4줄. 서버 변경 불필요.
+
+- **관심종목 공유 기능 (학생 간 비교용)** (`static/js/app.js:17` `S.watchlist`, 현재 `localStorage`만 사용): 관심종목이 현재 기기 로컬에만 저장되어 친구와 비교하거나 수업 후 조회가 불가능. `GET /api/rooms/<rid>/portfolio`에 `watchlist` 필드를 추가하거나, 별도 `POST /api/rooms/<rid>/watchlist` 엔드포인트를 만들어 서버에 저장하면 기기 변경·시크릿 모드에서도 유지되고, 결과 화면에서 "내가 관심 뒀지만 안 산 종목" 분석도 가능. `app.py` 약 20줄 + `models.py`에 JSON 컬럼 또는 별도 테이블 추가.
+
+- **진행자 실시간 포트폴리오 지도 (히트맵)** (`app.py:262-290` `_compute_leaderboard()`, `app.py:908-912` `host_members()`): 진행자 순위 탭에는 총자산 순위만 보이고 "학생들이 어떤 종목에 몰려 있는가"를 한눈에 볼 수 없음. 순위 탭 상단에 종목별 보유 학생 수를 격자로 표시하는 히트맵(가로: 종목, 세로: 보유 인원 비율)을 추가하면, 교사가 "삼성전자에 80%가 몰려 있네요, 분산투자를 이야기해봅시다"라고 즉석 교육 포인트를 찾을 수 있음. `GET /api/rooms/<rid>/host/members` 응답에 `holdings_summary: [{symbol, name, holder_count}]`를 추가(DB join 1회). 클라이언트에 bar 차트 또는 간단한 표로 렌더링. 서버 약 15줄 + 클라이언트 약 20줄.
+
+- **결과 화면 URL 공유 / 재접속** (`app.py:1735-1745` `host_publish_results()`, `app.py:342` 게임 종료 시 `room.code = None`): 게임이 끝나고 `results_published=True` 상태에서 학생이 브라우저를 닫으면, 방 코드가 이미 NULL 처리(`_end_room()`)되어 재접속이 불가능함. `results_published` 상태의 방에 한해 `room.id` 기반의 직접 조회 엔드포인트 `GET /api/rooms/<rid>/results`(비로그인 가능 또는 URL 토큰 방식)를 추가하고, 진행자 결과 화면에 "결과 공유 링크 복사" 버튼을 두면, 수업 후 학생들이 결과를 다시 확인하거나 캡처할 수 있음. 서버 약 12줄 + 클라이언트 버튼 3줄.
+
+- **주문 가격 슬리피지 시뮬레이션 (교육 옵션)** (`app.py:1100-1103` `trade()` — `price = get_room_service(rid).get_price(symbol)`): 현재 매수·매도 가격이 항상 정확히 현재가로 체결됨. 실제 주식 거래에서의 슬리피지(대량 주문 시 체결가 불리)를 경험하게 하려면, 진행자 설정 탭에 "시장 충격 시뮬레이션" 토글을 추가하고, `trade()` 내부에서 `shares`가 클수록 최대 2~3% 불리한 가격으로 체결되도록 `effective_price = price * (1 + slippage_pct)` 계산을 추가할 수 있음. `app.py:1100` 부근 약 6줄 + 진행자 설정 저장 약 5줄. "왜 대량 주문을 한 번에 하면 안 되나요?" 교육 토론 유도.
+
+### 제거/단순화할 것들
+
+- **`_quiz_settings`, `_roulette_config`, `_lottery_custom_times` 서버 재시작 시 소멸** (`app.py:513-514` `_roulette_config`, `app.py:1577` `_quiz_settings`, `app.py:391` `_lottery_custom_times`): 이 세 딕셔너리는 모두 순수 in-process 메모리에 저장되어 Render 무료 플랜의 정기 재시작(또는 슬립 → 웨이크업)에서 초기화됨. 진행자가 게임 시작 전 신중하게 설정한 룰렛 확률, 퀴즈 보상/패널티, 복권 시각이 서버 재시작 한 번으로 모두 기본값으로 리셋됨. 해결: `Room` 모델에 `settings_json` 컬럼(`Text`, NULL 허용) 추가 후 세 딕셔너리 값을 JSON으로 직렬화해 저장 — 설정 변경 API(`app.py:1681-1701`, `1748-1763`, `1704-1732`)에서 `db.session.commit()` 호출 1회 추가. 읽기 측(`_rlt_cfg()` 등)에서 서버 재시작 후 딕셔너리가 비어있을 때 DB에서 복원. `app.py` 약 20줄 + `models.py` 컬럼 1개.
+
+- **`RoomMember.query.filter_by(room_id=rid).count()` 가 `room_dict()`에서 매 폴링마다 DB 히트** (`app.py:571`): `room_dict()` 함수 내 `'member_count': RoomMember.query.filter_by(room_id=room.id).count()`가 1.5초 TTL 캐시 적용 전 경로에서 매번 실행됨. 30명이 3초마다 폴링하면 초당 10회 `COUNT` 쿼리 발생. `_room_cache` 갱신 시점(`_get_room_cached`의 TTL 만료 직후)에만 실행되도록 이미 캐시가 잡혀있지만, `_invalidate_room_cache()` 호출마다 다시 DB 조회됨. 해결: `room_dict()`에 `member_count` 인자를 선택적으로 받거나, `_compute_leaderboard()` 호출 시 미리 구한 카운트를 재활용.
+
+- **`RoomTransaction` 기반 `spins_used` 카운트가 미니게임 API마다 DB 쿼리 발생** (`app.py:1294`, `app.py:1372`): `spins_used = RoomTransaction.query.filter_by(room_id=rid, user_id=user.id, action='RLT').count()` 가 `GET /api/rooms/<rid>/minigame`과 `POST .../minigame/spin` 양쪽에서 동일하게 실행됨. 룰렛이 활성화된 동안 학생 30명이 폴링하면 분당 수백 회 쿼리. `_rlt_active[rid]`에 `per_user_spins: {uid: count}` 딕셔너리를 추가해 spin 성공 시 카운터를 올리면, DB 쿼리 없이 O(1) 조회 가능. 단, 서버 재시작 시 초기화되므로 `_rlt_active`가 없는 경우에만 DB 폴백으로 초기화하면 됨. `app.py` 약 10줄 수정.
+
+- **`get_history()` 차트 데이터가 캐시 만료(120초)마다 완전히 다른 랜덤 캔들로 교체** (`stock_service.py:303-332`): 현재 `get_history()`는 매 호출마다 현재가 기준으로 무작위 워크를 역방향으로 생성해 OHLCV 막대를 만든 뒤 2분 캐시. 캐시 만료 후 동일 종목을 다시 조회하면 완전히 다른 차트가 나타나 연속성이 없음. 학생이 1분 후 같은 차트를 다시 열면 어제 상승이 오늘 하락으로 뒤집히는 혼란 발생. 해결 방법 2가지: ① 게임 시작 시 종목별 시드(`room_id ^ hash(symbol)`)를 고정해 캐시 재생성 시에도 동일한 과거 데이터 반환 — `random.Random(seed).gauss(...)` 활용. ② 과거 차트를 아예 제거하고 게임 내 실시간 가격 이력만 표시 — 구현이 더 단순하고 교육적으로도 "오늘 시장"에 집중하게 함.
+
+- **Excel 수익금액 컬럼 계산이 이미 청산된 총 자산 기반이라 설명 없으면 혼란** (`app.py:1783-1788`): `_compute_leaderboard()`는 게임 종료 후 모든 보유 주식이 현금화된 상태에서 호출되므로 `member.cash`가 청산 포함 전체 자산. 그러나 Excel 컬럼명 "수익금액(원)" (`app.py:1803`)이 "청산 후 총자산 - 시작자금" 임을 학생에게 설명 없이 나눠줄 경우 혼란 가능. 헤더 문자열을 `'최종 자산 (원 / 청산 완료)'`로 수정하고, 첫 행 바로 아래에 `'※ 게임 종료 시 보유 주식이 현재가로 자동 청산된 결과입니다.'` 문자열을 B2 셀에 병합하여 회색 소글씨로 삽입하면 현장 혼선 방지. `app.py:1803-1804` 약 3줄 수정.
