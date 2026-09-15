@@ -5955,3 +5955,35 @@
 - **`get_history()` 차트 데이터가 캐시 만료(120초)마다 완전히 다른 랜덤 캔들로 교체** (`stock_service.py:303-332`): 현재 `get_history()`는 매 호출마다 현재가 기준으로 무작위 워크를 역방향으로 생성해 OHLCV 막대를 만든 뒤 2분 캐시. 캐시 만료 후 동일 종목을 다시 조회하면 완전히 다른 차트가 나타나 연속성이 없음. 학생이 1분 후 같은 차트를 다시 열면 어제 상승이 오늘 하락으로 뒤집히는 혼란 발생. 해결 방법 2가지: ① 게임 시작 시 종목별 시드(`room_id ^ hash(symbol)`)를 고정해 캐시 재생성 시에도 동일한 과거 데이터 반환 — `random.Random(seed).gauss(...)` 활용. ② 과거 차트를 아예 제거하고 게임 내 실시간 가격 이력만 표시 — 구현이 더 단순하고 교육적으로도 "오늘 시장"에 집중하게 함.
 
 - **Excel 수익금액 컬럼 계산이 이미 청산된 총 자산 기반이라 설명 없으면 혼란** (`app.py:1783-1788`): `_compute_leaderboard()`는 게임 종료 후 모든 보유 주식이 현금화된 상태에서 호출되므로 `member.cash`가 청산 포함 전체 자산. 그러나 Excel 컬럼명 "수익금액(원)" (`app.py:1803`)이 "청산 후 총자산 - 시작자금" 임을 학생에게 설명 없이 나눠줄 경우 혼란 가능. 헤더 문자열을 `'최종 자산 (원 / 청산 완료)'`로 수정하고, 첫 행 바로 아래에 `'※ 게임 종료 시 보유 주식이 현재가로 자동 청산된 결과입니다.'` 문자열을 B2 셀에 병합하여 회색 소글씨로 삽입하면 현장 혼선 방지. `app.py:1803-1804` 약 3줄 수정.
+
+## 2026-09-15
+
+### 추가하면 좋을 기능
+
+- **플레이어별 자산 시계열 그래프 (게임 중/후)** (`app.py:262-290` `_compute_leaderboard()`, `app.py:1157-1162` `get_portfolio()`): 현재 포트폴리오 탭은 지금 이 순간의 자산만 보여주고, 게임 내에서 "내 자산이 어떻게 변해왔는가"를 볼 수 있는 수단이 없음. 전역 `_asset_snapshots: dict = {}  # rid -> {uid: [(ts, value), ...]}` 를 추가하고, `_compute_leaderboard()` 호출마다 또는 별도 60초 주기 타이머에서 각 참여자의 `member_total_value` 결과를 append. `GET /api/rooms/<rid>/portfolio` 응답에 `history: [(ts, value), ...]`를 추가해 클라이언트에서 SVG 또는 `<canvas>` 꺾은선 그래프로 렌더링. 서버 약 15줄 + 클라이언트 약 30줄. "언제 내 자산이 가장 많았나?", "뉴스 이후 얼마나 빠르게 반응했나?" 자기 성찰 포인트 제공.
+
+- **진행자용 실시간 대형 거래 알림 피드** (`app.py:1122-1126` `trade()` 커밋 직후): 현재 진행자는 학생들의 개별 거래를 실시간으로 파악할 수 없어, "A 학생이 방금 전재산의 70%를 NVDA에 몰빵했다"는 상황을 즉시 교육 소재로 활용하기 어려움. 전역 `_trade_feed: dict = {}  # rid -> deque(maxlen=30, [{uid, username, symbol, action, shares, amount, ts}])` 를 추가하고 `trade()` 커밋 직후에 `amount`가 `room.starting_cash * 0.1` 이상이면 피드에 push. `GET /api/rooms/<rid>/host/trade-feed` 엔드포인트에서 최근 30건 반환. 진행자 UI에 5초 폴링 미니 피드 추가. 서버 약 12줄 + 클라이언트 약 20줄. "지금 가장 큰 거래를 한 학생은 누구인지, 왜 그렇게 결정했는지" 수업 중 즉석 인터뷰 가능.
+
+- **퀴즈 정답률 집계 대시보드 (진행자용)** (`app.py:1575-1652` 퀴즈 시스템, `_quiz_history` in-process dict): 현재 `_quiz_history`는 참여자별로만 기록되고 진행자가 "어떤 문항에서 학생들이 가장 많이 틀렸는가"를 볼 수 없음. `_quiz_history`는 이미 `(rid, uid) -> [{question, correct, ...}]` 형태로 존재하므로 `GET /api/rooms/<rid>/host/quiz-stats` 엔드포인트에서 문항별 `correct_count`, `total_count`, `accuracy_pct`를 집계해 반환(약 10줄). 진행자 퀴즈 탭에 "가장 많이 틀린 문항 TOP 5" 테이블 추가(클라이언트 약 15줄). 서버 재시작 전까지 유효하지만 수업 한 세션 내에서는 충분. "PER 개념을 다시 설명해야겠습니다" 즉각 교수 피드백 가능.
+
+- **종목별 뉴스 이벤트 히스토리 로그 (게임 내 타임라인)** (`stock_service.py:163-186` `_generate_news()`, `app.py:1047-1058` `host_send_news()`): 게임 중 어떤 뉴스가 언제 발생했는지 기록이 없어, 게임 종료 후 "이 종목이 왜 올랐나요?"를 되짚을 수 없음. `StockService`에 `_news_log: list = []  # [{'ts', 'items', 'source': 'auto'|'host'}]` 속성 추가(최대 200건 유지, `deque(maxlen=200)`). `_generate_news()` 및 `trigger_news()` 호출 시 로그에 append. `GET /api/rooms/<rid>/news/history` 엔드포인트로 전체 히스토리 반환. 클라이언트에서 타임라인 형태로 표시(게임 진행 시간 대비 x축). 서버 약 15줄 + 클라이언트 약 20줄. "10분 전 뉴스가 5분 뒤 주가에 반영됐다"는 시장 지연 효과를 시각적으로 설명 가능.
+
+- **게임 템플릿 저장 / 불러오기 (진행자용)** (`app.py:676-715` `create_room()`, 신규 `Room` 컬럼 또는 별도 `RoomTemplate` 모델): 교사가 매 수업마다 게임 시간, 시작 자금, 예금 금리, 룰렛 확률, 퀴즈 보상/패널티를 처음부터 다시 설정하는 번거로움이 있음. `POST /api/rooms/templates {'name': str, 'settings': {...}}` 로 현재 방 설정을 JSON으로 저장하고, 방 생성 시 `template_id` 파라미터로 불러올 수 있도록 하면 수업 전 준비 시간 단축. `RoomTemplate(id, host_id, name, settings_json)` 모델 약 5줄 + `app.py` 엔드포인트 약 20줄. 반복 수업이 많은 교사에게 핵심 편의 기능.
+
+- **퇴장(kick) 기능 게임 중으로 확장 및 일시적 관전 모드** (`app.py:914-925` `kick_member()` — 현재 `room.status != 'waiting'`이면 강퇴 불가): 현재 강퇴는 대기 중 상태에서만 가능하며, 게임 시작 후 인터넷이 끊긴 학생 또는 이탈 학생의 닉네임을 정리할 방법이 없음. `kick_member()` 조건을 완화해 `waiting` 뿐 아니라 `active/paused` 상태에서도 가능하되, 해당 멤버의 주식을 현재가로 청산하고 `RoomMember`를 삭제하는 로직 추가(약 12줄). 또는 `is_spectator: bool` 컬럼을 `RoomMember`에 추가해 거래는 막되 순위에는 그대로 포함하는 "관전 모드"로 전환 가능. 현장에서 학생이 무단 이탈했을 때 진행자의 선택지 확대.
+
+### 제거/단순화할 것들
+
+- **`import math` 가 함수 내부에 있음** (`app.py:1379`): `minigame_spin()` 함수 본문 안에 `import math`가 있어 API 호출마다 모듈 임포트 구문이 실행됨. Python 인터프리터가 임포트를 캐싱해 실제 파일 I/O는 없지만, PEP 8 위반이며 `pylint`/`flake8` 경고를 발생시키고 코드 가독성을 해침. 파일 최상단 `import` 블록(app.py:6행 `import os, threading, math, re, json, logging`에 이미 `math`가 포함됨)을 확인하면 중복 임포트이므로 `app.py:1379`의 `import math` 한 줄만 삭제하면 됨.
+
+- **`host_force_price` float 변환 예외 미처리** (`app.py:1038`): `pct = float(d.get('pct', 0))`에 try/except가 없어 `pct`가 `"abc"` 같은 비숫자 문자열이면 `ValueError`가 발생해 500 Internal Server Error 반환. 같은 파일 `host_market_event()`(app.py:1671)에는 `try: pct = float(...) except: return jsonify(...)` 패턴이 적용돼 있는데 `host_force_price`만 누락됨. `app.py:1037-1038`에 동일 패턴으로 try/except 2줄 추가하면 해결.
+
+- **`_push_notified.clear()` 전체 초기화로 중복 알림 가능성** (`app.py:217-218`): `len(_push_notified) > 5000`이면 `_push_notified.clear()`로 전체 삭제. 초기화 직후 동일 회차에 대한 키가 다시 없어지므로 이미 발송된 알림에 대해 중복 발송이 발생할 수 있음(특히 다수 방이 동시 활성일 때). `{key: expiry_timestamp}` 딕셔너리로 교체해 만료된 항목만 순차 삭제하거나, `len > 5000` 시 오래된 항목 절반만 제거(`set - recent_half`)하는 방식으로 교체. `app.py:215-218` 약 5줄 수정.
+
+- **`_compute_leaderboard()` 캐시 없이 반복 호출** (`app.py:262-290`, `app.py:1172`와 `app.py:912`): `get_rankings()`와 `host_members()` 모두 `_compute_leaderboard(rid)`를 캐시 없이 직접 호출. 내부에서 `RoomMember`, `RoomHolding`, `Deposit` 3개 테이블 풀 스캔 + 종목별 `svc.get_price()` N회 호출. 30명 방 기준 참여자 폴링 3초 간격이면 초당 10회 이상 실행. `_room_cache` 와 동일한 `{rid: {'ts': float, 'data': list}}` 딕셔너리 + 2초 TTL로 감싸면 `_invalidate_room_cache(rid)` 호출 시 함께 무효화. `app.py` 약 10줄 추가.
+
+- **`create_room()` 숫자 파라미터 검증 미흡 — ValueError 500 에러 가능** (`app.py:708-710`): `int(d.get('duration_minutes', 30))`, `float(d.get('starting_cash', ...))`, `float(d.get('deposit_rate', 3.0))` 세 변환에 try/except 없음. 진행자가 UI를 통해 정상 숫자를 보내는 경우는 문제없지만, 방 생성 API를 직접 호출하거나 프록시가 값을 오염시키면 500 에러. `app.py:707-711` 전체를 try/except ValueError로 감싸고 `jsonify({'error': '숫자 입력 오류'}), 400` 반환하는 3줄 수정으로 해결.
+
+- **`Room.query.get_or_404(rid)` 레거시 API 40+ 곳** (`app.py:760`, `811`, `826`, `839`, `855` 등 총 40여 개 호출): `Query.get()` 및 이를 래핑하는 `get_or_404()`는 SQLAlchemy 2.0에서 공식 레거시로 지정되어 있음. Flask-SQLAlchemy 3.x는 `db.get_or_404(Room, rid)` 또는 `db.session.get(Room, rid) or abort(404)` 패턴을 권장. Render 같은 호스팅에서 의존성 업그레이드 시 `LegacyAPIWarning` 또는 AttributeError로 앱이 기동 불가할 수 있음. sed 한 줄 `sed -i 's/Room\.query\.get_or_404(rid)/db.get_or_404(Room, rid)/g'` 로 기계적 치환 가능.
+
+- **`host_lottery_times` 당일 시각만 지원해 다음 날 게임에서 복권 미발동** (`app.py:1724-1726`): 복권 시각 설정 시 `now_kst.replace(hour=hh, minute=mm, ...)` 로 오늘 날짜에 시각만 교체. 진행자가 게임을 내일 수업용으로 미리 설정하면 모든 시각이 이미 과거가 돼 복권이 한 번도 발동하지 않음. 수정: `target_kst`가 `now_kst`보다 이전이면 `target_kst += timedelta(days=1)` 로 다음 날 동일 시각으로 자동 보정하는 한 줄 추가(`app.py:1726` 직후).
