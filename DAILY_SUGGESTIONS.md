@@ -6015,3 +6015,32 @@
 - **`_ending_soon` 셋 정리 경로 누락 위험** (`app.py:144`, `app.py:385` `_end_room()`): 방 종료 시 `_ending_soon.discard(room.id)` 가 `_end_room()` 내부에만 있어, 만약 예외·DB 오류로 `_end_room()` 이 중간에 실패하면 해당 room.id가 셋에 영구 잔류. `get_room()` 폴링 응답에 `ending_soon: True` 가 잘못 포함되어 UI에 "곧 종료" 배너가 사라지지 않을 수 있음. `end_room()` API 핸들러(`app.py:852`) 최상단에서 `_ending_soon.discard(rid)` 를 try/finally로 보장하거나, `room.status == 'ended'` 일 때 `get_room()` 응답에서 `_ending_soon`을 무시하도록 조건 추가. 2줄 추가로 방어적 처리.
 
 - **`static/qr-display.html` 파일을 별도 정적 파일로 유지할 필요 없음** (`app.js:263` `openGameQRWindow()`, `static/qr-display.html`): QR 표시 전용 별창이 별도 HTML 파일로 분리되어 있어 유지보수 포인트가 늘어남(CSS 변경 시 양쪽 반영 필요). `index.html` 내부에 `<div id="modal-qr-big" class="modal">` 형태의 풀스크린 모달로 통합하면 `qr-display.html` 파일을 삭제할 수 있음. 진행자가 빔프로젝터에 띄울 때 "새 창"이 필요하다면 `window.open()` 대신 `<a href="#" target="_blank">` 로 `index.html?mode=qr&rid=N` 쿼리 파라미터를 처리하는 방식으로 단일 파일 유지 가능.
+
+## 2026-09-16 (daily-analysis-2)
+
+### 추가하면 좋을 기능
+
+- **진행자 전체 방송(공지 배너) 기능** (`app.py` 신규 라우트, `app.js` 신규 폴링 처리): 게임 도중 교사가 "지금부터 배터리 섹터 이벤트 시작합니다"처럼 학생 화면에 즉시 공지를 띄울 수단이 없음. `app.py`에 `POST /api/rooms/<rid>/host/announce` 라우트 추가(메시지 최대 100자), `_room_announcements = {}` (rid → {msg, ts}) 인메모리 저장. `GET /api/rooms/<rid>` 응답에 `announcement` 필드를 포함시키거나 별도 폴링 엔드포인트 노출. 클라이언트는 기존 `pollInterval` 안에서 공지가 변경되면 전면 배너로 5초간 표시. 서버 20줄 + 프런트 10줄. 라이브 수업에서 교사가 게임 흐름을 구두 설명 없이 화면으로 전달 가능.
+
+- **진행자 긴급 거래 동결(Emergency Freeze) 버튼** (`app.py:1082` `trade()`, `app.js` 호스트 설정탭): 현재 거래 일시정지는 룰렛·복권 자동 트리거 전용이며, 교사가 임의로 "지금은 매매 금지" 상태를 만들 방법이 없음. `Room` 모델에 `trade_frozen BOOLEAN DEFAULT 0` 컬럼 추가, 호스트 전용 `POST /api/rooms/<rid>/host/toggle-freeze` 라우트에서 플래그 토글. `trade()` 핸들러 도입부(`app.py:1085` 바로 뒤)에서 `if room.trade_frozen: return jsonify({'error': '진행자가 거래를 일시 동결했습니다.'}), 423` 반환. DB 1컬럼 + 서버 10줄 + 프런트 버튼 1개. 뉴스 이벤트 설명 중 학생들이 급하게 매매하는 상황을 교사가 제어 가능.
+
+- **종목별 학생 보유 현황 집계 화면 (히트맵/리스트)** (`app.py` 신규 라우트, `app.js` 호스트 탭): 교사가 "학생들이 어떤 종목을 많이 들고 있는지" 파악하는 기능이 없어, 어느 섹터 이벤트를 써야 수업 효과가 큰지 알 수 없음. `GET /api/rooms/<rid>/host/holdings-summary` 엔드포인트 추가: `RoomHolding.query.filter_by(room_id=rid)` 결과를 symbol별로 집계해 `{symbol, name, holder_count, total_shares, total_value}` 배열 반환. 호스트 탭에 "보유현황" 서브탭 추가해 테이블로 표시. 서버 15줄 + 프런트 테이블 렌더 20줄. 교사가 "삼성전자 보유 학생이 18명이네, 반도체 뉴스 이벤트를 써봐야지" 식의 교육적 의사결정 가능.
+
+- **방 설정: 최대 1회 거래 수량 상한 (per-trade cap)** (`app.py:1082` `trade()`, `models.py:25` Room 모델): 현재 한 번에 수십만 주를 살 수 있어 초기 자금 전량을 한 종목에 한 번에 투입 가능. `Room` 테이블에 `max_shares_per_trade INTEGER DEFAULT 0` (0=무제한) 컬럼 추가, 방 생성 폼에 선택 입력. `trade()` BUY/SELL 분기 공통 검증부(`app.py:1099` `if shares <= 0` 바로 뒤)에서 `if room.max_shares_per_trade > 0 and shares > room.max_shares_per_trade` 이면 오류 반환. DB 1컬럼 + 서버 5줄 + 프런트 설정 폼 5줄. "한 번에 100주까지만" 규칙으로 분산·분할 매수 습관 유도.
+
+- **포트폴리오 섹터 배분 도넛 차트** (`app.js:1140` `renderPortfolio()`, `/api/rooms/<rid>/portfolio`): 현재 포트폴리오 탭에 보유 종목 목록과 총 자산만 표시되고, 섹터별 비중 시각화가 없어 분산투자 여부를 직관적으로 파악하기 어려움. 포트폴리오 API 응답에는 이미 `sector` 필드가 포함되므로 서버 변경 불필요. 프런트에서 보유 종목을 섹터별로 집계 후 `Chart.js` 도넛 차트를 포트폴리오 탭 상단에 렌더링. 기존 `portChart` 변수(`app.js:7`)를 재활용. 약 25줄 추가. 학생이 "내 포트폴리오가 반도체에 70% 쏠렸구나" 를 즉시 시각화로 확인.
+
+### 제거/단순화할 것들
+
+- **`_push_scheduler_loop` 에서 DB 세션을 `remove()` 하지 않아 커넥션 풀 서서히 소진** (`app.py:220-228`): 데몬 스레드가 `with app.app_context()` 안에서 매 10초 SQLAlchemy 쿼리를 실행하지만, 틱마다 `db.session.remove()`를 호출하지 않아 스레드 전용 scoped session이 커넥션을 반환하지 않는 상황이 발생 가능. 특히 `_send_push_to_room()`(`app.py:151`) 내 `db.session.commit()` 도중 예외 시 세션이 오염된 채 다음 틱까지 유지. `_push_scheduler_tick()` 호출 후 `finally: db.session.remove()` 추가, 1줄 수정으로 장기 운영 시 커넥션 부족(OperationalError) 방지.
+
+- **`get_room()` 핸들러에서 `cur_user()` 를 최대 5회 중복 호출** (`app.py:757-806`): `cur_user()`는 `db.session.get(User, session['user_id'])` DB 쿼리를 매번 실행. `get_room()` 의 다양한 조기 반환 경로(762·768·789·800·806행)에서 각각 `cur_user().id` 를 호출하므로 최악의 경우 한 요청에서 5회 쿼리 발생. 함수 초입에서 `user = cur_user()` 로 한 번만 조회 후 재사용. 5줄 수정, 고빈도 폴링(`pollInterval=3s × N명`) 환경에서 DB 부하 의미있게 감소.
+
+- **`find_active_room()` JOIN 쿼리에 `user_id` 인덱스 없어 대형 수업 시 풀 스캔** (`app.py:582-588`, `models.py:47-54`): `RoomMember.query.join(Room).filter(RoomMember.user_id == uid, ...)` 는 `room_members.user_id` 컬럼 조건이 포함된 JOIN이나 `models.py` 에 정의된 `__table_args__`에는 `UniqueConstraint('room_id', 'user_id')` 만 있고 `user_id` 단독 인덱스가 없음. 100명 수업에서 매 `/api/auth/me`, `/api/rooms/<rid>` 마다 full-scan 발생. `__table_args__`에 `db.Index('ix_rm_user', 'user_id')` 1줄 추가 + `db.create_all()` 재실행. 쿼리 시간 O(N) → O(log N) 개선.
+
+- **`_push_notified` 셋을 한꺼번에 `.clear()` 해 1분 이내 중복 알림 발생 가능** (`app.py:216-218`): "5000개 초과 시 `_push_notified.clear()`" 로직은 최근 10초 이내 추가된 키도 삭제해버려, 다음 스케줄러 틱(10초 후)에서 같은 알림이 재발송될 수 있음. `_push_notified` 를 `set` 대신 `dict[key, timestamp]` 로 변경해 `now - ts > 120` 인 항목만 만료 제거(`_push_notified = {k: v for k, v in _push_notified.items() if now - v < 120}`). 3줄 수정으로 중복 알림 완전 차단.
+
+- **`get_history()` 에서 과거 가격을 역방향 체인으로 생성해 차트 방향이 반전** (`stock_service.py:318-332`): `for i in range(n_bars, 0, -1)` 루프에서 `price = c` 로 체인하며 첫 바(i=n_bars, 가장 오래된 날)가 현재 가격에서 출발하고 마지막 바(i=1, 최근)가 그 파생값이 됨. 결과적으로 마지막 봉의 `close` 가 현재 `get_price()` 값과 불일치해 차트의 우단 값과 현재가 표시가 어긋남. 루프를 `price = current; for i in range(n_bars-1, -1, -1): ... price = o` 처럼 현재가에서 시작해 backward-simulate 하거나, 현재가로 끝나도록 마지막 봉을 강제 설정. 5줄 수정으로 차트 우단 가격과 현재가 일치.
+
+- **`push_subscribe` 에서 endpoint URL 길이 미검증으로 `VARCHAR(500)` 초과 시 DB 에러** (`app.py:649-662`, `models.py:87`): `PushSubscription.endpoint = db.Column(db.String(500))` 이나 구독 등록 핸들러에서 `endpoint` 길이를 확인하지 않음. Chrome/Firefox 의 FCM/Mozilla 엔드포인트는 통상 200자 이내이나 커스텀 서버 엔드포인트는 더 길 수 있고, 악의적 클라이언트가 500자 초과 문자열을 전송하면 PostgreSQL은 DataError, SQLite는 조용히 저장해 향후 쿼리에서 불일치 발생. `push_subscribe()` 에서 `if len(endpoint) > 500: return jsonify({'error': '엔드포인트가 너무 깁니다.'}), 400` 3줄 추가. 또한 `p256dh`(통상 87자)와 `auth`(통상 24자)도 각각 `VARCHAR(200)`, `VARCHAR(100)` 상한에 맞는 길이 검증 추가 권장.
+
