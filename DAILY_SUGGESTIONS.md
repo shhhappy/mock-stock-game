@@ -5987,3 +5987,31 @@
 - **`Room.query.get_or_404(rid)` 레거시 API 40+ 곳** (`app.py:760`, `811`, `826`, `839`, `855` 등 총 40여 개 호출): `Query.get()` 및 이를 래핑하는 `get_or_404()`는 SQLAlchemy 2.0에서 공식 레거시로 지정되어 있음. Flask-SQLAlchemy 3.x는 `db.get_or_404(Room, rid)` 또는 `db.session.get(Room, rid) or abort(404)` 패턴을 권장. Render 같은 호스팅에서 의존성 업그레이드 시 `LegacyAPIWarning` 또는 AttributeError로 앱이 기동 불가할 수 있음. sed 한 줄 `sed -i 's/Room\.query\.get_or_404(rid)/db.get_or_404(Room, rid)/g'` 로 기계적 치환 가능.
 
 - **`host_lottery_times` 당일 시각만 지원해 다음 날 게임에서 복권 미발동** (`app.py:1724-1726`): 복권 시각 설정 시 `now_kst.replace(hour=hh, minute=mm, ...)` 로 오늘 날짜에 시각만 교체. 진행자가 게임을 내일 수업용으로 미리 설정하면 모든 시각이 이미 과거가 돼 복권이 한 번도 발동하지 않음. 수정: `target_kst`가 `now_kst`보다 이전이면 `target_kst += timedelta(days=1)` 로 다음 날 동일 시각으로 자동 보정하는 한 줄 추가(`app.py:1726` 직후).
+
+---
+
+## 2026-09-16
+
+### 추가하면 좋을 기능
+
+- **QR 창(`qr-display.html`)에 참가자 실시간 인원 수 표시** (`static/qr-display.html`, `app.js:263` `openGameQRWindow()`): 교사가 QR 코드를 TV/빔프로젝터에 띄워둘 때 "지금 몇 명이 접속했는지" 확인하려면 다른 탭으로 이동해야 함. `qr-display.html`에 `/api/rooms/<rid>/host/lobby-members`를 3초마다 폴링해 "참가: N명 ✓" 텍스트를 QR 코드 아래에 업데이트하는 JS 15줄 추가. 로그인 없이 읽어도 무방한 정보이므로 서버 변경 불필요. 교사가 한 화면으로 "QR 공유 + 접속 현황"을 동시에 확인 가능해 진행 효율 향상.
+
+- **참가자별 보유 종목 수 상한 설정 (분산투자 강제)** (`app.py:1082` `trade()` BUY 분기, `models.py:25` Room 모델): 현재 한 학생이 자금 전부를 한 종목에 쏟아부을 수 있어 "분산투자" 원칙을 체험할 기회가 없음. `Room` 테이블에 `max_distinct_holdings INTEGER DEFAULT 0` 컬럼(0=무제한) 추가, 방 생성 폼에 선택 입력 추가. `trade()` BUY 분기(`app.py:1106`)에서 신규 종목 첫 매수 시 `RoomHolding.query.filter_by(room_id=rid, user_id=user.id).count() >= room.max_distinct_holdings` 이면 "보유 종목 수 한도 초과 (N개까지만)" 오류 반환. 서버 20줄 + 프런트 설정 폼 10줄. 교사가 "최대 5종목" 규칙으로 분산투자를 유도하는 실험 가능.
+
+- **거래 내역 탭에서 종류별 필터 버튼** (`app.js:1700` `loadTxn()`, `/api/rooms/<rid>/transactions`): 학생이 거래 내역을 보면 매수·매도·퀴즈 보상·룰렛·예금 조정이 뒤섞여 흐름 파악이 어려움. 프런트에 "전체 / 매매 / 퀴즈·이벤트" 필터 버튼 3개 추가하고, `loadTxn(reset=true)` 호출 시 `?type=trade|event|all` 파라미터를 서버에 전달. 서버 `get_transactions()` (`app.py:1180`)에서 `action=BUY,SELL` vs `action=ADJ,RLT` 로 WHERE 분기. 프런트 버튼 탭 6줄 + 서버 필터링 5줄. 학생이 "내 매매 결과"와 "이벤트 수익" 따로 검토하는 분석 습관 형성.
+
+- **진행자 화면 순위 탭 자동 새로고침** (`app.js:377` `switchHostTab()`, `app.js:483` `loadHostMembers()`): 진행자가 순위 탭을 열어 놓아도 자동 갱신이 없어 매번 탭을 다시 누르거나 새로고침해야 함. `switchHostTab('rank')` 호출 시 `S._rankInterval = setInterval(loadHostMembers, 8000)` 시작, 다른 탭으로 전환 시 `clearInterval(S._rankInterval)` 정지. 진행자 화면 `enterHostGame()` (`app.js:308`)에서도 초기 정지 보장. 약 6줄 추가. 교사가 순위표를 실시간으로 보며 수업을 진행하는 흔한 사용 패턴에 필수.
+
+- **퀴즈 오답 해설에 관련 교육 자료 바로 가기 링크** (`app.js:976` `submitQuiz()` 오답 UI, `education_data.py` QUIZ_QUESTIONS): 퀴즈를 틀린 후 해설 텍스트만 보여주고 끝남. `QUIZ_QUESTIONS` 각 항목에 `'guide_id': int | None` 필드 추가, `submit_quiz()` 응답에 `guide_id` 포함. 오답 팝업 하단에 "📚 더 알아보기" 버튼 렌더링 → `openGuide(guide_id)`로 연결. 서버 응답 1필드 + 프런트 버튼 4줄. 틀린 개념을 즉시 복습하는 실시간 형성평가 루프 완성.
+
+### 제거/단순화할 것들
+
+- **`force_price` 와 `_next_price` 의 클램프 범위 불일치 수정** (`stock_service.py:160-161` vs `stock_service.py:247-248`): 진행자가 `force_price`로 가격을 `base × 0.3` 까지 내릴 수 있지만, 바로 다음 자연 틱에서 `_next_price()` 의 `max(base * 0.6, new_price)` 클램프가 걸려 가격이 2배로 반등. "폭락 이벤트 → 저가 매수" 시나리오가 한 틱 만에 무효화됨. `force_price` 범위를 `base × 0.6 ~ base × 1.4` 로 좁히거나 `_next_price()` 범위를 `base × 0.3` 까지 확장해 일관성 확보. 1줄 수정으로 해결 가능.
+
+- **`_quiz_state` / `_quiz_history` 인메모리 상태가 서버 재시작 시 소실** (`app.py:1577-1578`): Render free tier는 수 분 비활동 후 슬립하고 재시작 시 인메모리 딕셔너리가 리셋됨. 쿨다운이 풀려 학생이 퀴즈 60초 제한 없이 반복 접근 가능. 최소한 쿨다운 만료 시각을 Flask 세션(`session['quiz_cd_until']`)에 저장해 재시작 후에도 유지. 히스토리는 `RoomTransaction`에 `symbol='QUIZ'`, `note=해설` 로 영속화하거나 최대 50건 제한 로직(`app.py:1651` `del hist[:-50]`)을 DB 쿼리 기반으로 교체. 약 10줄 수정.
+
+- **거래 내역 이름 표시에서 QUIZ·LOTTO 심볼이 "자산조정"으로 뭉뚱그려짐** (`app.py:979-981`, `app.py:1191-1193`): `STOCKS.get(t.symbol, {}).get('name', '자산조정')` 로직이 symbol='QUIZ', 'LOTTO', 'ROULETTE' 등에 대해 이름을 찾지 못해 전부 "자산조정"으로 표시. 학생이 "퀴즈 오답 패널티"와 "진행자 자산 조정"을 구별할 수 없음. `note` 필드에 이미 상세 사유가 저장되어 있으므로 표시 이름을 `t.note or '자산조정'` 으로 단순화하거나, symbol별 표시명 매핑 `{'QUIZ':'퀴즈', 'LOTTO':'복권', 'ROULETTE':'룰렛', 'ADJ':'조정', 'DEPOSIT':'예금'}` 딕셔너리를 공통으로 사용. 2줄 수정, 학생 거래 내역 가독성 즉시 향상.
+
+- **`_ending_soon` 셋 정리 경로 누락 위험** (`app.py:144`, `app.py:385` `_end_room()`): 방 종료 시 `_ending_soon.discard(room.id)` 가 `_end_room()` 내부에만 있어, 만약 예외·DB 오류로 `_end_room()` 이 중간에 실패하면 해당 room.id가 셋에 영구 잔류. `get_room()` 폴링 응답에 `ending_soon: True` 가 잘못 포함되어 UI에 "곧 종료" 배너가 사라지지 않을 수 있음. `end_room()` API 핸들러(`app.py:852`) 최상단에서 `_ending_soon.discard(rid)` 를 try/finally로 보장하거나, `room.status == 'ended'` 일 때 `get_room()` 응답에서 `_ending_soon`을 무시하도록 조건 추가. 2줄 추가로 방어적 처리.
+
+- **`static/qr-display.html` 파일을 별도 정적 파일로 유지할 필요 없음** (`app.js:263` `openGameQRWindow()`, `static/qr-display.html`): QR 표시 전용 별창이 별도 HTML 파일로 분리되어 있어 유지보수 포인트가 늘어남(CSS 변경 시 양쪽 반영 필요). `index.html` 내부에 `<div id="modal-qr-big" class="modal">` 형태의 풀스크린 모달로 통합하면 `qr-display.html` 파일을 삭제할 수 있음. 진행자가 빔프로젝터에 띄울 때 "새 창"이 필요하다면 `window.open()` 대신 `<a href="#" target="_blank">` 로 `index.html?mode=qr&rid=N` 쿼리 파라미터를 처리하는 방식으로 단일 파일 유지 가능.
