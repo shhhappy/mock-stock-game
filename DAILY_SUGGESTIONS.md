@@ -6044,3 +6044,29 @@
 
 - **`push_subscribe` 에서 endpoint URL 길이 미검증으로 `VARCHAR(500)` 초과 시 DB 에러** (`app.py:649-662`, `models.py:87`): `PushSubscription.endpoint = db.Column(db.String(500))` 이나 구독 등록 핸들러에서 `endpoint` 길이를 확인하지 않음. Chrome/Firefox 의 FCM/Mozilla 엔드포인트는 통상 200자 이내이나 커스텀 서버 엔드포인트는 더 길 수 있고, 악의적 클라이언트가 500자 초과 문자열을 전송하면 PostgreSQL은 DataError, SQLite는 조용히 저장해 향후 쿼리에서 불일치 발생. `push_subscribe()` 에서 `if len(endpoint) > 500: return jsonify({'error': '엔드포인트가 너무 깁니다.'}), 400` 3줄 추가. 또한 `p256dh`(통상 87자)와 `auth`(통상 24자)도 각각 `VARCHAR(200)`, `VARCHAR(100)` 상한에 맞는 길이 검증 추가 권장.
 
+
+## 2026-09-17
+
+### 추가하면 좋을 기능
+
+- **동일 닉네임 학생 공유 계정 방지 — 방 코드 + 닉네임 기반 격리** (`app.py:604-618` `enter()`, `models.py:16-22` `User`): 현재 `User.username`에 unique 제약이 있어 두 학생이 같은 닉네임("김민준")을 입력하면 동일 계정으로 로그인돼 현금·거래 내역·포트폴리오를 공유하는 치명적 버그. `enter()` 가 `User.query.filter_by(username=u).first()` 로 기존 사용자를 반환하기 때문. 단기 해결: 입장 시 방 코드를 같이 받아 닉네임을 `{room_code}#{username}` 내부 키로 저장하거나, `enter()` 에 방 코드 파라미터를 추가해 같은 방에서만 중복 체크(다른 방은 동명 허용). 또는 학번 + 이름 조합을 `username`으로 사용해 학생 식별을 강화. 현행 단일-페이지 아키텍처에서 서버 약 15줄 수정으로 교실 환경의 핵심 데이터 무결성 보장.
+
+- **진행자 화면에 실시간 최근 거래 피드** (`app.py:906-912` `host_members()`, 신규 `GET /api/rooms/<rid>/host/recent-trades`): 교사가 게임 중 어떤 학생이 어떤 종목을 사고 파는지 실시간으로 볼 방법이 없어 수업 연결이 어려움. `GET /api/rooms/<rid>/host/recent-trades?limit=20` 엔드포인트를 추가해 `RoomTransaction.query.filter_by(room_id=rid).order_by(timestamp.desc()).limit(20)` 결과를 `{username, symbol_name, action, shares, price, timestamp}` 형태로 반환(약 12줄). 호스트 대시보드 "순위" 탭 하단에 타임라인 목록으로 렌더링, 8초마다 자동 갱신. "지금 홍길동 학생이 테슬라를 200주 매수했네요—왜 그런 결정을 했을까요?" 즉각 수업 연결 가능.
+
+- **게임 종료 후 종목별 가격 변동 요약 (종료 결과 화면)** (`app.py:335-386` `_end_room()`, `stock_service.py:143-149` `_init_prices()`): 게임이 끝나면 학생 포트폴리오와 순위만 볼 수 있고 "어떤 종목이 얼마나 올랐는가"를 복기할 화면이 없어, 수업 후 토론 자료가 없음. `_end_room()` 호출 직전에 모든 종목의 `(초기가, 최종가, 변동률)` 을 `room_result_prices` 테이블이나 `Room.price_snapshot_json TEXT` 컬럼에 저장. `GET /api/rooms/<rid>/price-summary` 엔드포인트로 노출. 결과 화면에 "오른 종목 TOP 5 / 내린 종목 TOP 5" 리스트 추가. 서버 25줄 + DB 1컬럼 + 프런트 30줄. "왜 내 삼성전자가 손실이 났나요?" 질문에 가격 변화 데이터로 바로 답변.
+
+- **매수·매도 쿨다운 (1인당 최소 거래 간격 설정)** (`app.py:1082-1126` `trade()`, `models.py:25` Room 모델): 학생이 1초에 수십 번 거래 버튼을 누르거나 자동화 스크립트로 연속 거래를 시도할 수 있어 서버 부하 및 비교육적 반복 매매 유발. `Room` 모델에 `trade_cooldown_sec FLOAT DEFAULT 0` 컬럼 추가(0=제한 없음). `trade()` 도입부에서 `RoomTransaction.query.filter_by(room_id=rid, user_id=uid).order_by(timestamp.desc()).first()` 로 마지막 거래 시각 확인 후 `(now - last_trade_ts) < room.trade_cooldown_sec` 이면 `'잔여 쿨타임: N초'` 오류 반환. DB 1컬럼 + 서버 10줄 + 방 생성 폼 1항목. 5~10초 쿨다운으로 실거래 대기 시간을 체험하며 충동 매매 방지.
+
+- **참가자 대기실에서 닉네임 수정 허용** (`app.py:604-618` `enter()`, 신규 `PATCH /api/auth/me`): 학생이 실수로 이름을 잘못 입력하거나 학번 없이 이름만 넣으면 게임 중에 수정할 방법이 없음 (Excel 출력 시 학번 파싱 실패로 이어짐, `app.py:1784-1786`). `PATCH /api/auth/me {'username': '20715 홍길동'}` 엔드포인트 추가: 닉네임 중복 체크 후 `user.username` 갱신, 단 해당 유저가 active 방에 있으면 `RoomMember` 는 그대로 유지되므로 캐시만 무효화. 서버 15줄. 대기(waiting) 또는 일시정지 상태일 때만 허용하면 게임 중 악용 방지. 수업 시작 전 교사가 "학번 포함해서 다시 입력해주세요" 요청에 학생이 스스로 수정 가능.
+
+### 제거/단순화할 것들
+
+- **`StockService._prev` 고정으로 `change_pct` 가 게임 진행 중 계속 누적 오류** (`stock_service.py:143-149` `_init_prices()`, `stock_service.py:196-212` `get_price()`): `self._prev[sym]` 는 게임 시작 시 초기 가격으로 1회 설정되고 이후 갱신되지 않음. 가격이 5번 바뀐 뒤 `get_prev_close()` 는 여전히 초기가를 반환하므로, `app.py:1024-1026` 의 `change = price - prev` / `change_pct = ch/prev*100` 이 "지금 이 순간 오르내림"이 아닌 "초기 대비 총 변동"을 표시. 게임 10분 후에는 모든 종목이 수십% 상승/하락으로 표시돼 학생 혼란 유발. `get_price()` 내 가격 갱신 시 `self._prev[symbol] = price`(이전 가격을 이전 종가로 업데이트) 1줄 추가로 해결.
+
+- **`minigame_spin` 에서 spin count 체크와 트랜잭션이 분리돼 race condition 가능** (`app.py:1372-1405`): `spins_used = RoomTransaction.query.filter_by(..., action='RLT').count()` 로 횟수를 확인하는 시점과 실제 `RoomTransaction` insert 시점 사이에 `_get_member_lock` 이 없음. 동시에 두 요청이 들어오면 둘 다 `spins_used < 3` 통과 → 4번째 스핀이 허용되는 상황 발생. 기존 `_get_member_lock(rid, user.id)` 컨텍스트 안으로 spin count 재조회와 트랜잭션 insert 를 함께 이동. `app.py:1372` 부터 `db.session.add(RoomTransaction(...))` 까지 `with _get_member_lock(rid, user.id):` 로 감싸고 lock 획득 후 카운트를 재조회. 약 5줄 이동으로 초과 스핀 완전 차단.
+
+- **`get_stocks` API 가 N개 종목마다 `svc.get_price()` 를 개별 호출해 lock 경합 유발** (`app.py:1008-1028`, `stock_service.py:196-212`): `for sym in STOCKS:` 루프에서 종목 수(59개)만큼 `get_price(sym)` 호출 → 각 호출이 `with self._lock:` 을 획득/해제. 3초 폴링 × 30명 = 초당 10회 × 59 lock 획득 = 590 lock 획득/초. `StockService` 에 `get_all_prices() -> dict` 메서드를 추가해 single lock 획득으로 전체 가격 딕셔너리 반환. `app.py:1009`의 루프를 `prices = svc.get_all_prices()` 1회 호출 + dict 참조로 교체. `stock_service.py` 10줄 + `app.py` 3줄 수정, lock 경합 59배 감소.
+
+- **Render free tier 슬립 복귀 시 모든 방의 `StockService` 가격이 초기화** (`stock_service.py:127-149` `__init__`, `stock_service.py:335-344` `get_room_service()`): Render free tier 는 15분 비활동 후 인스턴스를 종료. 재기동 시 `_room_services` 딕셔너리가 빈 상태이므로 `get_room_service(rid)` 가 새 `StockService()` 인스턴스를 생성해 가격이 초기 base 근처로 리셋됨. 게임 도중에도 슬립이 발생하면 학생의 평균 매수 단가가 갑자기 시장가보다 40% 높아지는 등 불공정 상황 발생. `Room` 모델에 `price_snapshot_json TEXT` 컬럼을 추가해 매 가격 갱신마다(또는 30초마다) 가격을 직렬화 저장, `get_room_service()` 에서 DB에 스냅샷이 있으면 해당 가격으로 `_prices` 초기화. 서버 약 20줄로 재기동 복구 보장.
+
+- **`trade()` 에서 `shares` 를 `int` 변환 후 `except` 블록이 모든 예외를 잡아 디버깅 어렵게 만듦** (`app.py:1095-1096`): `try: shares = int(d.get('shares', 0)) except: return jsonify({'error': '수량 오류'}), 400` 의 bare `except:` 가 `ValueError` 외에도 `KeyboardInterrupt`, `SystemExit` 등 모든 예외를 삼켜버림. 코드베이스 전반의 유사 패턴(`app.py:949`, `app.py:1239`, `app.py:1671` 등)에서 동일 안티패턴 발견. `except:` → `except (TypeError, ValueError):` 로 교체해야 예기치 않은 내부 오류가 500 에러 대신 묻히지 않음. `sed -i 's/except: return/except (TypeError, ValueError): return/g'` 로 일괄 치환 가능하나 각 위치 수동 확인 권장. 약 8곳 1줄씩 수정.
