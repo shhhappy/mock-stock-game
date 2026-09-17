@@ -6070,3 +6070,31 @@
 - **Render free tier 슬립 복귀 시 모든 방의 `StockService` 가격이 초기화** (`stock_service.py:127-149` `__init__`, `stock_service.py:335-344` `get_room_service()`): Render free tier 는 15분 비활동 후 인스턴스를 종료. 재기동 시 `_room_services` 딕셔너리가 빈 상태이므로 `get_room_service(rid)` 가 새 `StockService()` 인스턴스를 생성해 가격이 초기 base 근처로 리셋됨. 게임 도중에도 슬립이 발생하면 학생의 평균 매수 단가가 갑자기 시장가보다 40% 높아지는 등 불공정 상황 발생. `Room` 모델에 `price_snapshot_json TEXT` 컬럼을 추가해 매 가격 갱신마다(또는 30초마다) 가격을 직렬화 저장, `get_room_service()` 에서 DB에 스냅샷이 있으면 해당 가격으로 `_prices` 초기화. 서버 약 20줄로 재기동 복구 보장.
 
 - **`trade()` 에서 `shares` 를 `int` 변환 후 `except` 블록이 모든 예외를 잡아 디버깅 어렵게 만듦** (`app.py:1095-1096`): `try: shares = int(d.get('shares', 0)) except: return jsonify({'error': '수량 오류'}), 400` 의 bare `except:` 가 `ValueError` 외에도 `KeyboardInterrupt`, `SystemExit` 등 모든 예외를 삼켜버림. 코드베이스 전반의 유사 패턴(`app.py:949`, `app.py:1239`, `app.py:1671` 등)에서 동일 안티패턴 발견. `except:` → `except (TypeError, ValueError):` 로 교체해야 예기치 않은 내부 오류가 500 에러 대신 묻히지 않음. `sed -i 's/except: return/except (TypeError, ValueError): return/g'` 로 일괄 치환 가능하나 각 위치 수동 확인 권장. 약 8곳 1줄씩 수정.
+
+---
+
+## 2026-09-17 (daily-analysis-2)
+
+### 추가하면 좋을 기능
+
+- **포트폴리오 섹터 비중 도넛 차트 추가** (`static/js/app.js` `loadPortfolio()`, `static/index.html` 포트폴리오 탭): 현재 포트폴리오 탭은 보유 종목 목록과 수익률만 나열하며 "어느 섹터에 얼마나 쏠렸는지"를 한눈에 볼 수 없음. `loadPortfolio()` 응답의 `holdings` 배열에서 `sector`별 `current_value` 를 합산하고 `S.portChart` (이미 `app.js:7` 에 선언된 변수)를 Chart.js `doughnut` 으로 초기화. 데이터 없을 때는 차트 숨기고 "보유 종목이 없습니다" 안내. JS 약 20줄, HTML에 `<canvas id="port-sector-chart">` 1개. "IT에 70% 몰려 있네요—이게 좋은 전략일까요?" 수업 토론 유도에 직접 활용 가능.
+
+- **모바일 스와이프 탭 전환** (`static/js/app.js:1341-1357` `PAGE_ORDER`, `showPage()`): 교실에서 학생 대부분이 스마트폰을 사용하는데 하단 탭 바 항목이 작아 정확히 탭하기 어려움. `document.getElementById('screen-game')` 에 `touchstart`/`touchend` 이벤트 리스너를 추가해 X 좌표 차이가 50 px 초과면 `PAGE_ORDER` 배열 인덱스를 ±1 이동해 `showPage()` 호출. 멀티터치는 무시(`e.touches.length > 1`). JS 약 15줄, HTML 수정 없음. 특히 iPhone 유저 경험 크게 향상.
+
+- **랭킹 순위 변동 화살표 표시** (`static/js/app.js` `loadParticipantRankings()`, `static/index.html` 랭킹 탭): 랭킹이 새로고침될 때마다 이전 순위와 비교한 변동(▲2 ▼1 ─)을 표시하지 않아 학생이 자신의 포지션 변화를 직관적으로 파악하지 못함. `S.prevRanks = {}` 를 상태로 유지해 각 `user_id → rank` 매핑 저장, 다음 폴링 때 현재 순위와 비교해 `+2` / `-1` / `─` 배지를 이름 옆에 작은 텍스트로 렌더링. JS 약 15줄. "와, 방금 거래로 3위에서 1위로 올랐어요!" 라는 실시간 피드백으로 게임 몰입도 증가.
+
+- **진행자 단축 메시지 브로드캐스트 (공지 버튼)** (신규 `POST /api/rooms/<rid>/host/broadcast`, `static/js/app.js`, `app.py`): 교사가 "지금 잠깐 주목해주세요", "5분 후 퀴즈 있습니다" 같은 안내를 주고 싶어도 수업 중 마이크 없이 학생 개개인 화면에 메시지를 보낼 방법이 없음. `_room_broadcasts: dict = {}  # rid -> {msg: str, ts: float}` 전역 딕셔너리 추가. `POST /api/rooms/<rid>/host/broadcast {'message': str}` 엔드포인트로 저장(약 8줄). 참가자 폴링(`/api/rooms/<rid>`) 응답에 `broadcast_msg` 필드 포함. 프런트에서 `toast(msg, 'info')` 로 3초간 표시. 서버 10줄 + 클라이언트 5줄. 교실 진행 흐름을 스크린 없이도 일괄 제어 가능.
+
+- **퀴즈 개인 성적 요약 배지** (`static/js/app.js` 퀴즈 UI, `app.py:1654-1660` `get_quiz_history()`): 학생이 얼마나 많은 퀴즈를 맞췄는지 알 방법이 없어 "나 금융 잘하네/못하네" 자기 인식 기회가 없음. `GET /api/rooms/<rid>/quiz/history` 응답(이미 존재)을 파싱해 퀴즈 탭 상단에 "✅ N개 정답 / ❌ M개 오답 / 💰 누적 +X원" 요약 배지 3개를 표시. JS 약 10줄, HTML 배지 3개. 오답 비율이 높으면 교사가 "이 개념을 다시 설명해야겠다"는 신호로 활용.
+
+### 제거/단순화할 것들
+
+- **`app.py` 전역 `Room.query.get_or_404(rid)` — Flask-SQLAlchemy 3.x deprecated 패턴** (`app.py:760, 811, 909, 917, 929, ...` 약 25개소): SQLAlchemy 2.0 / Flask-SQLAlchemy 3.x 에서 `Query.get()` 및 `.get_or_404()` 는 deprecated. `Room.query.get_or_404(rid)` → `db.get_or_404(Room, rid)`, `Room.query.get(rid)` → `db.session.get(Room, rid)` 으로 일괄 교체 필요. 이미 일부 코드(`app.py:154 db.session.get(Room, rid)`)는 새 패턴을 사용 중이라 혼재 상태. 향후 Flask-SQLAlchemy 메이저 업그레이드 시 런타임 에러 예방을 위해 일관성 확보.
+
+- **`static/js/app.js` `filterStocks()` → `renderGrid()` — 3초마다 전체 DOM 재구축** (`app.js:1388-1454` `filterStocks()`, `renderGrid()`): `loadMarket()` 폴링(3초)마다 `renderGrid()` 가 `stock-grid` 의 전체 `innerHTML` 을 교체. 59개 종목 × 3초 × 30명이면 초당 10회 대규모 DOM mutation. `prevPrices` 비교(app.js:1444-1453)로 flash 애니메이션은 diff 적용하지만 DOM 자체는 항상 전부 재생성. `id="sc-${sym}"` 요소가 이미 있으면 텍스트 노드만 업데이트하고(`el.querySelector('.price').textContent = krw(st.price)`) 없을 때만 생성하는 incremental update 패턴으로 교체. JS 약 20줄 수정, 스크롤 위치 초기화·포커스 소실 등 UX 부작용도 제거.
+
+- **`app.py:271-273` `_compute_leaderboard()` — 비활성 예금까지 전체 로드** (`app.py:271-290`): `deps_map` 빌드 시 `Deposit.query.filter_by(room_id=rid).all()` 로 status 무관 전체 예금 레코드를 로드한 뒤 `member_total_value()` 내부에서 `if d.status == 'active':` 필터를 재적용. 이미 해지·만기 처리된 예금까지 메모리로 가져오는 낭비. `Deposit.query.filter_by(room_id=rid, status='active').all()` 으로 1자 수정해 DB 레벨 필터링. 게임이 길수록 `withdrawn`/`matured` 레코드가 쌓이므로 효과 큼.
+
+- **`stock_service.py:306-332` `get_history()` — 새로고침마다 다른 캔들 차트 생성** (`stock_service.py:303-332`): 캔들 데이터를 `random.gauss()` 로 생성하는데 고정 시드가 없어 같은 종목도 탭을 다시 열거나 서버 재시작 후 완전히 다른 모양의 차트가 나옴. `HISTORY_CACHE_TTL=120초` 캐시는 가격 변경 시 무효화(`stock_service.py:209-211`). `get_history()` 최상단에서 `_rng = random.Random(hash(symbol) ^ id(self))` 로 방별·종목별 결정론적 RNG 인스턴스 사용. 서버 재시작 후에도 `base` 가격에서 역산한 안정적 히스토리 제공. 2줄 수정.
+
+- **`app.py:1577` `_quiz_state` 쿨타임 메모리 전용 저장 — 서버 재기동 시 악용 가능** (`app.py:1577-1601`): `_quiz_state[key]['cooldown_until']` 은 서버 메모리에만 저장됨. Render free tier 인스턴스 슬립 또는 배포 재기동 시 쿨타임이 초기화돼, 오답 직후 서버 재기동 → 즉시 재도전 가능한 빈틈 발생. 단기 해결: `RoomTransaction` 에 `action='QUIZ'` 레코드(`app.py:1632, 1640`)가 이미 저장되므로, `get_quiz()` 시 `RoomTransaction.query.filter_by(..., action='QUIZ').order_by(timestamp.desc()).first()` 로 마지막 퀴즈 시각을 조회해 `now - last_quiz_ts < 60` 이면 쿨타임 반환. DB 조회 1회 추가로 재기동 후 악용 차단, 메모리 딕셔너리는 단순 캐시로만 활용.
