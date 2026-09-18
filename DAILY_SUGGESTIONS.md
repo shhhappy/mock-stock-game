@@ -6098,3 +6098,29 @@
 - **`stock_service.py:306-332` `get_history()` — 새로고침마다 다른 캔들 차트 생성** (`stock_service.py:303-332`): 캔들 데이터를 `random.gauss()` 로 생성하는데 고정 시드가 없어 같은 종목도 탭을 다시 열거나 서버 재시작 후 완전히 다른 모양의 차트가 나옴. `HISTORY_CACHE_TTL=120초` 캐시는 가격 변경 시 무효화(`stock_service.py:209-211`). `get_history()` 최상단에서 `_rng = random.Random(hash(symbol) ^ id(self))` 로 방별·종목별 결정론적 RNG 인스턴스 사용. 서버 재시작 후에도 `base` 가격에서 역산한 안정적 히스토리 제공. 2줄 수정.
 
 - **`app.py:1577` `_quiz_state` 쿨타임 메모리 전용 저장 — 서버 재기동 시 악용 가능** (`app.py:1577-1601`): `_quiz_state[key]['cooldown_until']` 은 서버 메모리에만 저장됨. Render free tier 인스턴스 슬립 또는 배포 재기동 시 쿨타임이 초기화돼, 오답 직후 서버 재기동 → 즉시 재도전 가능한 빈틈 발생. 단기 해결: `RoomTransaction` 에 `action='QUIZ'` 레코드(`app.py:1632, 1640`)가 이미 저장되므로, `get_quiz()` 시 `RoomTransaction.query.filter_by(..., action='QUIZ').order_by(timestamp.desc()).first()` 로 마지막 퀴즈 시각을 조회해 `now - last_quiz_ts < 60` 이면 쿨타임 반환. DB 조회 1회 추가로 재기동 후 악용 차단, 메모리 딕셔너리는 단순 캐시로만 활용.
+
+## 2026-09-18
+
+### 추가하면 좋을 기능
+
+- **게임 종료 후 학생별 최종 포트폴리오 Excel 시트 추가** (`app.py:1768-1836` `export_rankings()`, `app.py:362-370` `_end_room()` holdings 청산 구간): `_end_room()` 에서 `RoomHolding` 을 순회해 현금 청산하고 즉시 `db.session.delete(h)` 하므로 종료 시점 보유 종목 기록이 소실됨. Excel 에는 최종 자산·수익률만 담기고 "어떤 종목을 갖고 있었나"는 확인 불가. `_end_room()` 내 `db.session.delete(h)` 직전에 `(symbol, shares, price, value)` 목록을 JSON 직렬화해 `RoomMember.final_holdings_json TEXT` 신규 컬럼에 저장(DB 1컬럼 + 5줄). `export_rankings()` 에서 두 번째 워크시트 "최종 포트폴리오"로 학생별 종목 보유 내역 출력(20줄). 교사가 "왜 이 학생이 수익을 냈나?" 를 수업 후 데이터로 설명 가능.
+
+- **퀴즈 문제 유형 필드 추가로 OX 외 다양한 형식 지원 기반 마련** (`app.py:1581-1601` `get_quiz()`, `education_data.py` `QUIZ_QUESTIONS`): `get_quiz()` 는 `id`·`question` 만 반환하고 문제 유형(OX, 4지선다 등)을 전달하지 않아 프런트가 항상 OX 버튼을 정적으로 렌더링. `QUIZ_QUESTIONS` 각 항목에 `'type': 'ox'` 필드 추가, `get_quiz()` 응답에 `type` 포함(서버 1줄, `education_data.py` 각 항목 1필드). 향후 숫자 입력형·4지선다 문제를 추가할 때 클라이언트가 `type` 값으로 분기 렌더링 가능. 지금은 모두 `'ox'` 로 기입해두면 기존 동작 유지.
+
+- **복권 커스텀 시각이 자정 넘는 수업에서 잘못 계산됨** (`app.py:1719-1726` `host_lottery_times()`): `now_kst.replace(hour=hh, minute=mm)` 는 오늘 날짜 기준 시각을 만들어냄. 23:50 시작 게임에서 교사가 "00:05"를 입력하면 이미 지난 오늘 00:05 가 되어 복권이 즉시 트리거될 수 있음. `parsed` 목록에서 `target_kst < now_kst` 인 항목에 `timedelta(days=1)` 을 더해 내일로 넘기는 처리 2줄 추가(`app.py:1726` 직후). 늦은 저녁·야자 수업 환경에서 자정 경계 버그 해결.
+
+- **학생 입장 화면 수량 입력에 `inputmode="numeric"` 누락** (`static/index.html` 매매 모달 수량 입력, 참가자 입장 학번 입력): iOS Safari에서 `type="number"` 없이 `type="text"` 필드이면 문자 자판이 열려 숫자 입력이 불편. 매매 모달 shares 입력과 입장 화면 학번 입력 필드에 `inputmode="numeric" pattern="[0-9]*"` 추가(각 2자). 교실 스마트폰 환경에서 즉각 사용성 향상, 수정 1줄.
+
+- **진행자가 active 중 특정 참여자를 강제 퇴장(kick)시키는 기능** (`app.py:914-925` `kick_member()`, `app.py:914` 상태 체크): `kick_member()` 가 `room.status != 'waiting'` 이면 400 반환해 게임 시작 후에는 강퇴 불가. 수업 중 반칙 학생·중복 접속 계정 제거 방법이 없음. `waiting` 이외 상태에서도 강퇴 허용하되, active/paused 상태에서는 보유 주식을 현재가로 강제 청산(`_liquidate_shortfall` 패턴 참고)하고 `RoomMember` 레코드 삭제. 서버 15줄 수정. 강퇴 시 `_ending_soon`·`_rlt_active` 카운트 정합성 유지 필요.
+
+### 제거/단순화할 것들
+
+- **`minigame_spin()` 내부에 불필요한 `import math` 중복** (`app.py:1379`): `import math` 가 `minigame_spin()` 함수 본체 안에 위치. 파일 상단 6행에서 이미 `import os, threading, math, re, json, logging` 으로 임포트됨. 내부 import는 완전 중복이며 코드 독자에게 혼란. `app.py:1379` 한 줄 삭제.
+
+- **`_compute_leaderboard()` 가 rankings·host_members·export 에서 각각 풀 DB 쿼리 실행** (`app.py:262-290`, 호출처 `app.py:912, 1172, 1783`): 함수 내에서 `RoomMember`, `User`, `RoomHolding`, `Deposit` 4개 테이블을 전부 조회. 진행자 순위탭 자동갱신·참가자 랭킹 폴링·Excel 다운로드가 동시 발생 시 요청당 최대 12+ 쿼리. 기존 `_room_cache`(`app.py:84-105`) 와 동일 패턴으로 `_rank_cache = {}` (rid → {ts, data}, TTL 2s) 를 추가. `_compute_leaderboard()` 결과를 캐싱하고 `_invalidate_room_cache()` 호출 시 함께 무효화. 약 10줄 추가로 고빈도 폴링 환경 DB 쿼리 대폭 감소.
+
+- **`join_room()` 이 paused 상태(룰렛·복권 진행 중)에서도 입장 허용해 학생 화면 이상 상태 유발** (`app.py:719-731`): `room.status in ('waiting', 'active', 'paused')` 를 암묵적으로 허용. 복권 picking 단계나 룰렛 활성화 중에 입장한 학생은 시작 자금은 받지만 복권 번호를 고를 수 없고, `_rlt_active[rid]['count']` 불일치로 게임 재개 타이밍이 어긋남. `join_room()` 에서 `room.status == 'paused'` 이면 `{'error': '게임이 일시 정지 중입니다. 잠시 후 다시 시도하세요.'}` 반환 추가(5줄). 복권·룰렛 종료 후 active 복귀 시 자동 재시도 유도.
+
+- **`get_room()` 룰렛 하드 타임아웃 60초 상수가 코드에 박혀 학생 네트워크 지연 시 억울한 종료** (`app.py:796-797`): `(now_dt - room.paused_at).total_seconds() >= 60` 하드코딩. 스핀 애니메이션 시간(약 3~4초/회) × 3회 + 네트워크 지연을 감안하면 60초는 타이트. 상수를 `_RLT_TIMEOUT_SECS = 90` 으로 파일 상단에 추출(`app.py:505` 부근 ROULETTE_OUTCOMES 상단)하고 해당 조건에서 참조. 1줄 수정으로 타임아웃 조정 가능성 확보, 타이트한 제한으로 인한 억울한 게임 종료 방지.
+
+- **`_push_scheduler_loop` 에서 예외 발생 시 `db.session` 을 명시적으로 닫지 않아 세션 오염 누적** (`app.py:220-228`): `except Exception: pass` 로 예외를 삼키지만, 예외 직전 `_push_scheduler_tick()` 내 `db.session.commit()` 이 실패했으면 SQLAlchemy scoped session 이 오염된 채 다음 틱까지 유지됨. `_push_scheduler_tick()` 호출 블록을 `try/finally: db.session.remove()` 로 감싸 1줄 추가. 장기 운영 시 세션 오염·커넥션 누수 방지. 동일 지적이 2026-09-16 에도 있었으나 아직 미수정 상태로 우선순위 높음.
