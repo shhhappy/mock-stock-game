@@ -6124,3 +6124,35 @@
 - **`get_room()` 룰렛 하드 타임아웃 60초 상수가 코드에 박혀 학생 네트워크 지연 시 억울한 종료** (`app.py:796-797`): `(now_dt - room.paused_at).total_seconds() >= 60` 하드코딩. 스핀 애니메이션 시간(약 3~4초/회) × 3회 + 네트워크 지연을 감안하면 60초는 타이트. 상수를 `_RLT_TIMEOUT_SECS = 90` 으로 파일 상단에 추출(`app.py:505` 부근 ROULETTE_OUTCOMES 상단)하고 해당 조건에서 참조. 1줄 수정으로 타임아웃 조정 가능성 확보, 타이트한 제한으로 인한 억울한 게임 종료 방지.
 
 - **`_push_scheduler_loop` 에서 예외 발생 시 `db.session` 을 명시적으로 닫지 않아 세션 오염 누적** (`app.py:220-228`): `except Exception: pass` 로 예외를 삼키지만, 예외 직전 `_push_scheduler_tick()` 내 `db.session.commit()` 이 실패했으면 SQLAlchemy scoped session 이 오염된 채 다음 틱까지 유지됨. `_push_scheduler_tick()` 호출 블록을 `try/finally: db.session.remove()` 로 감싸 1줄 추가. 장기 운영 시 세션 오염·커넥션 누수 방지. 동일 지적이 2026-09-16 에도 있었으나 아직 미수정 상태로 우선순위 높음.
+
+---
+
+## 2026-09-18 (daily-analysis-2)
+
+### 추가하면 좋을 기능
+
+- **호스트 마켓 탭에 종목별 집계 거래량 배지** (`app.py:1008-1028` `get_stocks()`, `app.py:962-984` `host_member_transactions()`): 진행자 마켓 탭에서 각 종목의 현재가·변동률은 볼 수 있지만, 학생들이 어떤 종목을 얼마나 많이 거래했는지 알 방법이 없어 "지금 가장 핫한 종목"을 실시간으로 수업에 연결하기 어려움. `GET /api/rooms/<rid>/host/volume-summary` 엔드포인트 신규 추가: `db.session.query(RoomTransaction.symbol, db.func.count()).filter_by(room_id=rid).group_by(RoomTransaction.symbol).all()` 로 symbol별 거래 건수 집계(서버 12줄). 호스트 마켓 탭 각 종목 카드에 "🔥 N건" 배지 오버레이. "삼성전자에 거래가 몰리고 있는데, 왜 다들 사고 있을까요?" 즉각적인 수업 연결 소재 제공.
+
+- **게임 내 가격 변동 이력(타임라인) 저장 및 결과 화면 표시** (`stock_service.py:196-212` `get_price()`, `app.py:335-386` `_end_room()`): 게임 중 가격 갱신 이력이 전혀 보관되지 않아, 게임 종료 후 "삼성전자가 어떤 경로로 올랐는가"를 재현할 수 없음. `StockService` 에 `_price_log: list = []` 추가, `get_price()` 내 새 가격 저장 시 `(time.time(), symbol, new_price)` append (메모리 상한 2000건, 초과 시 앞쪽 삭제). `_end_room()` 에서 log를 JSON 직렬화해 `Room.price_log_json TEXT` 신규 컬럼에 저장. `GET /api/rooms/<rid>/price-timeline` 엔드포인트 추가. 결과 화면 "주요 종목 가격 흐름" 구간에 간단한 시계열 라인 차트 렌더링. 서버 약 18줄 + DB 1컬럼.
+
+- **게임 종료 후 룰렛 결과 통계 요약** (`app.py:1359-1405` `minigame_spin()`, `static/js/app.js` `loadResults()`): 결과 화면에 자산 순위만 있고 룰렛 관련 결과(꽝 비율, 가장 많이 딴 학생, 전체 지급 총액)를 확인할 방법이 없음. 수업 마무리 토론에서 "룰렛으로 역전한 학생이 있었나요?" 데이터 기반 질문이 불가. `GET /api/rooms/<rid>/roulette-summary` 엔드포인트: `RoomTransaction.query.filter_by(room_id=rid, action='RLT').all()` 로 `note` 필드의 `label` 파싱 후 그룹별 건수·지급액 집계(서버 15줄). 결과 화면 하단에 "룰렛 결과: 꽝 N회 / 1배 M회 / 최대 수령: 홍길동 X원" 요약 카드 추가. 프런트 20줄.
+
+- **방 초기화(리셋) 기능 — 같은 코드로 다음 수업 재사용** (`app.py:335-388` `_end_room()`, `app.py:693-714` `create_room()`): `_end_room()` 이 `room.code = None` 으로 코드를 지우므로, 교사가 매 수업마다 새 방을 만들고 QR을 다시 공유해야 함. 하루 여러 반을 가르치는 교사에게 큰 불편. `POST /api/rooms/<rid>/reset` 엔드포인트 추가: 종료된 방의 `status='waiting'`, `start_time=None`, `end_time=None`, `paused_at=None`, `rlt_triggered=False`, `results_published=False`, `lottery_rounds_done=''` 로 초기화하고, `room.code` 를 원하는 고정 코드 또는 새 코드로 재부여, `RoomMember`·`RoomHolding`·`RoomTransaction`·`Deposit` 레코드 일괄 삭제(cascade). 교사가 "오늘 3반도 같은 코드로 시작합니다"가 가능. 서버 약 25줄.
+
+- **학생 투자 스타일 배지 (결과 화면)** (`app.py:1163-1175` `get_rankings()`, `app.py:1180-1198` `get_transactions()`): 결과 화면에 순위·수익률만 나와 있어 수업 복기 시 학생별 투자 행동 차이를 설명할 근거가 부족. `GET /api/rooms/<rid>/rankings` 에 `style` 필드 추가: 해당 uid의 `RoomTransaction` 을 집계해 ① 섹터 다양성(HHI) ② 거래 빈도 ③ 룰렛 참여 여부를 기준으로 `'공격형'`·`'방어형'`·`'분산형'`·`'투기형'` 라벨 결정(서버 20줄). 결과 화면 각 학생 행 옆에 소형 아이콘 배지로 표시. "공격형이었던 학생 중에서 왜 수익률이 높은/낮은 경우가 갈렸을까요?" 데이터 기반 토론 소재.
+
+- **진행자 뉴스 히스토리 조회 기능** (`stock_service.py:163-181` `_generate_news()`, `app.py:1060-1064` `get_room_news()`): 현재 뉴스는 `self._news = {...}` 덮어쓰기 방식으로 최신 1건만 보관됨. 게임 중 "아까 나온 그 뉴스가 뭔가요?" 질문에 교사도 학생도 확인 방법이 없어 뉴스와 주가 연동 학습 효과가 반감됨. `StockService._news_log: list = []` 추가, `_generate_news()` / `trigger_news()` / `force_price()` / `force_sector_event()` 호출마다 `append(dict(self._news))` (최대 100건 cap). `GET /api/rooms/<rid>/news/history` 엔드포인트 추가(서버 8줄). 진행자 설정 탭 및 참가자 뉴스 패널 하단에 "이전 뉴스 보기" 섹션(최신 10건) 렌더링. 프런트 20줄.
+
+### 제거/단순화할 것들
+
+- **`cur_user()` 요청당 중복 DB 조회 — Flask `g` 캐싱 누락** (`app.py:242-243`, `app.py:764, 806, 1089, 1306` 등 20+ 호출처): `cur_user()` 는 매 호출마다 `db.session.get(User, session['user_id'])` 를 실행. `get_room()` 처럼 단일 요청 안에서 2회 이상 호출하는 라우트가 10개 이상. `from flask import g` 를 이미 임포트된 경우 활용, `cur_user()` 본문을 `if 'user' not in g: g.user = db.session.get(User, session['user_id']); return g.user` 패턴으로 변경하면 요청당 최대 1회 조회로 감소. 코드 2줄 수정, 하이트래픽 수업 환경에서 DB 왕복 50% 이상 절감.
+
+- **`host_force_price()` 의 `float()` 변환 미보호 — 잘못된 입력에 HTTP 500 반환** (`app.py:1038`): `pct = float(d.get('pct', 0))` 에 try/except 없음. `{"pct": "abc"}` 또는 `{"pct": null}` 전송 시 `TypeError`/`ValueError` → Flask 500 반환. `host_market_event()` (`app.py:1671`)은 이미 `try/except` 로 처리됐지만 `host_force_price()` 는 누락. `try: pct = float(d.get('pct', 0)) except (TypeError, ValueError): return jsonify({'error': '잘못된 변동률'}), 400` 2줄로 일관성 확보.
+
+- **`lottery_pick()` 에서 `cur['picks']` 무락(no-lock) 동시 수정** (`app.py:1502`, `app.py:1509-1513`): `cur['picks'][str(user.id)] = nums` 와 이어지는 "전원 제출 확인 → drawing 전환" 로직이 `_lottery_lock` 없이 실행됨. 두 학생이 동시에 제출하면 `len(cur['picks']) >= eligible` 조건이 두 스레드에서 동시에 통과돼 `drawing` 전환이 중복 실행될 수 있음. 현재 `drawing` 단계 전환 부분은 `with _lottery_lock:` 으로 감싸져 있으나(`app.py:1510`), 그 직전 `cur['picks']` dict 수정이 락 밖에 있어 불완전. `app.py:1502` 의 picks 수정부터 `app.py:1513` 까지 전체를 `with _lottery_lock:` 으로 이동(5줄 들여쓰기 조정).
+
+- **`_rlt_active` 딕셔너리 읽기 시 `_rlt_lock` 누락** (`app.py:792-797`): `get_room()` 내 `rid not in _rlt_active` (line 792) 와 `_rlt_active.get(rid)` (line 796)이 락 없이 실행됨. `minigame_open()` (line 1311)·`minigame_close()` (line 1333)는 `with _rlt_lock:` 으로 보호하는데 `get_room()` 은 예외. 다수 학생이 동시에 폴링하는 교실 환경에서 불일치 가능. 최소한 `_rlt_active.get(rid)` 읽기를 `with _rlt_lock: state = _rlt_active.get(rid)` 패턴으로 변경해 일관성 확보(3줄 수정).
+
+- **`member_total_value()` 에서 DB 필터와 루프 내 `if` 체크 이중 적용** (`app.py:256-259`): `Deposit.query.filter_by(room_id=rid, user_id=uid, status='active').all()` 로 이미 active 예금만 가져왔는데, `for d in deps: if d.status == 'active': total += d.amount` 로 조건을 다시 검사. DB 필터가 적용된 경로에서는 이 `if` 가 항상 참이어서 불필요한 분기. 단, `preloaded_deps` 경유 시에는 mixed status 가 섞일 수 있으므로, `preloaded_deps is not None` 분기에서만 `if d.status == 'active':` 유지하고 DB 직접 조회 분기는 `if` 제거. 약 3줄 정리.
+
+- **`create_room()` 에서 stale `waiting` 상태 방 미정리 → "이미 방이 있습니다" 오류 반복** (`app.py:685-693`): stale 방 정리 쿼리가 `status.in_(['active','paused'])` + `end_time < stale_cutoff` 조건만 체크해, 게임 시작 없이 2시간 이상 방치된 `waiting` 상태 방은 정리되지 않음. 다음 로그인 시 line 693 `"이미 진행 중인 방이 있습니다"` 오류에 막혀 새 방 생성 불가, 교사가 직접 해결할 방법도 없음. stale 쿼리 직후에 `stale_waiting = Room.query.filter(Room.host_id==user.id, Room.status=='waiting', Room.created_at < stale_cutoff).first()` 를 별도로 추가해 `_end_room(stale_waiting)` 처리(4줄 추가). 또는 line 693 체크 직전에 단일 쿼리로 통합.
