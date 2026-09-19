@@ -6156,3 +6156,31 @@
 - **`member_total_value()` 에서 DB 필터와 루프 내 `if` 체크 이중 적용** (`app.py:256-259`): `Deposit.query.filter_by(room_id=rid, user_id=uid, status='active').all()` 로 이미 active 예금만 가져왔는데, `for d in deps: if d.status == 'active': total += d.amount` 로 조건을 다시 검사. DB 필터가 적용된 경로에서는 이 `if` 가 항상 참이어서 불필요한 분기. 단, `preloaded_deps` 경유 시에는 mixed status 가 섞일 수 있으므로, `preloaded_deps is not None` 분기에서만 `if d.status == 'active':` 유지하고 DB 직접 조회 분기는 `if` 제거. 약 3줄 정리.
 
 - **`create_room()` 에서 stale `waiting` 상태 방 미정리 → "이미 방이 있습니다" 오류 반복** (`app.py:685-693`): stale 방 정리 쿼리가 `status.in_(['active','paused'])` + `end_time < stale_cutoff` 조건만 체크해, 게임 시작 없이 2시간 이상 방치된 `waiting` 상태 방은 정리되지 않음. 다음 로그인 시 line 693 `"이미 진행 중인 방이 있습니다"` 오류에 막혀 새 방 생성 불가, 교사가 직접 해결할 방법도 없음. stale 쿼리 직후에 `stale_waiting = Room.query.filter(Room.host_id==user.id, Room.status=='waiting', Room.created_at < stale_cutoff).first()` 를 별도로 추가해 `_end_room(stale_waiting)` 처리(4줄 추가). 또는 line 693 체크 직전에 단일 쿼리로 통합.
+
+---
+
+## 2026-09-19
+
+### 추가하면 좋을 기능
+
+- **종목 이름 텍스트 검색 필터** (`static/js/app.js` `filterStocks()`, `static/index.html` 종목 탭): 현재 59개 종목 탐색은 섹터 드롭다운 필터만 제공됨. "삼성", "NVIDIA", "Apple" 등 이름으로 빠르게 찾는 방법이 없어 특히 해외 종목과 국내 종목이 혼재된 긴 목록에서 스마트폰 화면으로 원하는 종목을 찾기 불편함. `filterStocks()` 상단에 `const q = searchInput.value.toLowerCase()` 조건 추가하고 `st.name.toLowerCase().includes(q) || st.symbol.toLowerCase().includes(q)` 으로 필터링. HTML에 `<input id="stock-search" placeholder="종목 검색...">` 1개, `oninput="filterStocks()"` 연결. JS 약 5줄 수정, HTML 1줄 추가. 수업 중 특정 종목 시연 시 즉각 접근 가능.
+
+- **게임 결과 Excel에 전체 거래 내역 시트 추가** (`app.py:1768-1836` `export_rankings()`): 현재 Excel 파일은 최종 순위 시트 1개만 포함. `RoomTransaction` 레코드가 DB에 모두 남아있음에도 학생별 "언제 무엇을 샀는가" 데이터를 교사가 수업 후에 분석할 방법이 없음. `export_rankings()` 내 `wb` 생성 후 두 번째 시트 `ws2 = wb.create_sheet('거래 내역')` 추가. `RoomTransaction.query.filter_by(room_id=rid).order_by(RoomTransaction.timestamp).all()` 로 전체 거래 조회 후 학번·이름·종목·매수/매도·수량·단가·금액·시각 컬럼으로 출력(약 25줄). 교사가 "삼성전자를 초반에 산 학생과 후반에 산 학생 중 누가 더 좋은 판단을 했는가?" 데이터 기반 토론 가능.
+
+- **진행자 대시보드 실시간 수업 현황 카드** (`app.py:1167-1175` `get_rankings()`, `static/js/app.js` `loadHostMembers()`): 진행자가 현재 "몇 명이 거래 중인가", "어느 섹터에 돈이 몰리나", "예금 총액은 얼마인가"를 한눈에 볼 방법이 없어 수업 흐름 파악이 어려움. `GET /api/rooms/<rid>/host/session-stats` 엔드포인트 신규 추가: ① 1분 이내 거래 발생 회원 수(활성 참여자) ② 섹터별 보유 총액 상위 3개 ③ 현재 예금 총액 ④ 전체 거래 건수 집계(서버 약 20줄, DB 4쿼리). 진행자 랭킹 탭 상단에 요약 카드 4개 렌더링. "지금 배터리 섹터에 가장 많이 투자됐네요. 왜일까요?" 즉흥 질문 소재 제공.
+
+- **학번 없이 이름만 입력한 참가자의 Excel 내보내기 오류 방지** (`app.py:1784-1788` `export_rankings()`): `username.split(' ', 1)` 로 학번과 이름을 분리하는데, 학번을 입력하지 않은 학생(이름에 공백 없음)은 `sid=''`, `name=전체username` 으로 처리됨. 반면 이름 자체에 공백이 있는 경우("홍 길동") 학번이 "홍"으로 잘못 분리됨. `parts = username.split(' ', 1)` 이후 `sid = parts[0]`, `name = parts[1] if len(parts) > 1 else ''` 로 변경하되, 입장 화면 `host-student-id`·`join-student-id` 필드가 비어 있으면 `"${name}"` 만 저장되도록 `doAuth()` (app.js:78)에서 `u = sid ? \`${sid} ${name}\` : name` 처리 추가. 서버 2줄 + 클라이언트 1줄.
+
+- **로비 대기 화면 참가자 준비 완료 체크 (선택 기능)** (`app.py:927-938` `lobby_members()`, `static/js/app.js:659-669` `loadPLobbyMembers()`): 현재 로비에서 참가자가 "준비 완료" 상태를 표시할 방법이 없어 교사가 "모두 접속했는지" 육안으로만 확인. 특히 30명 교실에서 누가 아직 미접속인지 빠른 확인 어려움. `RoomMember`에 `ready BOOLEAN DEFAULT 0` 컬럼 추가, `POST /api/rooms/<rid>/ready` 토글 엔드포인트(서버 10줄). 진행자 로비 화면에 각 참가자 이름 옆 ✅/⏳ 표시, 전체 준비 시 "모두 준비 완료 → 시작하기" 버튼 강조. 참가자도 상태 토글 버튼 1개. DB 1컬럼 + 서버 10줄 + 클라이언트 15줄.
+
+### 제거/단순화할 것들
+
+- **`_liquidate_shortfall()` 에서 `h.shares = 0` 후 `delete` 미처리로 ghost 레코드 잔존** (`app.py:305-310`): `shortfall` 충당을 위해 전량 매도 시 `h.shares = 0; h.avg_price = 0` 으로 값만 초기화하고 `db.session.delete(h)` 를 호출하지 않음. `trade()` 매도(line 1121) 와 달리 청산 전용 경로에서는 delete 없이 shares=0 레코드가 DB에 그대로 남음. `get_portfolio()` (line 1141)는 `if h.shares <= 0: continue` 로 필터링하지만 DB 쿼리 결과에는 포함됨. `h.shares == 0` 이 되는 분기(`app.py:306-307`) 직후 `db.session.delete(h)` 1줄 추가로 일관성 확보.
+
+- **`get_stocks()` 에서 `Room.query.get_or_404(rid)` 결과를 변수에 저장조차 하지 않음** (`app.py:1011`): `Room.query.get_or_404(rid)` 호출 후 반환값을 버리고 존재 확인 용도로만 사용. deprecated 패턴 + ORM 객체 생성 비용만 남음. `db.session.get(Room, rid)` 로 변경 후 `if not room: abort(404)` 1줄 패턴으로 교체하거나, 아예 `db.get_or_404(Room, rid)` 신규 패턴으로 통일. 같은 패턴이 `get_room_news()` (line 1063), `get_lottery()` (line 1449) 등에도 반복됨. 일괄 sed 치환으로 약 8개소 정리.
+
+- **`gen_code()` 10회 실패 후 중복 코드 반환 가능 → `IntegrityError` 미처리** (`models.py:8-13`, `app.py:706-714`): `gen_code()` 는 10번 시도 후에도 중복이면 마지막 생성 코드를 충돌 체크 없이 반환(line 12-13). `Room` 모델의 `code = db.Column(db.String(6), unique=True, default=gen_code)` 제약이 DB에서 `IntegrityError` 를 발생시키지만, `create_room()` (app.py:712-714)에 `IntegrityError` catch가 없어 HTTP 500으로 반환. `create_room()` 의 `db.session.add(room); db.session.commit()` 를 `try/except IntegrityError` 로 감싸고 "코드 생성 실패 — 다시 시도하세요" 400 반환 추가(3줄). 활성 방이 많을수록 충돌 확률 증가.
+
+- **`__main__` 블록 `db.create_all()` 중복 호출** (`app.py:1840-1841`): `app.py` 상단 `with app.app_context():` 블록(line 62-69)에서 이미 `db.create_all()` 을 실행. `if __name__ == '__main__':` 블록(line 1840)에서 다시 `with app.app_context(): db.create_all()` 을 호출해 프로세스 직접 실행 시 2회 중복. 무해하지만 코드 독자에게 "왜 두 번?"이라는 혼란을 줌. `__main__` 블록의 `with app.app_context(): db.create_all()` 3줄 삭제. Gunicorn/Render 배포 환경에서는 `__main__` 블록 자체가 실행되지 않으므로 실질 영향 없음.
+
+- **로비 폴링 간격 1초 — 30명 교실에서 불필요한 DB 부하** (`static/js/app.js:269-282` `loadLobbyMembers()`, `app.py:927-938`): `loadLobbyMembers()` 가 `setInterval(..., 1000)` 로 추정(app.js에서 확인 필요)된 경우, 30명이 로비 대기 중이면 초당 30회 `lobby-members` API 호출 발생. 로비는 실시간성이 낮아 3초 간격으로도 충분. 폴링 간격을 `3000ms`로 완화하고 게임 시작 시 즉각 반응은 `get_room()` 기존 3초 폴링이 `status: active` 변화를 이미 감지함. 1줄 수정으로 로비 DB 쿼리 67% 감소.
